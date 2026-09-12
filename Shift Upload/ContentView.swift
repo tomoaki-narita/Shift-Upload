@@ -26,6 +26,94 @@ private extension Notification.Name {
     static let shiftHubSettingsDidChange = Notification.Name("ShiftHubSettingsDidChange")
 }
 
+private enum ShiftHubLocalization {
+    static func string(_ key: String, locale: Locale) -> String {
+        let language = locale.identifier.hasPrefix("en") ? "en" : "ja"
+        guard let path = Bundle.main.path(forResource: language, ofType: "lproj"),
+              let bundle = Bundle(path: path) else {
+            return key
+        }
+
+        return bundle.localizedString(forKey: key, value: key, table: nil)
+    }
+
+    static func format(_ key: String, locale: Locale, arguments: CVarArg...) -> String {
+        String(format: string(key, locale: locale), arguments: arguments)
+    }
+
+    static func isEnglish(_ locale: Locale) -> Bool {
+        locale.identifier.hasPrefix("en")
+    }
+
+    static func yearText(_ year: Int, locale: Locale) -> String {
+        isEnglish(locale) ? String(year) : "\(year)年"
+    }
+
+    static func monthText(_ month: Int, locale: Locale) -> String {
+        isEnglish(locale) ? String(month) : "\(month)月"
+    }
+
+    static func localizedErrorDescription(_ error: Error, locale: Locale) -> String {
+        let description = error.localizedDescription
+        let exactKeys = [
+            "カレンダーへのアクセスが許可されていません。",
+            "登録先カレンダーが見つかりません。",
+            "カレンダーから無効な応答が返されました。",
+            "イベントの日付を作成できませんでした。",
+            "Googleログイン画面を開けませんでした。",
+            "Googleログインがキャンセルされました。",
+            "Google認証の確認に失敗しました。もう一度ログインしてください。",
+            "Googleから無効な応答が返されました。",
+            "先にGoogleへログインしてください。",
+            "勤務表の年月を取得できませんでした。",
+            "Notionの設定を確認してください。",
+            "Notionから無効な応答が返されました。",
+            "Googleの認証設定を確認してください。",
+            "NotionのアクセストークンとデータベースIDを設定してください。",
+            "Notionのアクセストークンを設定してください。",
+            "不明なエラー"
+        ]
+        if exactKeys.contains(description) {
+            return string(description, locale: locale)
+        }
+
+        let prefixes = [
+            "Google Calendar APIエラー: ": "Google Calendar APIエラー: %@",
+            "Notion APIエラー（": "Notion APIエラー（%@）: %@",
+            "日付を作成できませんでした: ": "日付を作成できませんでした: %@",
+            "認証トークンを更新できませんでした (HTTP ": "認証トークンを更新できませんでした (HTTP %@): %@"
+        ]
+        for (prefix, key) in prefixes where description.hasPrefix(prefix) {
+            if prefix == "Google Calendar APIエラー: " {
+                return format(key, locale: locale, arguments: String(description.dropFirst(prefix.count)))
+            }
+
+            if prefix == "日付を作成できませんでした: " {
+                return format(key, locale: locale, arguments: String(description.dropFirst(prefix.count)))
+            }
+
+            if prefix == "認証トークンを更新できませんでした (HTTP " {
+                let remainder = String(description.dropFirst(prefix.count))
+                guard let separator = remainder.range(of: "):")?.lowerBound else { break }
+                let status = String(remainder[..<separator])
+                let message = String(remainder[remainder.index(separator, offsetBy: 2)...])
+                return format(key, locale: locale, arguments: status, message)
+            }
+
+            let remainder = String(description.dropFirst(prefix.count))
+            guard let separator = remainder.firstIndex(of: "）") else { break }
+            let status = String(remainder[..<separator])
+            let messageStart = remainder.index(after: separator)
+            let message = String(remainder[messageStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return format(key, locale: locale, arguments: status, message)
+        }
+
+        return description
+    }
+}
+
 @MainActor
 struct ContentView: View {
     @Environment(\.locale) private var locale
@@ -122,7 +210,7 @@ struct ContentView: View {
             let loadedSchedules = Self.loadStoredSchedules(from: storedSchedulesJSON)
             savedSchedules = Self.removeInvalidStoredSchedules(from: loadedSchedules)
             if savedSchedules.count != loadedSchedules.count {
-                statusMessage = "対応していない保存済みPDFを削除しました。"
+                statusMessage = localizedMessage("対応していない保存済みPDFを削除しました。")
             }
 
             if let cloudSettings = ShiftHubCloudSync.loadSettings() {
@@ -184,6 +272,18 @@ struct ContentView: View {
 
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedName.isEmpty ? nil : trimmedName
+    }
+
+    private func localizedMessage(_ key: String) -> String {
+        ShiftHubLocalization.string(key, locale: locale)
+    }
+
+    private func localizedMessage(_ key: String, arguments: CVarArg...) -> String {
+        ShiftHubLocalization.format(key, locale: locale, arguments: arguments)
+    }
+
+    private func localizedError(_ error: Error) -> String {
+        ShiftHubLocalization.localizedErrorDescription(error, locale: locale)
     }
 
     @ViewBuilder
@@ -977,7 +1077,10 @@ struct ContentView: View {
         )
         editedExtractedShiftText = title
         selectedExtractedDayAction = nil
-        statusMessage = "\(day)日の勤務名を変更しました。カレンダーへ登録すると反映されます。"
+        statusMessage = localizedMessage(
+            "%@日の勤務名を変更しました。カレンダーへ登録すると反映されます。",
+            arguments: String(day)
+        )
     }
 
     private func completeExtractedShiftSelection(_ title: String) {
@@ -996,7 +1099,10 @@ struct ContentView: View {
         editedExtractedShiftText = title
         pendingExtractedDayForEdit = nil
         isExtractedShiftSelectionPresented = false
-        statusMessage = "\(day)日の勤務を変更しました。カレンダーへ登録すると反映されます。"
+        statusMessage = localizedMessage(
+            "%@日の勤務を変更しました。カレンダーへ登録すると反映されます。",
+            arguments: String(day)
+        )
     }
     private func dayActionHeader(for day: Int) -> String {
         guard let selectedYearMonth,
@@ -1019,7 +1125,7 @@ struct ContentView: View {
             guard let url = urls.first else { return }
             saveAndAnalyzeImportedFile(at: url)
         case .failure(let error):
-            statusMessage = "ファイルを選択できませんでした: \(error.localizedDescription)"
+            statusMessage = localizedMessage("ファイルを選択できませんでした: %@", arguments: localizedError(error))
         }
     }
 
@@ -1036,7 +1142,7 @@ struct ContentView: View {
         pendingExtractedDayForEdit = nil
         editedExtractedShiftText = ""
         isRestRegistrationAlertPresented = false
-        statusMessage = "勤務表の読み込みを解除しました。"
+        statusMessage = localizedMessage("勤務表の読み込みを解除しました。")
     }
 
     private func saveAndAnalyzeImportedFile(at url: URL) {
@@ -1046,7 +1152,7 @@ struct ContentView: View {
         }
 
         isProcessing = true
-        statusMessage = "PDFを確認中です。"
+        statusMessage = localizedMessage("PDFを確認中です。")
 
         Task {
             do {
@@ -1062,7 +1168,7 @@ struct ContentView: View {
                 if let analyzerError = error as? ShiftOCRAnalyzerError {
                     presentImportAlert(analyzerError)
                 } else {
-                    statusMessage = "勤務表を保存できませんでした: \(error.localizedDescription)"
+                    statusMessage = localizedMessage("勤務表を保存できませんでした: %@", arguments: localizedError(error))
                 }
                 isProcessing = false
             }
@@ -1073,12 +1179,12 @@ struct ContentView: View {
         do {
             let url = try StoredScheduleStore.fileURL(for: schedule)
             guard FileManager.default.fileExists(atPath: url.path) else {
-                statusMessage = "保存した勤務表が見つかりません。"
+                statusMessage = localizedMessage("保存した勤務表が見つかりません。")
                 return
             }
             analyzeFile(at: url, displayName: schedule.fileName)
         } catch {
-            statusMessage = "保存した勤務表を開けませんでした: \(error.localizedDescription)"
+            statusMessage = localizedMessage("保存した勤務表を開けませんでした: %@", arguments: localizedError(error))
         }
     }
 
@@ -1087,7 +1193,7 @@ struct ContentView: View {
             try StoredScheduleStore.deleteFile(for: schedule)
             savedSchedules.removeAll { $0.id == schedule.id }
         } catch {
-            statusMessage = "保存した勤務表を削除できませんでした: \(error.localizedDescription)"
+            statusMessage = localizedMessage("保存した勤務表を削除できませんでした: %@", arguments: localizedError(error))
         }
     }
 
@@ -1105,7 +1211,7 @@ struct ContentView: View {
         pendingMissingShiftTitles = []
         ignoredMissingShiftTitles = []
         isMissingShiftSelectionPresented = false
-        statusMessage = "PDFを解析中です。"
+        statusMessage = localizedMessage("PDFを解析中です。")
 
         Task {
             do {
@@ -1115,13 +1221,13 @@ struct ContentView: View {
                 extractedCells = analyzer.extractRowItems(matching: workerName, from: items, yearMonth: selectedYearMonth)
                 queueMissingShiftPrompts(for: extractedCells)
                 statusMessage = items.isEmpty
-                    ? "文字を認識できませんでした。画像が暗い、傾いている、または解像度が低い可能性があります。"
+                    ? localizedMessage("文字を認識できませんでした。画像が暗い、傾いている、または解像度が低い可能性があります。")
                     : ""
             } catch {
                 if let analyzerError = error as? ShiftOCRAnalyzerError {
                     presentImportAlert(analyzerError)
                 } else {
-                    statusMessage = "解析に失敗しました: \(error.localizedDescription)"
+                    statusMessage = localizedMessage("解析に失敗しました: %@", arguments: localizedError(error))
                 }
             }
 
@@ -1150,12 +1256,12 @@ struct ContentView: View {
 
     private func prepareCalendarRegistration() {
         guard !extractedCells.isEmpty else {
-            statusMessage = "勤務表を読み込んでください。"
+            statusMessage = localizedMessage("勤務表を読み込んでください。")
             return
         }
 
         guard CalendarDestination(rawValue: calendarDestination) != nil else {
-            statusMessage = "登録先カレンダーの設定を確認してください。"
+            statusMessage = localizedMessage("登録先カレンダーの設定を確認してください。")
             return
         }
 
@@ -1201,12 +1307,12 @@ struct ContentView: View {
         onComplete: (() -> Void)? = nil
     ) {
         guard let targetYearMonth = yearMonth ?? selectedYearMonth else {
-            statusMessage = "登録する年月を選択してください。"
+            statusMessage = localizedMessage("登録する年月を選択してください。")
             return
         }
 
         isRegisteringEvents = true
-        statusMessage = "Appleカレンダーへ登録中です。"
+        statusMessage = localizedMessage("Appleカレンダーへ登録中です。")
 
         let writer = AppleCalendarEventWriter()
         do {
@@ -1221,11 +1327,17 @@ struct ContentView: View {
 
             let skippedMessage = result.skippedTitles.isEmpty
                 ? ""
-                : " 未登録の勤務はスキップしました: \(result.skippedTitles.joined(separator: ", "))"
-            statusMessage = "\(result.savedCount)件をAppleカレンダーへ登録しました。\(skippedMessage)"
+                : " " + localizedMessage(
+                    "未登録の勤務はスキップしました: %@",
+                    arguments: result.skippedTitles.joined(separator: ", ")
+                )
+            statusMessage = localizedMessage(
+                "%@件をAppleカレンダーへ登録しました。%@",
+                arguments: String(result.savedCount), skippedMessage
+            )
             onComplete?()
         } catch {
-            statusMessage = "Appleカレンダーへの登録に失敗しました: \(error.localizedDescription)"
+            statusMessage = localizedMessage("Appleカレンダーへの登録に失敗しました: %@", arguments: localizedError(error))
         }
 
         isRegisteringEvents = false
@@ -1240,17 +1352,17 @@ struct ContentView: View {
         guard let token = KeychainStore.string(for: "notion-access-token"),
               !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !notionDataSourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            statusMessage = "NotionのアクセストークンとデータベースIDを設定してください。"
+            statusMessage = localizedMessage("NotionのアクセストークンとデータベースIDを設定してください。")
             return
         }
 
         guard let targetYearMonth = yearMonth ?? selectedYearMonth else {
-            statusMessage = "登録する年月を選択してください。"
+            statusMessage = localizedMessage("登録する年月を選択してください。")
             return
         }
 
         isRegisteringEvents = true
-        statusMessage = "Notionへ登録中です。"
+        statusMessage = localizedMessage("Notionへ登録中です。")
 
         let writer = NotionPageWriter()
         let cells = cells ?? extractedCells
@@ -1280,11 +1392,17 @@ struct ContentView: View {
 
                 let skippedMessage = result.skippedTitles.isEmpty
                     ? ""
-                    : " 未登録の勤務はスキップしました: \(result.skippedTitles.joined(separator: ", "))"
-                statusMessage = "\(result.savedCount)件をNotionへ登録しました。\(skippedMessage)"
+                    : " " + localizedMessage(
+                        "未登録の勤務はスキップしました: %@",
+                        arguments: result.skippedTitles.joined(separator: ", ")
+                    )
+                statusMessage = localizedMessage(
+                    "%@件をNotionへ登録しました。%@",
+                    arguments: String(result.savedCount), skippedMessage
+                )
                 onComplete?()
             } catch {
-                statusMessage = "Notionへの登録に失敗しました: \(error.localizedDescription)"
+                statusMessage = localizedMessage("Notionへの登録に失敗しました: %@", arguments: localizedError(error))
             }
 
             isRegisteringEvents = false
@@ -1302,22 +1420,22 @@ struct ContentView: View {
               let clientSecret = KeychainStore.string(for: "google-calendar-client-secret"),
               !clientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               GoogleTokenStore.load() != nil else {
-            statusMessage = "Google設定でログインとカレンダー選択を完了してください。"
+            statusMessage = localizedMessage("Google設定でログインとカレンダー選択を完了してください。")
             return
         }
 
         guard !googleCalendarID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            statusMessage = "Google設定で登録先カレンダーを選択してください。"
+            statusMessage = localizedMessage("Google設定で登録先カレンダーを選択してください。")
             return
         }
 
         guard let targetYearMonth = yearMonth ?? selectedYearMonth else {
-            statusMessage = "登録する年月を選択してください。"
+            statusMessage = localizedMessage("登録する年月を選択してください。")
             return
         }
 
         isRegisteringEvents = true
-        statusMessage = "Googleカレンダーへ登録中です。"
+        statusMessage = localizedMessage("Googleカレンダーへ登録中です。")
 
         let cells = cells ?? extractedCells
         let yearMonth = targetYearMonth
@@ -1342,11 +1460,17 @@ struct ContentView: View {
 
                 let skippedMessage = result.skippedTitles.isEmpty
                     ? ""
-                    : " 未登録の勤務はスキップしました: \(result.skippedTitles.joined(separator: ", "))"
-                statusMessage = "\(result.savedCount)件をGoogleカレンダーへ登録しました。\(skippedMessage)"
+                    : " " + localizedMessage(
+                        "未登録の勤務はスキップしました: %@",
+                        arguments: result.skippedTitles.joined(separator: ", ")
+                    )
+                statusMessage = localizedMessage(
+                    "%@件をGoogleカレンダーへ登録しました。%@",
+                    arguments: String(result.savedCount), skippedMessage
+                )
                 onComplete?()
             } catch {
-                statusMessage = "Googleカレンダーへの登録に失敗しました: \(error.localizedDescription)"
+                statusMessage = localizedMessage("Googleカレンダーへの登録に失敗しました: %@", arguments: localizedError(error))
             }
 
             isRegisteringEvents = false
@@ -1360,7 +1484,7 @@ struct ContentView: View {
         onComplete: (() -> Void)? = nil
     ) {
         guard (1...yearMonth.numberOfDays).contains(day) else {
-            statusMessage = "登録する日付が正しくありません。"
+            statusMessage = localizedMessage("登録する日付が正しくありません。")
             return
         }
 
@@ -1441,9 +1565,12 @@ struct ContentView: View {
         isMissingShiftSelectionPresented = false
 
         if !newTitles.isEmpty {
-            statusMessage = "\(newTitles.count)件の勤務を勤務一覧に保存しました。時間は勤務設定から変更できます。"
+            statusMessage = localizedMessage(
+                "%@件の勤務を勤務一覧に保存しました。時間は勤務設定から変更できます。",
+                arguments: String(newTitles.count)
+            )
         } else if !titlesToIgnore.isEmpty {
-            statusMessage = "選択した勤務を勤務一覧に保存しませんでした。"
+            statusMessage = localizedMessage("選択した勤務を勤務一覧に保存しませんでした。")
         }
     }
 
@@ -1464,7 +1591,9 @@ struct ContentView: View {
 
     private func dayText(for cell: ExtractedShiftCell) -> String {
         guard let day = Int(cell.dateText) else {
-            return cell.dateText.isEmpty ? "日付未判定" : cell.dateText
+            return cell.dateText.isEmpty
+                ? localizedMessage("日付未判定")
+                : cell.dateText
         }
 
         return String(day)
@@ -1844,6 +1973,7 @@ private struct SingleShiftRegistrationView: View {
     let onRegister: (YearMonth, Int, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     @State private var selectedYear: Int
     @State private var selectedMonth: Int
     @State private var selectedDay: Int
@@ -1908,13 +2038,13 @@ private struct SingleShiftRegistrationView: View {
                 HStack {
                     Picker("年", selection: $selectedYear) {
                         ForEach(yearOptions, id: \.self) { year in
-                            Text("\(year)年").tag(year)
+                            Text(ShiftHubLocalization.yearText(year, locale: locale)).tag(year)
                         }
                     }
 
                     Picker("月", selection: $selectedMonth) {
                         ForEach(1...12, id: \.self) { month in
-                            Text("\(month)月").tag(month)
+                            Text(ShiftHubLocalization.monthText(month, locale: locale)).tag(month)
                         }
                     }
                 }
@@ -2423,12 +2553,12 @@ private struct CalendarEventManagerView: View {
 #if os(iOS)
                     Menu {
                         ForEach(yearOptions, id: \.self) { year in
-                            Button("\(year)年") {
+                            Button(ShiftHubLocalization.yearText(year, locale: locale)) {
                                 selectedYear = year
                             }
                         }
                     } label: {
-                        Text("\(selectedYear)年")
+                        Text(ShiftHubLocalization.yearText(selectedYear, locale: locale))
                             .font(.footnote)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
@@ -2438,7 +2568,7 @@ private struct CalendarEventManagerView: View {
 #else
                     Picker("年", selection: $selectedYear) {
                         ForEach(yearOptions, id: \.self) { year in
-                            Text("\(year)年").tag(year)
+                            Text(ShiftHubLocalization.yearText(year, locale: locale)).tag(year)
                         }
                     }
                     .labelsHidden()
@@ -2448,12 +2578,12 @@ private struct CalendarEventManagerView: View {
 #if os(iOS)
                     Menu {
                         ForEach(1...12, id: \.self) { month in
-                            Button("\(month)月") {
+                            Button(ShiftHubLocalization.monthText(month, locale: locale)) {
                                 selectedMonth = month
                             }
                         }
                     } label: {
-                        Text("\(selectedMonth)月")
+                        Text(ShiftHubLocalization.monthText(selectedMonth, locale: locale))
                             .font(.footnote)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
@@ -2463,7 +2593,7 @@ private struct CalendarEventManagerView: View {
 #else
                     Picker("月", selection: $selectedMonth) {
                         ForEach(1...12, id: \.self) { month in
-                            Text("\(month)月").tag(month)
+                            Text(ShiftHubLocalization.monthText(month, locale: locale)).tag(month)
                         }
                     }
                     .labelsHidden()
@@ -2537,7 +2667,7 @@ private struct CalendarEventManagerView: View {
 
                     Picker("年", selection: $selectedYear) {
                         ForEach(yearOptions, id: \.self) { year in
-                            Text("\(year)年").tag(year)
+                            Text(ShiftHubLocalization.yearText(year, locale: locale)).tag(year)
                         }
                     }
                     .labelsHidden()
@@ -2545,7 +2675,7 @@ private struct CalendarEventManagerView: View {
 
                     Picker("月", selection: $selectedMonth) {
                         ForEach(1...12, id: \.self) { month in
-                            Text("\(month)月").tag(month)
+                            Text(ShiftHubLocalization.monthText(month, locale: locale)).tag(month)
                         }
                     }
                     .labelsHidden()
@@ -2641,6 +2771,7 @@ private struct CalendarEventManagerView: View {
         }
 #endif
         .task {
+            model.setLocaleIdentifier(locale.identifier)
             model.load()
         }
         .onChange(of: model.yearMonth) {
@@ -2652,6 +2783,10 @@ private struct CalendarEventManagerView: View {
         }
         .onChange(of: selectedMonth) {
             reloadSelectedMonth()
+        }
+        .onChange(of: locale.identifier) {
+            model.setLocaleIdentifier(locale.identifier)
+            model.load()
         }
         .onChange(of: monthPageID) { _, pageID in
             guard let pageID,
@@ -2691,7 +2826,7 @@ private struct CalendarEventManagerView: View {
                 shiftTitleAfterDelete = nil
             }
         } message: {
-            Text(model.pendingDeletion?.confirmationText ?? "")
+            Text(pendingDeletionConfirmationText)
         }
         .sheet(isPresented: $isShiftSelectionPresented) {
             ShiftSelectionView(definitions: definitions, tint: managerAccentColor) { title in
@@ -2794,6 +2929,18 @@ private struct CalendarEventManagerView: View {
 
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedName.isEmpty ? nil : trimmedName
+    }
+
+    private var pendingDeletionConfirmationText: String {
+        guard let event = model.pendingDeletion else { return "" }
+        guard ShiftHubLocalization.isEnglish(locale) else { return event.confirmationText }
+
+        let key = event.detail.isEmpty ? "%@日の「%@」" : "%@日の「%@」\n%@"
+        return ShiftHubLocalization.format(
+            key,
+            locale: locale,
+            arguments: String(event.day), event.title, event.detail
+        )
     }
 
     private var eventManagerTitleText: String {
@@ -3591,6 +3738,7 @@ struct ShiftDefinitionSettingsView: View {
 
 struct CalendarSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
 
     @AppStorage("calendarDestination") private var calendarDestination = CalendarDestination.apple.rawValue
     @AppStorage("appleCalendarIdentifier") private var appleCalendarIdentifier = ""
@@ -3676,7 +3824,7 @@ struct CalendarSettingsView: View {
                                         .tag("")
 
                                     ForEach(appleCalendarProvider.calendars) { calendar in
-                                        Text(calendar.displayName)
+                                        Text(calendar.displayName(for: locale))
                                         .tag(calendar.id)
                                     }
                                 }
@@ -3688,7 +3836,7 @@ struct CalendarSettingsView: View {
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             } else if let selectedCalendar = appleCalendarProvider.calendars.first(where: { $0.id == appleCalendarIdentifier }) {
-                                Text("現在の登録先: \(selectedCalendar.displayName)")
+                                Text("現在の登録先: \(selectedCalendar.displayName(for: locale))")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             } else {
@@ -3771,7 +3919,7 @@ struct CalendarSettingsView: View {
                             if !googleCalendarProvider.calendars.isEmpty {
                                 Picker("登録先カレンダー", selection: $googleCalendarID) {
                                     ForEach(googleCalendarProvider.calendars) { calendar in
-                                        Text(calendar.displayName)
+                                        Text(calendar.displayName(for: locale))
                                             .tag(calendar.id)
                                     }
                                 }
@@ -3780,7 +3928,7 @@ struct CalendarSettingsView: View {
                             if let selectedCalendar = googleCalendarProvider.calendars.first(where: {
                                 $0.id == googleCalendarID
                             }) {
-                                Text("現在の登録先: \(selectedCalendar.displayName)")
+                                Text("現在の登録先: \(selectedCalendar.displayName(for: locale))")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             } else if googleCalendarProvider.isAuthorized {
@@ -3878,7 +4026,7 @@ struct CalendarSettingsView: View {
                                 if !notionProperties.filter({ $0.type == "title" }).isEmpty {
                                     Picker("タイトル列", selection: $notionTitleProperty) {
                                         ForEach(notionProperties.filter { $0.type == "title" }) { property in
-                                            Text(property.displayName)
+                                            Text(property.displayName(for: locale))
                                                 .tag(property.name)
                                         }
                                     }
@@ -3887,7 +4035,7 @@ struct CalendarSettingsView: View {
                                 if !notionProperties.filter({ $0.type == "date" }).isEmpty {
                                     Picker("日付列", selection: $notionDateProperty) {
                                         ForEach(notionProperties.filter { $0.type == "date" }) { property in
-                                            Text(property.displayName)
+                                            Text(property.displayName(for: locale))
                                                 .tag(property.name)
                                         }
                                     }
@@ -3896,7 +4044,7 @@ struct CalendarSettingsView: View {
                                 if !notionProperties.filter({ $0.type == "multi_select" }).isEmpty {
                                     Picker("タグ列", selection: $notionTagProperty) {
                                         ForEach(notionProperties.filter { $0.type == "multi_select" }) { property in
-                                            Text(property.displayName)
+                                            Text(property.displayName(for: locale))
                                                 .tag(property.name)
                                         }
                                     }
@@ -3955,6 +4103,8 @@ struct CalendarSettingsView: View {
         .frame(minWidth: 680, minHeight: 620)
 #endif
         .onAppear {
+            appleCalendarProvider.setLocaleIdentifier(locale.identifier)
+            googleCalendarProvider.setLocaleIdentifier(locale.identifier)
             appleCalendarProvider.loadCalendarsIfAuthorized()
             googleCalendarProvider.loadSavedState()
             updateAppleCalendarName()
@@ -3984,6 +4134,10 @@ struct CalendarSettingsView: View {
             if calendarDestination == CalendarDestination.google.rawValue {
                 googleCalendarProvider.loadSavedState()
             }
+        }
+        .onChange(of: locale.identifier) {
+            appleCalendarProvider.setLocaleIdentifier(locale.identifier)
+            googleCalendarProvider.setLocaleIdentifier(locale.identifier)
         }
         .onChange(of: appleCalendarIdentifier) {
             updateAppleCalendarName()
@@ -4067,7 +4221,7 @@ struct CalendarSettingsView: View {
         } else {
             name = appleCalendarProvider.calendars.first(where: {
                 $0.id == appleCalendarIdentifier
-            })?.displayName ?? ""
+            })?.displayName(for: locale) ?? ""
         }
 
         appleCalendarName = name
@@ -4076,7 +4230,7 @@ struct CalendarSettingsView: View {
     private func updateGoogleCalendarName() {
         googleCalendarName = googleCalendarProvider.calendars.first(where: {
             $0.id == googleCalendarID
-        })?.displayName ?? ""
+        })?.displayName(for: locale) ?? ""
     }
 
     private var notionDiscoveryKey: String {
@@ -4107,7 +4261,10 @@ struct CalendarSettingsView: View {
         guard token.count >= 8, databaseID.count >= 8 else {
             notionDatabaseName = ""
             notionProperties = []
-            notionPropertyMessage = "トークンとデータベースIDを入力すると、列を自動取得します。"
+            notionPropertyMessage = ShiftHubLocalization.string(
+                "トークンとデータベースIDを入力すると、列を自動取得します。",
+                locale: locale
+            )
             return
         }
 
@@ -4120,19 +4277,31 @@ struct CalendarSettingsView: View {
             try Task.checkCancellation()
             let schema = try await NotionSchemaClient().fetchSchema(
                 token: token,
-                databaseID: databaseID
+                databaseID: databaseID,
+                localeIdentifier: locale.identifier
             )
             try Task.checkCancellation()
             notionDatabaseName = schema.title
             notionProperties = schema.properties
             notionPropertyMessage = schema.properties.isEmpty
-                ? "取得できる列がありませんでした。Notionの接続権限を確認してください。"
-                : "Notionから\(schema.properties.count)個の列を取得しました。"
+                ? ShiftHubLocalization.string(
+                    "取得できる列がありませんでした。Notionの接続権限を確認してください。",
+                    locale: locale
+                )
+                : ShiftHubLocalization.format(
+                    "%@個の列を取得しました。",
+                    locale: locale,
+                    arguments: String(schema.properties.count)
+                )
         } catch is CancellationError {
             return
         } catch {
             notionProperties = []
-            notionPropertyMessage = "列を取得できませんでした: \(error.localizedDescription)"
+            notionPropertyMessage = ShiftHubLocalization.format(
+                "列を取得できませんでした: %@",
+                locale: locale,
+                arguments: ShiftHubLocalization.localizedErrorDescription(error, locale: locale)
+            )
         }
 
         isLoadingNotionProperties = false
@@ -4154,6 +4323,10 @@ private struct NotionPropertyOption: Identifiable, Hashable {
     var displayName: String {
         "\(name)（\(type)）"
     }
+
+    func displayName(for locale: Locale) -> String {
+        ShiftHubLocalization.isEnglish(locale) ? "\(name) (\(type))" : displayName
+    }
 }
 
 private struct NotionDatabaseSchema {
@@ -4162,7 +4335,11 @@ private struct NotionDatabaseSchema {
 }
 
 private struct NotionSchemaClient {
-    func fetchSchema(token: String, databaseID: String) async throws -> NotionDatabaseSchema {
+    func fetchSchema(
+        token: String,
+        databaseID: String,
+        localeIdentifier: String
+    ) async throws -> NotionDatabaseSchema {
         guard let url = URL(string: "https://api.notion.com/v1/databases/\(databaseID)") else {
             throw NotionAPIError.invalidSettings
         }
@@ -4221,7 +4398,11 @@ private struct NotionSchemaClient {
         }
 
         return NotionDatabaseSchema(
-            title: title.isEmpty ? "名称未設定のNotion DB" : title,
+            title: title.isEmpty
+                ? (ShiftHubLocalization.isEnglish(Locale(identifier: localeIdentifier))
+                    ? "Untitled Notion database"
+                    : "名称未設定のNotion DB")
+                : title,
             properties: propertyOptions
         )
     }
@@ -4469,6 +4650,7 @@ private final class CalendarEventManagerModel: ObservableObject {
     private let notionTitleProperty: String
     private let notionTagProperty: String
     private let notionTagValue: String
+    private var localeIdentifier = "ja"
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = 0
 
@@ -4499,6 +4681,10 @@ private final class CalendarEventManagerModel: ObservableObject {
         events = []
         loadedDays = []
         message = ""
+    }
+
+    func setLocaleIdentifier(_ identifier: String) {
+        localeIdentifier = identifier
     }
 
     var groupedDays: [Int] {
@@ -4592,7 +4778,22 @@ private final class CalendarEventManagerModel: ObservableObject {
 
                 guard !Task.isCancelled, loadGeneration == generation else { return }
 
-                let eventsByDay = Dictionary(grouping: fetchedEvents, by: { $0.day })
+                let displayLocale = Locale(identifier: localeIdentifier)
+                let displayEvents = fetchedEvents.map { event in
+                    CalendarEventRecord(
+                        id: event.id,
+                        day: event.day,
+                        title: event.title == "無題"
+                            ? ShiftHubLocalization.string("無題", locale: displayLocale)
+                            : event.title,
+                        detail: event.detail == "終日"
+                            ? ShiftHubLocalization.string("終日", locale: displayLocale)
+                            : event.detail,
+                        isAllDay: event.isAllDay,
+                        calendarColor: event.calendarColor
+                    )
+                }
+                let eventsByDay = Dictionary(grouping: displayEvents, by: { $0.day })
                 for day in eventsByDay.keys.sorted() {
                     try await Task.sleep(nanoseconds: 45_000_000)
                     guard !Task.isCancelled, loadGeneration == generation else { return }
@@ -4602,13 +4803,20 @@ private final class CalendarEventManagerModel: ObservableObject {
                         self.loadedDays.insert(day)
                     }
                 }
-                message = fetchedEvents.isEmpty ? "この月に登録されたイベントはありません。" : "\(fetchedEvents.count)件のイベントを取得しました。"
+                let locale = Locale(identifier: localeIdentifier)
+                message = fetchedEvents.isEmpty
+                    ? ShiftHubLocalization.string("この月に登録されたイベントはありません。", locale: locale)
+                    : ShiftHubLocalization.format(
+                        "%@件のイベントを取得しました。",
+                        locale: locale,
+                        arguments: String(fetchedEvents.count)
+                    )
             } catch is CancellationError {
                 return
             } catch {
                 guard loadGeneration == generation else { return }
                 events = []
-                message = error.localizedDescription
+                message = ShiftHubLocalization.localizedErrorDescription(error, locale: Locale(identifier: localeIdentifier))
             }
         }
     }
@@ -4659,11 +4867,18 @@ private final class CalendarEventManagerModel: ObservableObject {
                 }
 
                 events.removeAll { $0.id == target.id }
-                message = "イベントを削除しました。"
+                message = ShiftHubLocalization.string(
+                    "イベントを削除しました。",
+                    locale: Locale(identifier: localeIdentifier)
+                )
                 pendingDeletion = nil
                 completion?()
             } catch {
-                message = "イベントの削除に失敗しました: \(error.localizedDescription)"
+                message = ShiftHubLocalization.format(
+                    "イベントの削除に失敗しました: %@",
+                    locale: Locale(identifier: localeIdentifier),
+                    arguments: error.localizedDescription
+                )
             }
 
             isDeleting = false
@@ -5053,6 +5268,10 @@ private struct GoogleCalendarOption: Identifiable, Hashable {
     var displayName: String {
         isPrimary ? "\(title)（メイン）" : title
     }
+
+    func displayName(for locale: Locale) -> String {
+        isPrimary && ShiftHubLocalization.isEnglish(locale) ? "\(title) (Primary)" : displayName
+    }
 }
 
 private struct GoogleOAuthTokens: Codable {
@@ -5094,6 +5313,11 @@ private final class GoogleCalendarProvider: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isAuthorizing = false
     @Published private(set) var isAuthorized = false
+    private var localeIdentifier = "ja"
+
+    func setLocaleIdentifier(_ identifier: String) {
+        localeIdentifier = identifier
+    }
 
     func loadSavedState() {
         isAuthorized = GoogleTokenStore.load() != nil
@@ -5103,7 +5327,10 @@ private final class GoogleCalendarProvider: ObservableObject {
         let trimmedClientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedClientSecret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedClientID.isEmpty, !trimmedClientSecret.isEmpty else {
-            message = "OAuthクライアントIDとシークレットを入力してください。"
+            message = ShiftHubLocalization.string(
+                "OAuthクライアントIDとシークレットを入力してください。",
+                locale: Locale(identifier: localeIdentifier)
+            )
             return
         }
 
@@ -5114,14 +5341,25 @@ private final class GoogleCalendarProvider: ObservableObject {
             do {
                 let tokens = try await GoogleOAuthClient.authorize(
                     clientID: trimmedClientID,
-                    clientSecret: trimmedClientSecret
+                    clientSecret: trimmedClientSecret,
+                    localeIdentifier: self?.localeIdentifier ?? "ja"
                 )
                 GoogleTokenStore.save(tokens)
                 self?.isAuthorized = true
                 self?.calendars = []
-                self?.message = "Googleアカウントに接続しました。カレンダー一覧を取得してください。"
+                self?.message = ShiftHubLocalization.string(
+                    "Googleアカウントに接続しました。カレンダー一覧を取得してください。",
+                    locale: Locale(identifier: self?.localeIdentifier ?? "ja")
+                )
             } catch {
-                self?.message = "Googleログインに失敗しました: \(error.localizedDescription)"
+                self?.message = ShiftHubLocalization.format(
+                    "Googleログインに失敗しました: %@",
+                    locale: Locale(identifier: self?.localeIdentifier ?? "ja"),
+                    arguments: ShiftHubLocalization.localizedErrorDescription(
+                        error,
+                        locale: Locale(identifier: self?.localeIdentifier ?? "ja")
+                    )
+                )
             }
 
             self?.isAuthorizing = false
@@ -5132,7 +5370,10 @@ private final class GoogleCalendarProvider: ObservableObject {
         let trimmedClientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedClientSecret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedClientID.isEmpty, !trimmedClientSecret.isEmpty else {
-            message = "OAuthクライアントIDとシークレットを入力してください。"
+            message = ShiftHubLocalization.string(
+                "OAuthクライアントIDとシークレットを入力してください。",
+                locale: Locale(identifier: localeIdentifier)
+            )
             return
         }
 
@@ -5148,10 +5389,21 @@ private final class GoogleCalendarProvider: ObservableObject {
                 self?.calendars = calendars
                 self?.isAuthorized = true
                 self?.message = calendars.isEmpty
-                    ? "利用できるカレンダーが見つかりませんでした。"
-                    : "\(calendars.count)件のカレンダーを取得しました。"
+                    ? ShiftHubLocalization.string(
+                        "利用できるカレンダーが見つかりませんでした。",
+                        locale: Locale(identifier: self?.localeIdentifier ?? "ja")
+                    )
+                    : ShiftHubLocalization.format(
+                        "%@件のカレンダーを取得しました。",
+                        locale: Locale(identifier: self?.localeIdentifier ?? "ja"),
+                        arguments: String(calendars.count)
+                    )
             } catch {
-                self?.message = "カレンダー一覧を取得できませんでした: \(error.localizedDescription)"
+                self?.message = ShiftHubLocalization.format(
+                    "カレンダー一覧を取得できませんでした: %@",
+                    locale: Locale(identifier: self?.localeIdentifier ?? "ja"),
+                    arguments: error.localizedDescription
+                )
             }
 
             self?.isLoading = false
@@ -5172,11 +5424,15 @@ private enum GoogleOAuthClient {
         "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
     ]
 
-    static func authorize(clientID: String, clientSecret: String) async throws -> GoogleOAuthTokens {
+    static func authorize(
+        clientID: String,
+        clientSecret: String,
+        localeIdentifier: String
+    ) async throws -> GoogleOAuthTokens {
         let state = randomString(length: 32)
         let codeVerifier = randomString(length: 64)
         let codeChallenge = base64URL(SHA256.hash(data: Data(codeVerifier.utf8)))
-        let server = GoogleOAuthLoopbackServer()
+        let server = GoogleOAuthLoopbackServer(localeIdentifier: localeIdentifier)
         let redirectURI = try await server.start()
         defer { server.stop() }
 
@@ -5315,11 +5571,16 @@ private enum GoogleOAuthClient {
 }
 
 private final class GoogleOAuthLoopbackServer: @unchecked Sendable {
+    private let localeIdentifier: String
     private let queue = DispatchQueue(label: "net.unwraps.Shift-Upload.google-oauth")
     private var listener: NWListener?
     private var startContinuation: CheckedContinuation<String, Error>?
     private var callbackContinuation: CheckedContinuation<GoogleOAuthCallback, Error>?
     private var pendingCallback: GoogleOAuthCallback?
+
+    init(localeIdentifier: String) {
+        self.localeIdentifier = localeIdentifier
+    }
 
     func start() async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
@@ -5408,11 +5669,23 @@ private final class GoogleOAuthLoopbackServer: @unchecked Sendable {
               let components = URLComponents(string: "http://127.0.0.1\(parts[1])"),
               let code = components.queryItems?.first(where: { $0.name == "code" })?.value,
               let state = components.queryItems?.first(where: { $0.name == "state" })?.value else {
-            sendResponse(to: connection, body: "認証情報を受け取れませんでした。Shift Hubに戻ってください。")
+            sendResponse(
+                to: connection,
+                body: ShiftHubLocalization.string(
+                    "認証情報を受け取れませんでした。Shift Hubに戻ってください。",
+                    locale: Locale(identifier: localeIdentifier)
+                )
+            )
             return
         }
 
-            sendResponse(to: connection, body: "Googleログインが完了しました。このページを閉じてShift Hubに戻ってください。")
+        sendResponse(
+            to: connection,
+            body: ShiftHubLocalization.string(
+                "Googleログインが完了しました。このページを閉じてShift Hubに戻ってください。",
+                locale: Locale(identifier: localeIdentifier)
+            )
+        )
         listener?.cancel()
         listener = nil
 
@@ -5880,6 +6153,10 @@ private struct AppleCalendarOption: Identifiable, Hashable {
     var displayName: String {
         sourceTitle.isEmpty ? title : "\(title)（\(sourceTitle)）"
     }
+
+    func displayName(for locale: Locale) -> String {
+        sourceTitle.isEmpty ? title : "\(title) (\(sourceTitle))"
+    }
 }
 
 @MainActor
@@ -5887,6 +6164,11 @@ private final class AppleCalendarProvider: ObservableObject {
     @Published private(set) var calendars: [AppleCalendarOption] = []
     @Published private(set) var message = ""
     @Published private(set) var isLoading = false
+    private var localeIdentifier = "ja"
+
+    func setLocaleIdentifier(_ identifier: String) {
+        localeIdentifier = identifier
+    }
 
     private let eventStore = EKEventStore()
 
@@ -5915,16 +6197,31 @@ private final class AppleCalendarProvider: ObservableObject {
                         provider.refreshCalendars()
                     } else {
                         provider.isLoading = false
-                        provider.message = error?.localizedDescription ?? "カレンダーへのアクセスが許可されませんでした。"
+                        provider.message = error.map {
+                            ShiftHubLocalization.localizedErrorDescription(
+                                $0,
+                                locale: Locale(identifier: provider.localeIdentifier)
+                            )
+                        }
+                            ?? ShiftHubLocalization.string(
+                                "カレンダーへのアクセスが許可されませんでした。",
+                                locale: Locale(identifier: provider.localeIdentifier)
+                            )
                     }
                 }
             }
         case .denied, .restricted, .writeOnly:
             isLoading = false
-            message = "カレンダーへのアクセスが許可されていません。システム設定でアクセスを許可してください。"
+            message = ShiftHubLocalization.string(
+                "カレンダーへのアクセスが許可されていません。システム設定でアクセスを許可してください。",
+                locale: Locale(identifier: localeIdentifier)
+            )
         @unknown default:
             isLoading = false
-            message = "カレンダーへのアクセス状態を確認できませんでした。"
+            message = ShiftHubLocalization.string(
+                "カレンダーへのアクセス状態を確認できませんでした。",
+                locale: Locale(identifier: localeIdentifier)
+            )
         }
     }
 
@@ -5937,7 +6234,10 @@ private final class AppleCalendarProvider: ObservableObject {
         isLoading = false
 
         if calendars.isEmpty {
-            message = "利用できるカレンダーが見つかりませんでした。"
+            message = ShiftHubLocalization.string(
+                "利用できるカレンダーが見つかりませんでした。",
+                locale: Locale(identifier: localeIdentifier)
+            )
         } else {
             message = ""
         }
