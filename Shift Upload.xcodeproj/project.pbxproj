@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		0826483C304FBF7600BEFF29 /* Shift Upload.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Shift Upload.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Shift Hub iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -20,6 +21,13 @@
 
 /* Begin PBXFrameworksBuildPhase section */
 		08264839304FBF7600BEFF29 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		08264851304FBF7600BEFF29 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -41,6 +49,7 @@
 			isa = PBXGroup;
 			children = (
 				0826483C304FBF7600BEFF29 /* Shift Upload.app */,
+				08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,6 +79,28 @@
 			productReference = 0826483C304FBF7600BEFF29 /* Shift Upload.app */;
 			productType = "com.apple.product-type.application";
 		};
+		08264854304FBF7600BEFF29 /* Shift Hub iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 08264855304FBF7600BEFF29 /* Build configuration list for PBXNativeTarget "Shift Hub iOS" */;
+			buildPhases = (
+				08264852304FBF7600BEFF29 /* Sources */,
+				08264851304FBF7600BEFF29 /* Frameworks */,
+				08264853304FBF7600BEFF29 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				0826483E304FBF7600BEFF29 /* Shift Upload */,
+			);
+			name = "Shift Hub iOS";
+			packageProductDependencies = (
+			);
+			productName = "Shift Hub iOS";
+			productReference = 08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -82,6 +113,18 @@
 				TargetAttributes = {
 					0826483B304FBF7600BEFF29 = {
 						CreatedOnToolsVersion = 26.6;
+						SystemCapabilities = {
+							com.apple.iCloud = {
+								enabled = 1;
+							};
+						};
+					};
+					08264854304FBF7600BEFF29 = {
+						SystemCapabilities = {
+							com.apple.iCloud = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -91,6 +134,7 @@
 			knownRegions = (
 				en,
 				Base,
+				ja,
 			);
 			mainGroup = 08264833304FBF7600BEFF29;
 			minimizedProjectReferenceProxies = 1;
@@ -100,6 +144,7 @@
 			projectRoot = "";
 			targets = (
 				0826483B304FBF7600BEFF29 /* Shift Upload */,
+				08264854304FBF7600BEFF29 /* Shift Hub iOS */,
 			);
 		};
 /* End PBXProject section */
@@ -112,10 +157,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		08264853304FBF7600BEFF29 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		08264838304FBF7600BEFF29 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		08264852304FBF7600BEFF29 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -250,6 +309,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Shift Upload/Shift Upload.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -259,6 +319,9 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Shift Hub";
+				INFOPLIST_KEY_CFBundleName = "Shift Hub";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "勤務イベントを登録するカレンダーを選択するために使用します。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -282,6 +345,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Shift Upload/Shift Upload.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -291,6 +355,9 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Shift Hub";
+				INFOPLIST_KEY_CFBundleName = "Shift Hub";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "勤務イベントを登録するカレンダーを選択するために使用します。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -306,6 +373,68 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		08264856304FBF7600BEFF29 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = "Shift Upload/Shift Hub iOS.entitlements";
+				INFOPLIST_KEY_CFBundleDisplayName = "Shift Hub";
+				INFOPLIST_KEY_CFBundleName = "Shift Hub";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "勤務イベントを登録するカレンダーを選択するために使用します。";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "勤務イベントを登録するカレンダーを選択するために使用します。";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS";
+				PRODUCT_NAME = "Shift Hub iOS";
+				SDKROOT = iphoneos;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		08264857304FBF7600BEFF29 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = "Shift Upload/Shift Hub iOS.entitlements";
+				INFOPLIST_KEY_CFBundleDisplayName = "Shift Hub";
+				INFOPLIST_KEY_CFBundleName = "Shift Hub";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "勤務イベントを登録するカレンダーを選択するために使用します。";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "勤務イベントを登録するカレンダーを選択するために使用します。";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS";
+				PRODUCT_NAME = "Shift Hub iOS";
+				SDKROOT = iphoneos;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -326,6 +455,15 @@
 			buildConfigurations = (
 				08264848304FBF7700BEFF29 /* Debug */,
 				08264849304FBF7700BEFF29 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		08264855304FBF7600BEFF29 /* Build configuration list for PBXNativeTarget "Shift Hub iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				08264856304FBF7600BEFF29 /* Debug */,
+				08264857304FBF7600BEFF29 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

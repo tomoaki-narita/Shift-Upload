@@ -1,0 +1,167 @@
+/* Main window */
+"日付ごとに登録" = "Register by date";
+"イベントを管理" = "Manage events";
+"イベント管理" = "Event Management";
+"登録済みイベントを管理" = "Manage registered events";
+"カレンダー操作" = "Calendar actions";
+"設定" = "Settings";
+"勤務表を選択" = "Choose schedule";
+"読み込みを解除" = "Clear loaded schedule";
+"勤務表の読み込みを解除しました。" = "The loaded schedule was cleared.";
+"保存した勤務表" = "Saved schedules";
+"保存した勤務表を選択して解析します。" = "Choose a saved schedule to analyze it.";
+"保存した勤務表がありません" = "No saved schedules";
+"勤務表を選択すると、ここに保存されます。" = "Schedules are saved here when you choose one.";
+"カレンダーへ登録" = "Register in calendar";
+"Appleカレンダーへ登録" = "Register in Apple Calendar";
+"Googleカレンダーへ登録" = "Register in Google Calendar";
+"Notionデータベースへ登録" = "Register in Notion database";
+"カレンダーへ登録中です..." = "Registering events...";
+"「休」も登録しますか？" = "Register days off too?";
+"休も登録" = "Register days off";
+"勤務だけ登録" = "Register shifts only";
+"キャンセル" = "Cancel";
+"表示" = "View";
+"表示形式" = "View mode";
+"横並び" = "Timeline";
+"カレンダー" = "Calendar";
+"保存された名前を含む行だけを抽出します。" = "Only the row containing the saved name will be extracted.";
+"OCR結果に名前が含まれているか確認してください。" = "Check that the name appears in the OCR result.";
+"PDFの文字データに名前が含まれているか確認してください。" = "Check that the name appears in the PDF text.";
+"名前を入力してください" = "Enter a name";
+"該当する行が見つかりません" = "No matching row found";
+"勤務表" = "Schedule";
+"PDFスキャン" = "PDF Scan";
+"文字データを持つPDFの勤務表を選択" = "Choose a text-based PDF schedule";
+"PDFのみ対応しています" = "PDF files only";
+"JPGやPNGではなく、文字データを持つPDFを選択してください。" = "Choose a PDF that contains text data, not a JPG or PNG.";
+"取得できないPDFです" = "Unsupported PDF";
+"文字データを持つPDFではありません。文字を選択・コピーできるPDFを使用してください。" = "This PDF does not contain text data. Use a PDF whose text can be selected and copied.";
+"対応していないPDFです" = "Unsupported PDF";
+"横型で文字データを持つPDFを選択してください。縦型のPDFには対応していません。" = "Choose a landscape PDF that contains text. Portrait PDFs are not supported.";
+"PDFを読み込めません" = "Unable to read PDF";
+"PDFファイルを開けませんでした。" = "The PDF file could not be opened.";
+
+/* Single registration */
+"登録する日付と勤務を選択します。" = "Choose the date and shift to register.";
+"年" = "Year";
+"月" = "Month";
+"日付" = "Date";
+"勤務" = "Shift";
+"休" = "Day off";
+"複合勤務" = "Combined shift";
+"日をまたぐ勤務" = "Overnight shift";
+"休（終日）" = "Day off (all day)";
+"終日" = "All day";
+"終日イベントとして登録します。" = "This will be registered as an all-day event.";
+"登録時間: %@" = "Registered time: %@";
+"登録" = "Register";
+
+/* Event management */
+"取得" = "Fetch";
+"再取得" = "Refresh";
+"完了" = "Done";
+"イベントを取得中です..." = "Fetching events...";
+"イベントがありません" = "No events";
+"この月に登録されたイベントはありません。" = "There are no registered events in this month.";
+"イベントを削除しますか？" = "Delete this event?";
+"削除してイベントを登録しますか？" = "Delete this event and register it again?";
+"削除して登録" = "Delete and register";
+"イベントの登録" = "Register event";
+"削除してイベントの登録" = "Delete and register event";
+"イベント操作" = "Event actions";
+
+/* General settings */
+"アプリの表示と言語、勤務・カレンダー設定を管理します。" = "Manage the app language, shifts, and calendar settings.";
+"一般" = "General";
+"言語" = "Language";
+"日本語" = "日本語";
+"勤務タイトルと時間を設定" = "Shift titles and times";
+"カレンダー接続と登録先を設定" = "Calendar connections and destinations";
+
+/* Shift settings */
+"勤務設定" = "Shift settings";
+"追加ボタンから勤務タイトルと時間を登録してください。" = "Use Add to save shift titles and times.";
+"追加" = "Add";
+"削除" = "Delete";
+
+/* Calendar settings */
+"カレンダー設定" = "Calendar settings";
+"勤務情報の登録先を設定します。" = "Configure where shift information is registered.";
+"登録先カレンダー" = "Destination calendar";
+"登録先" = "Destination";
+"ここで選択したカレンダーを、勤務イベントの登録先として使用します。" = "The selected calendar will be used for shift events.";
+"Appleカレンダー" = "Apple Calendar";
+"Googleカレンダー" = "Google Calendar";
+"Notion Calendar / Notionデータベース" = "Notion Calendar / Notion database";
+"カレンダー一覧を取得" = "Fetch calendars";
+"取得中です..." = "Fetching...";
+"デフォルトカレンダー" = "Default calendar";
+"現在の登録先: デフォルトカレンダー" = "Current destination: Default calendar";
+"保存されている登録先カレンダーを確認できません。もう一度一覧を取得してください。" = "The saved destination could not be found. Fetch the calendar list again.";
+"OAuthクライアントID" = "OAuth client ID";
+"OAuthクライアントシークレット" = "OAuth client secret";
+"Googleに再ログイン" = "Sign in to Google again";
+"Googleにログイン" = "Sign in to Google";
+"接続済み" = "Connected";
+"ブラウザでGoogleログインを待っています..." = "Waiting for Google sign-in in the browser...";
+"カレンダー一覧を取得して登録先を選択してください。" = "Fetch the calendar list and choose a destination.";
+"Google Cloudで作成したOAuthクライアントIDとシークレットを入力し、Googleログイン後に登録先を選択します。" = "Enter the OAuth client ID and secret from Google Cloud, sign in, then choose a destination.";
+"Bearer" = "Bearer";
+"ntn_から始まるトークン" = "Token beginning with ntn_";
+"データベースID" = "Database ID";
+"タイトル列名" = "Title property";
+"日付列名" = "Date property";
+"タグ列名" = "Tag property";
+"タグ値" = "Tag value";
+"勤務名を入れるタイトル型" = "Title property for the shift name";
+"日付・時間を入れる日付型" = "Date property for dates and times";
+"タグを入れる複数選択型" = "Multi-select property for the tag";
+"登録するタグの名前" = "Name of the tag to register";
+"例: tasks" = "Example: tasks";
+"例: due date" = "Example: due date";
+"例: tag" = "Example: tag";
+"例: shift" = "Example: shift";
+"登録名（例: off）" = "Registered name (e.g. off)";
+"取得した列から選択" = "Choose from fetched properties";
+"タイトル列" = "Title property";
+"日付列" = "Date property";
+"タグ列" = "Tag property";
+"タグ値を選択" = "Choose tag value";
+"Notionの列を取得中です..." = "Fetching Notion properties...";
+"データベースID、列名、タグ値はNotion側の設定に合わせて入力してください。Bearer、プロパティの種類、JSON構造はアプリが補完します。対象データベースをNotionの接続に共有し、ページ追加権限を付与してください。" = "Enter the database ID, property names, and tag value to match Notion. The app supplies Bearer, property types, and JSON structure. Share the database with the Notion connection and grant permission to add pages.";
+
+/* Registration rules */
+"登録ルール" = "Registration rules";
+"時間を指定しない終日イベントとして登録" = "Register as an all-day event without specifying a time";
+"開始・終了時刻を指定して登録" = "Register with start and end times";
+"日付プロパティに開始・終了時刻を登録" = "Register start and end times in the date property";
+"登録済みの勤務情報から時間を参照" = "Use times from saved shift information";
+"現時点では未対応" = "Not supported yet";
+
+/* Common placeholders and messages */
+"保存する勤務を選択してください。" = "Choose the shifts to save.";
+"勤務一覧にありません" = "Not in the saved shifts";
+"保存" = "Save";
+"閉じる" = "Close";
+"休 →" = "Day off →";
+"勤務タイトルと時間を保存します。" = "Save shift titles and times.";
+"Name..." = "Name...";
+"タイトル" = "Title";
+"PDF、JPG、PNGの勤務表を選択" = "Choose a PDF, JPG, or PNG schedule";
+"勤務表を読み込んでください。" = "Load a schedule first.";
+"保存した勤務表が見つかりません。" = "The saved schedule could not be found.";
+"勤務表を保存できませんでした: %@" = "Could not save the schedule: %@";
+"保存した勤務表を開けませんでした: %@" = "Could not open the saved schedule: %@";
+"保存した勤務表を削除できませんでした: %@" = "Could not delete the saved schedule: %@";
+"登録先カレンダーの設定を確認してください。" = "Check the destination calendar settings.";
+"登録する年月を選択してください。" = "Choose the year and month to register.";
+"登録する日付が正しくありません。" = "The registration date is invalid.";
+"OCR解析中です。" = "Analyzing the document...";
+"PDFを確認中です。" = "Checking the PDF...";
+"対応していない保存済みPDFを削除しました。" = "Unsupported saved PDFs were removed.";
+"PDFを解析中です。" = "Analyzing the PDF...";
+"利用できるカレンダーが見つかりませんでした。" = "No available calendars were found.";
+"OAuthクライアントIDとシークレットを入力してください。" = "Enter the OAuth client ID and secret.";
+"イベントを削除しました。" = "The event was deleted.";
+"イベントの削除に失敗しました: %@" = "Could not delete the event: %@";
