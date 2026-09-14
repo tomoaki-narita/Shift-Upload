@@ -15,6 +15,7 @@ import Security
 import SwiftUI
 import UniformTypeIdentifiers
 import Vision
+import AuthenticationServices
 
 #if os(macOS)
 import AppKit
@@ -24,6 +25,19 @@ import UIKit
 
 private extension Notification.Name {
     static let shiftHubSettingsDidChange = Notification.Name("ShiftHubSettingsDidChange")
+    static let shiftHubScanStoredSchedule = Notification.Name("ShiftHubScanStoredSchedule")
+}
+
+private enum GoogleOAuthConfiguration {
+#if os(iOS)
+    // Native iOS OAuth clients use PKCE and must not send the macOS client secret.
+    static let clientSecret: String? = nil
+    static let clientID = "286738733463-lihm8melqntpfekgp9npr2i16b5dlv8p.apps.googleusercontent.com"
+    static let callbackURLScheme = "com.googleusercontent.apps.286738733463-lihm8melqntpfekgp9npr2i16b5dlv8p"
+#else
+    static let clientSecret = GoogleOAuthSecrets.macOSClientSecret
+    static let clientID = "286738733463-tr3gh0ou1akkgvkiag0j47v3pj6sk0cu.apps.googleusercontent.com"
+#endif
 }
 
 private enum ShiftHubLocalization {
@@ -46,11 +60,11 @@ private enum ShiftHubLocalization {
     }
 
     static func yearText(_ year: Int, locale: Locale) -> String {
-        isEnglish(locale) ? String(year) : "\(year)年"
+        String(year)
     }
 
     static func monthText(_ month: Int, locale: Locale) -> String {
-        isEnglish(locale) ? String(month) : "\(month)月"
+        String(format: "%02d", month)
     }
 
     static func localizedErrorDescription(_ error: Error, locale: Locale) -> String {
@@ -125,7 +139,6 @@ struct ContentView: View {
     @AppStorage("appleCalendarIdentifier") private var appleCalendarIdentifier = ""
     @AppStorage("appleCalendarName") private var appleCalendarName = ""
     @AppStorage("appleRestEventTitle") private var appleRestEventTitle = "休"
-    @AppStorage("googleCalendarClientID") private var googleCalendarClientID = ""
     @AppStorage("googleCalendarID") private var googleCalendarID = "primary"
     @AppStorage("googleCalendarName") private var googleCalendarName = ""
     @AppStorage("googleRestEventTitle") private var googleRestEventTitle = "休"
@@ -137,9 +150,12 @@ struct ContentView: View {
     @AppStorage("notionTagValue") private var notionTagValue = "shift"
     @AppStorage("notionRestEventTitle") private var notionRestEventTitle = "休"
     @AppStorage("storedSchedulesJSON") private var storedSchedulesJSON = ""
+    @AppStorage("iCloudSyncEnabled") private var isCloudSyncEnabled = true
 
     @State private var isImporterPresented = false
     @State private var isSavedScheduleListPresented = false
+    @State private var isPDFListPresented = false
+    @State private var isRegistrationDestinationMenuPresented = false
     @State private var isSettingsPresented = false
     @State private var isShiftUploadPresented = false
     @State private var isMissingShiftSelectionPresented = false
@@ -154,7 +170,10 @@ struct ContentView: View {
     @State private var pendingMissingShiftTitles: [String] = []
     @State private var ignoredMissingShiftTitles: Set<String> = []
     @State private var selectedExtractedDayAction: ExtractedDayAction?
-    @State private var isExtractedDayActionDismissalBlocked = false
+#if os(iOS)
+    @State private var isExtractedShiftActionPresented = false
+    @State private var selectedExtractedDirectDayAction: ExtractedDayAction?
+#endif
     @State private var isExtractedShiftSelectionPresented = false
     @State private var pendingExtractedDayForEdit: Int?
     @State private var editedExtractedShiftText = ""
@@ -181,7 +200,7 @@ struct ContentView: View {
         }
         .environment(\.locale, Locale(identifier: appLanguage))
 #if os(macOS)
-        .frame(minWidth: 720, minHeight: 940)
+        .frame(minWidth: 720, minHeight: 950)
 #endif
         .fileImporter(
             isPresented: $isImporterPresented,
@@ -205,6 +224,12 @@ struct ContentView: View {
                 onDelete: deleteSavedSchedule
             )
         }
+        .sheet(isPresented: $isPDFListPresented) {
+            PDFListView(
+                schedules: savedSchedules,
+                onDelete: deleteSavedSchedule
+            )
+        }
         .onAppear {
             shiftDefinitions = Self.loadShiftDefinitions(from: shiftDefinitionsJSON)
             let loadedSchedules = Self.loadStoredSchedules(from: storedSchedulesJSON)
@@ -213,12 +238,14 @@ struct ContentView: View {
                 statusMessage = localizedMessage("対応していない保存済みPDFを削除しました。")
             }
 
-            if let cloudSettings = ShiftHubCloudSync.loadSettings() {
-                applyCloudSettings(cloudSettings)
-            }
+            if isCloudSyncEnabled {
+                if let cloudSettings = ShiftHubCloudSync.loadSettings() {
+                    applyCloudSettings(cloudSettings)
+                }
 
-            Task { @MainActor in
-                await synchronizeWithCloudKit()
+                Task { @MainActor in
+                    await synchronizeWithCloudKit()
+                }
             }
         }
         .onChange(of: shiftDefinitions) {
@@ -226,24 +253,39 @@ struct ContentView: View {
         }
         .onChange(of: savedSchedules) {
             storedSchedulesJSON = Self.storedSchedulesJSON(from: savedSchedules)
-            if isCloudKitStateLoaded {
+            if isCloudKitStateLoaded && isCloudSyncEnabled {
                 ShiftHubCloudSync.saveSchedules(savedSchedules)
             }
         }
         .onChange(of: cloudSettingsSnapshot) {
-            if isCloudKitStateLoaded {
+            if isCloudKitStateLoaded && isCloudSyncEnabled {
                 syncCloudSettings()
             }
         }
+        .onChange(of: isCloudSyncEnabled) {
+            if isCloudSyncEnabled {
+                Task { @MainActor in
+                    await synchronizeWithCloudKit()
+                }
+            } else {
+                isCloudKitStateLoaded = false
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
+            guard isCloudSyncEnabled else { return }
             Task { @MainActor in
                 await synchronizeWithCloudKit()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .shiftHubSettingsDidChange)) { _ in
-            if isCloudKitStateLoaded {
+            if isCloudKitStateLoaded && isCloudSyncEnabled {
                 syncCloudSettings()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shiftHubScanStoredSchedule)) { notification in
+            guard let schedule = notification.object as? StoredSchedule else { return }
+            isSavedScheduleListPresented = false
+            analyzeSavedSchedule(schedule)
         }
         .sheet(isPresented: $isMissingShiftSelectionPresented) {
             MissingShiftSelectionView(titles: pendingMissingShiftTitles) { selectedTitles in
@@ -282,6 +324,12 @@ struct ContentView: View {
         ShiftHubLocalization.format(key, locale: locale, arguments: arguments)
     }
 
+    private var loadedScheduleClearedMessageKey: String? {
+        let key = "勤務表の読み込みを解除しました。"
+        let englishValue = ShiftHubLocalization.string(key, locale: Locale(identifier: "en"))
+        return statusMessage == key || statusMessage == englishValue ? key : nil
+    }
+
     private func localizedError(_ error: Error) -> String {
         ShiftHubLocalization.localizedErrorDescription(error, locale: locale)
     }
@@ -311,36 +359,85 @@ struct ContentView: View {
                         onComplete: completion.call
                     )
                 },
+                onRegisterShifts: { selections, title, completion in
+                    registerMultipleShifts(
+                        selections: selections,
+                        title: title,
+                        onComplete: completion.call
+                    )
+                },
                 onCalendarDestinationChange: { destination in
                     calendarDestination = destination.rawValue
                 },
                 onOpenShiftUpload: {
                     isShiftUploadPresented = true
                 },
+                onOpenPDFList: {
+                    isPDFListPresented = true
+                },
                 onOpenSettings: {
                     isSettingsPresented = true
                 },
                 isSynchronizing: isSynchronizing,
+                isCloudSyncEnabled: isCloudSyncEnabled,
                 onSynchronize: {
                     Task { @MainActor in
                         await synchronizeWithCloudKit()
                     }
                 }
             )
-            .id(calendarDestination)
         }
     }
 
     private var shiftUploadScreen: some View {
         VStack(spacing: 0) {
+#if os(iOS)
             header
+                .zIndex(1)
+#else
+            header
+#endif
 
             Divider()
 
             extractedRowPanel
         }
+        .onTapGesture {
+            if isRegistrationDestinationMenuPresented {
+                isRegistrationDestinationMenuPresented = false
+            }
+        }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .overlayPreferenceValue(CalendarOverlayAnchorKey.self) { anchors in
+            GeometryReader { geometry in
+                if isRegistrationDestinationMenuPresented, let anchor = anchors.destination {
+                    let destinationFrame = geometry[anchor]
+
+                    ZStack(alignment: .topLeading) {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                isRegistrationDestinationMenuPresented = false
+                            }
+
+                        CalendarDestinationPopup(
+                            selection: CalendarDestination(rawValue: calendarDestination),
+                            isPresented: $isRegistrationDestinationMenuPresented,
+                            onSelect: { destination in
+                                calendarDestination = destination.rawValue
+                            }
+                        )
+                        .position(
+                            x: destinationFrame.maxX - 90,
+                            y: destinationFrame.minY + 50 + 58
+                        )
+                        .zIndex(1)
+                    }
+                }
+            }
+            .allowsHitTesting(isRegistrationDestinationMenuPresented)
+        }
         .navigationTitle("PDFスキャン")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -349,21 +446,23 @@ struct ContentView: View {
                     .font(.headline)
             }
 
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    Task { @MainActor in
-                        await synchronizeWithCloudKit()
+            if isCloudSyncEnabled {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        Task { @MainActor in
+                            await synchronizeWithCloudKit()
+                        }
+                    } label: {
+                        if isSynchronizing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
+                        }
                     }
-                } label: {
-                    if isSynchronizing {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
-                    }
+                    .accessibilityLabel("今すぐ同期")
+                    .disabled(isSynchronizing)
                 }
-                .accessibilityLabel("今すぐ同期")
-                .disabled(isSynchronizing)
             }
 
             ToolbarItem(placement: .topBarTrailing) {
@@ -383,8 +482,10 @@ struct ContentView: View {
 #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                synchronizeButton
+            if isCloudSyncEnabled {
+                ToolbarItem(placement: .primaryAction) {
+                    synchronizeButton
+                }
             }
 
             ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -424,7 +525,7 @@ struct ContentView: View {
                 registerSelectedCalendar(includeRest: true)
             }
 
-            Button("勤務だけ登録") {
+            Button("イベントだけ登録") {
                 registerSelectedCalendar(includeRest: false)
             }
 
@@ -494,7 +595,8 @@ struct ContentView: View {
             }
 
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .zIndex(1)
     }
 
     private var scheduleSelectionControls: some View {
@@ -520,8 +622,14 @@ struct ContentView: View {
                     removeScheduleButton
                 }
             } else if !statusMessage.isEmpty {
-                Text(LocalizedStringKey(statusMessage))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Group {
+                    if let key = loadedScheduleClearedMessageKey {
+                        Text(LocalizedStringKey(key))
+                    } else {
+                        Text(verbatim: statusMessage)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .font(.callout)
@@ -559,6 +667,21 @@ struct ContentView: View {
     }
 
     private var registrationDestinationMenu: some View {
+#if os(iOS)
+        CalendarDestinationSelector(
+            selection: CalendarDestination(rawValue: calendarDestination),
+            showsCalendarIcon: false,
+            isPresented: $isRegistrationDestinationMenuPresented,
+            rendersOverlay: false,
+            onOpen: {},
+            onSelect: { destination in
+                calendarDestination = destination.rawValue
+            }
+        )
+        .anchorPreference(key: CalendarOverlayAnchorKey.self, value: .bounds) {
+            CalendarOverlayAnchors(destination: $0)
+        }
+#else
         Menu {
             ForEach(CalendarDestination.allCases) { destination in
                 Button {
@@ -575,6 +698,8 @@ struct ContentView: View {
             }
         }
         .buttonStyle(ToolbarSelectorButtonStyleD())
+        .accessibilityLabel("カレンダーを変更")
+#endif
     }
 
     private var registrationActionButton: some View {
@@ -619,7 +744,7 @@ struct ContentView: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(isProcessing || isRegisteringEvents || isSynchronizing)
+        .disabled(isProcessing || isRegisteringEvents || isSynchronizing || !isCloudSyncEnabled)
         .help("今すぐ同期")
     }
 
@@ -653,7 +778,10 @@ struct ContentView: View {
         Button {
             isSavedScheduleListPresented = true
         } label: {
-            Label("保存した勤務表", systemImage: "folder")
+            Label(
+                ShiftHubLocalization.string("PDF一覧", locale: Locale(identifier: appLanguage)),
+                systemImage: "folder"
+            )
         }
 #if os(iOS)
         .buttonStyle(ToolbarNavigationButtonStyleD(fillsAvailableWidth: true))
@@ -691,6 +819,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        .zIndex(1)
     }
 #endif
 
@@ -730,9 +859,15 @@ struct ContentView: View {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if selectedFileName.isEmpty {
                             ContentUnavailableView(
-                                "勤務表を選択",
-                                systemImage: "doc.viewfinder",
-                                description: Text("文字データを持つPDFの勤務表を選択")
+                                label: {
+                                    Label(
+                                        localizedMessage("勤務表を選択"),
+                                        systemImage: "doc.viewfinder"
+                                    )
+                                },
+                                description: {
+                                    Text(verbatim: localizedMessage("文字データを持つPDFの勤務表を選択"))
+                                }
                             )
                             .frame(maxWidth: .infinity, minHeight: 120)
                         } else if isProcessing {
@@ -773,19 +908,17 @@ struct ContentView: View {
         .padding(24)
 #endif
 #if os(iOS)
-        .sheet(item: $selectedExtractedDayAction) { action in
-            extractedDayActionsPopover(for: action.day)
-                .presentationDetents([.height(280)])
-                .presentationDragIndicator(.visible)
-                .onDisappear {
-                    selectedExtractedDayAction = nil
-                }
+        .sheet(item: $selectedExtractedDirectDayAction) { action in
+            if let cell = extractedCells.first(where: { Int($0.dateText) == action.day }) {
+                extractedShiftActionsPopover(for: cell, day: action.day)
+                    .presentationDetents([.height(extractedShiftActionSheetHeight)])
+                    .presentationDragIndicator(.visible)
+                    .onDisappear {
+                        selectedExtractedDirectDayAction = nil
+                    }
+            }
         }
 #endif
-        .onChange(of: selectedExtractedDayAction) { _, action in
-            guard action == nil else { return }
-            handleExtractedDayActionDismissal()
-        }
     }
 
     private var timelineShiftView: some View {
@@ -920,7 +1053,10 @@ struct ContentView: View {
         ) {
             extractedDayActionsPopover(for: day ?? 0)
                 .onDisappear {
-                    selectedExtractedDayAction = nil
+                    // 先に閉じたポップオーバーが、新しい日付の選択を解除しないようにする。
+                    if selectedExtractedDayAction?.day == day {
+                        selectedExtractedDayAction = nil
+                    }
                 }
         }
 #endif
@@ -982,7 +1118,10 @@ struct ContentView: View {
         ) {
             extractedDayActionsPopover(for: day ?? 0)
                 .onDisappear {
-                    selectedExtractedDayAction = nil
+                    // 先に閉じたポップオーバーが、新しい日付の選択を解除しないようにする。
+                    if selectedExtractedDayAction?.day == day {
+                        selectedExtractedDayAction = nil
+                    }
                 }
         }
 #endif
@@ -994,66 +1133,279 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(dayActionHeader(for: day))
                 .font(.headline)
-                .padding(.bottom, 10)
+                .foregroundStyle(.primary)
+                .padding(.bottom, 14)
 
             Divider()
+                .padding(.bottom, 6)
 
-            if extractedCells.contains(where: { Int($0.dateText) == day }) {
-                TextField("勤務名", text: $editedExtractedShiftText)
+            if let cell = extractedCells.first(where: { Int($0.dateText) == day }) {
+#if os(iOS)
+                List {
+                    Button {
+                        isExtractedShiftActionPresented = true
+                    } label: {
+                        HStack(spacing: 0) {
+                            extractedShiftListRow(for: cell)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .popover(isPresented: $isExtractedShiftActionPresented) {
+                        extractedShiftActionMenu(for: cell, day: day)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .presentationCompactAdaptation(.popover)
+                    }
+                    .listRowInsets(EdgeInsets())
+                }
+                .listStyle(.plain)
+                .frame(minHeight: 72, maxHeight: 100)
+#else
+                TextField("イベント名", text: $editedExtractedShiftText)
                     .textFieldStyle(.roundedBorder)
                     .padding(.top, 12)
                     .padding(.bottom, 8)
+
+                VStack(spacing: 8) {
+                    Button {
+                        presentExtractedShiftSelection(for: day)
+                    } label: {
+                        Label("イベントを選択", systemImage: "list.bullet")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Button {
+                        applyEditedExtractedShift(for: day)
+                    } label: {
+                        Label("変更を適用", systemImage: "checkmark.circle")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .disabled(editedExtractedShiftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button(role: .destructive) {
+                        deleteExtractedShift(for: day)
+                    } label: {
+                        Label("削除", systemImage: "trash")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .buttonStyle(.plain)
+#endif
             }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
+#if os(iOS)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+#else
+        .frame(width: 250, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+#endif
+    }
+
+#if os(iOS)
+    private func extractedShiftListRow(for cell: ExtractedShiftCell) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(cell.valueText.isEmpty ? " " : cell.valueText)
+                .font(.body.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+
+            if let detail = extractedShiftDetail(for: cell) {
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func extractedShiftActionsPopover(
+        for cell: ExtractedShiftCell,
+        day: Int
+    ) -> some View {
+        let shiftName = cell.valueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasShift = !shiftName.isEmpty
+        let buttonHeight: CGFloat = 42
+        let buttonSpacing: CGFloat = 8
+        let dividerPadding: CGFloat = hasShift ? 12 : 10
+        let fieldBottomPadding: CGFloat = 8
+        let contentTopPadding: CGFloat = 20
+
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(dayActionHeader(for: day))
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            if hasShift {
+                Text(shiftName)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .padding(.top, 8)
+
+                if let detail = extractedShiftDetail(for: cell) {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                }
+            }
+
+            Divider()
+                .padding(.top, dividerPadding)
+
+            if hasShift {
+                TextField("イベント名", text: $editedExtractedShiftText)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.bottom, fieldBottomPadding)
+            }
+
+            VStack(spacing: buttonSpacing) {
+                Button {
+                    isExtractedShiftActionPresented = false
+                    selectedExtractedDirectDayAction = nil
+                    presentExtractedShiftSelection(for: day)
+                } label: {
+                    Label("イベントを選択", systemImage: "list.bullet")
+                        .frame(maxWidth: .infinity, minHeight: buttonHeight, maxHeight: buttonHeight, alignment: .leading)
+                }
+
+                Button {
+                    isExtractedShiftActionPresented = false
+                    selectedExtractedDirectDayAction = nil
+                    applyEditedExtractedShift(for: day)
+                } label: {
+                    Label("変更を適用", systemImage: "checkmark.circle")
+                        .frame(maxWidth: .infinity, minHeight: buttonHeight, maxHeight: buttonHeight, alignment: .leading)
+                }
+                .disabled(editedExtractedShiftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button(role: .destructive) {
+                    isExtractedShiftActionPresented = false
+                    selectedExtractedDirectDayAction = nil
+                    deleteExtractedShift(for: day)
+                } label: {
+                    Label("削除", systemImage: "trash")
+                        .frame(maxWidth: .infinity, minHeight: buttonHeight, maxHeight: buttonHeight, alignment: .leading)
+                }
+                .disabled(!hasShift)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .padding(.top, 12)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, contentTopPadding)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private let extractedShiftActionSheetHeight: CGFloat = 360
+
+    private func extractedShiftActionMenu(for cell: ExtractedShiftCell, day: Int) -> some View {
+        let shiftName = cell.valueText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(dayActionHeader(for: day))
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            Text(shiftName)
+                .font(.body.weight(.medium))
+                .foregroundStyle(.primary)
+                .padding(.top, 10)
+
+            if let detail = extractedShiftDetail(for: cell) {
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
+
+            Divider()
+                .padding(.vertical, 12)
+
+            TextField("イベント名", text: $editedExtractedShiftText)
+                .textFieldStyle(.roundedBorder)
+                .padding(.bottom, 10)
 
             VStack(spacing: 8) {
                 Button {
+                    isExtractedShiftActionPresented = false
                     presentExtractedShiftSelection(for: day)
                 } label: {
-                    Label("勤務を選択", systemImage: "list.bullet")
+                    Label("イベントを選択", systemImage: "list.bullet")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 Button {
+                    isExtractedShiftActionPresented = false
                     applyEditedExtractedShift(for: day)
                 } label: {
                     Label("変更を適用", systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .disabled(editedExtractedShiftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button(role: .destructive) {
+                    isExtractedShiftActionPresented = false
+                    deleteExtractedShift(for: day)
+                } label: {
+                    Label("削除", systemImage: "trash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-#if os(iOS)
             .buttonStyle(.bordered)
             .controlSize(.large)
-#else
-            .buttonStyle(.plain)
-#endif
         }
-        .padding(14)
-#if os(iOS)
-        .frame(maxWidth: .infinity, alignment: .leading)
-#else
-        .frame(width: 250, alignment: .leading)
-#endif
+        .padding(16)
+        .frame(minWidth: 280, alignment: .leading)
     }
+
+    private func extractedShiftDetail(for cell: ExtractedShiftCell) -> String? {
+        let normalizedTitle = cell.valueText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if normalizedShiftTitle(normalizedTitle) == "休" {
+            return localizedMessage("終日")
+        }
+
+        return shiftDefinitions.first(where: { $0.title == normalizedTitle })?.timeRangeText
+    }
+#endif
 
     private func presentExtractedDayActions(for cell: ExtractedShiftCell, day: Int) {
-        guard !isExtractedDayActionDismissalBlocked else { return }
+#if os(iOS)
+        guard selectedExtractedDayAction == nil,
+              selectedExtractedDirectDayAction == nil else { return }
+#endif
+        isRegistrationDestinationMenuPresented = false
         editedExtractedShiftText = cell.valueText
-        selectedExtractedDayAction = ExtractedDayAction(day: day)
-    }
-
-    private func handleExtractedDayActionDismissal() {
-        selectedExtractedDayAction = nil
-        isExtractedDayActionDismissalBlocked = true
-
+        let action = ExtractedDayAction(day: day)
+#if os(iOS)
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(600))
-            isExtractedDayActionDismissalBlocked = false
+            await Task.yield()
+            selectedExtractedDirectDayAction = action
         }
+#else
+        Task { @MainActor in
+            await Task.yield()
+            selectedExtractedDayAction = action
+        }
+#endif
     }
 
     private func presentExtractedShiftSelection(for day: Int) {
         selectedExtractedDayAction = nil
+#if os(iOS)
+        isExtractedShiftActionPresented = false
+        selectedExtractedDirectDayAction = nil
+#endif
         pendingExtractedDayForEdit = day
         Task { @MainActor in
             await Task.yield()
@@ -1077,10 +1429,34 @@ struct ContentView: View {
         )
         editedExtractedShiftText = title
         selectedExtractedDayAction = nil
+#if os(iOS)
+        isExtractedShiftActionPresented = false
+        selectedExtractedDirectDayAction = nil
+#endif
         statusMessage = localizedMessage(
-            "%@日の勤務名を変更しました。カレンダーへ登録すると反映されます。",
+            "%@日のイベント名を変更しました。カレンダーへ登録すると反映されます。",
             arguments: String(day)
         )
+    }
+
+    private func deleteExtractedShift(for day: Int) {
+        guard let index = extractedCells.firstIndex(where: { Int($0.dateText) == day }) else {
+            return
+        }
+
+        let cell = extractedCells[index]
+        extractedCells[index] = ExtractedShiftCell(
+            dateText: cell.dateText,
+            valueText: "",
+            pageIndex: cell.pageIndex,
+            boundingBox: cell.boundingBox
+        )
+        editedExtractedShiftText = ""
+        selectedExtractedDayAction = nil
+#if os(iOS)
+        selectedExtractedDirectDayAction = nil
+#endif
+        statusMessage = localizedMessage("イベントを削除しました。")
     }
 
     private func completeExtractedShiftSelection(_ title: String) {
@@ -1099,8 +1475,11 @@ struct ContentView: View {
         editedExtractedShiftText = title
         pendingExtractedDayForEdit = nil
         isExtractedShiftSelectionPresented = false
+#if os(iOS)
+        isExtractedShiftActionPresented = false
+#endif
         statusMessage = localizedMessage(
-            "%@日の勤務を変更しました。カレンダーへ登録すると反映されます。",
+            "%@日のイベントを変更しました。カレンダーへ登録すると反映されます。",
             arguments: String(day)
         )
     }
@@ -1138,6 +1517,9 @@ struct ContentView: View {
         ignoredMissingShiftTitles = []
         isMissingShiftSelectionPresented = false
         selectedExtractedDayAction = nil
+#if os(iOS)
+        isExtractedShiftActionPresented = false
+#endif
         isExtractedShiftSelectionPresented = false
         pendingExtractedDayForEdit = nil
         editedExtractedShiftText = ""
@@ -1328,7 +1710,7 @@ struct ContentView: View {
             let skippedMessage = result.skippedTitles.isEmpty
                 ? ""
                 : " " + localizedMessage(
-                    "未登録の勤務はスキップしました: %@",
+                    "未登録のイベントはスキップしました: %@",
                     arguments: result.skippedTitles.joined(separator: ", ")
                 )
             statusMessage = localizedMessage(
@@ -1393,7 +1775,7 @@ struct ContentView: View {
                 let skippedMessage = result.skippedTitles.isEmpty
                     ? ""
                     : " " + localizedMessage(
-                        "未登録の勤務はスキップしました: %@",
+                        "未登録のイベントはスキップしました: %@",
                         arguments: result.skippedTitles.joined(separator: ", ")
                     )
                 statusMessage = localizedMessage(
@@ -1415,11 +1797,7 @@ struct ContentView: View {
         includeRest: Bool,
         onComplete: (() -> Void)? = nil
     ) {
-        guard let clientID = UserDefaults.standard.string(forKey: "googleCalendarClientID"),
-              !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let clientSecret = KeychainStore.string(for: "google-calendar-client-secret"),
-              !clientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              GoogleTokenStore.load() != nil else {
+        guard GoogleTokenStore.load() != nil else {
             statusMessage = localizedMessage("Google設定でログインとカレンダー選択を完了してください。")
             return
         }
@@ -1445,10 +1823,7 @@ struct ContentView: View {
 
         Task { @MainActor in
             do {
-                let writer = GoogleCalendarEventWriter(
-                    clientID: clientID,
-                    clientSecret: clientSecret
-                )
+                let writer = GoogleCalendarEventWriter(clientID: GoogleOAuthConfiguration.clientID)
                 let result = try await writer.register(
                     cells: cells,
                     yearMonth: yearMonth,
@@ -1461,7 +1836,7 @@ struct ContentView: View {
                 let skippedMessage = result.skippedTitles.isEmpty
                     ? ""
                     : " " + localizedMessage(
-                        "未登録の勤務はスキップしました: %@",
+                        "未登録のイベントはスキップしました: %@",
                         arguments: result.skippedTitles.joined(separator: ", ")
                     )
                 statusMessage = localizedMessage(
@@ -1521,6 +1896,75 @@ struct ContentView: View {
         }
     }
 
+    private func registerMultipleShifts(
+        selections: [CalendarDaySelection],
+        title: String,
+        onComplete: (() -> Void)? = nil
+    ) {
+        let groupedSelections = Dictionary(grouping: selections) {
+            "\($0.year)-\($0.month)"
+        }
+        let groups = groupedSelections.values.sorted {
+            guard let lhs = $0.first, let rhs = $1.first else { return false }
+            if lhs.year != rhs.year { return lhs.year < rhs.year }
+            return lhs.month < rhs.month
+        }
+
+        guard !groups.isEmpty else { return }
+
+        func registerGroup(at index: Int) {
+            guard index < groups.count else {
+                onComplete?()
+                return
+            }
+
+            guard let first = groups[index].first else {
+                registerGroup(at: index + 1)
+                return
+            }
+
+            let yearMonth = first.yearMonth
+            let cells = groups[index].sorted { $0.day < $1.day }.map { selection in
+                ExtractedShiftCell(
+                    dateText: String(selection.day),
+                    valueText: title,
+                    pageIndex: 0,
+                    boundingBox: .zero
+                )
+            }
+            let includeRest = normalizedShiftTitle(title) == "休"
+            let next = RegistrationCompletion {
+                registerGroup(at: index + 1)
+            }
+
+            switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
+            case .apple:
+                registerAppleCalendarEvents(
+                    cells: cells,
+                    yearMonth: yearMonth,
+                    includeRest: includeRest,
+                    onComplete: next.call
+                )
+            case .notion:
+                registerNotionPages(
+                    cells: cells,
+                    yearMonth: yearMonth,
+                    includeRest: includeRest,
+                    onComplete: next.call
+                )
+            case .google:
+                registerGoogleCalendarEvents(
+                    cells: cells,
+                    yearMonth: yearMonth,
+                    includeRest: includeRest,
+                    onComplete: next.call
+                )
+            }
+        }
+
+        registerGroup(at: 0)
+    }
+
     private func queueMissingShiftPrompts(for cells: [ExtractedShiftCell]) {
         guard !cells.isEmpty else { return }
 
@@ -1566,11 +2010,11 @@ struct ContentView: View {
 
         if !newTitles.isEmpty {
             statusMessage = localizedMessage(
-                "%@件の勤務を勤務一覧に保存しました。時間は勤務設定から変更できます。",
+                "%@件のイベントをイベント一覧に保存しました。時間はイベント設定から変更できます。",
                 arguments: String(newTitles.count)
             )
         } else if !titlesToIgnore.isEmpty {
-            statusMessage = localizedMessage("選択した勤務を勤務一覧に保存しませんでした。")
+            statusMessage = localizedMessage("選択したイベントをイベント一覧に保存しませんでした。")
         }
     }
 
@@ -1635,6 +2079,7 @@ struct ContentView: View {
     }
 
     private func syncCloudSettings() {
+        guard isCloudSyncEnabled else { return }
         ShiftHubCloudSync.saveSettings(cloudSettingsSnapshot)
     }
 
@@ -1646,7 +2091,7 @@ struct ContentView: View {
             calendarDestination: calendarDestination,
             appleCalendarIdentifier: appleCalendarIdentifier,
             appleRestEventTitle: appleRestEventTitle,
-            googleCalendarClientID: googleCalendarClientID,
+            googleCalendarClientID: GoogleOAuthConfiguration.clientID,
             googleCalendarID: googleCalendarID,
             googleRestEventTitle: googleRestEventTitle,
             notionDataSourceID: notionDataSourceID,
@@ -1664,9 +2109,9 @@ struct ContentView: View {
         shiftDefinitionsJSON = settings.shiftDefinitionsJSON
         shiftDefinitions = Self.loadShiftDefinitions(from: settings.shiftDefinitionsJSON)
         calendarDestination = settings.calendarDestination
-        appleCalendarIdentifier = settings.appleCalendarIdentifier
+        // EventKit calendar identifiers are local to the device and must not be
+        // restored from another Mac or iPhone through iCloud.
         appleRestEventTitle = settings.appleRestEventTitle
-        googleCalendarClientID = settings.googleCalendarClientID
         googleCalendarID = settings.googleCalendarID
         googleRestEventTitle = settings.googleRestEventTitle
         notionDataSourceID = settings.notionDataSourceID
@@ -1678,7 +2123,7 @@ struct ContentView: View {
     }
 
     private func synchronizeWithCloudKit() async {
-        guard !isSynchronizing else { return }
+        guard isCloudSyncEnabled, !isSynchronizing else { return }
         isSynchronizing = true
         defer { isSynchronizing = false }
 
@@ -1764,7 +2209,7 @@ struct ContentView: View {
     }
 }
 
-struct StoredSchedule: Codable, Identifiable, Equatable {
+struct StoredSchedule: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let fileName: String
     let storedFileName: String
@@ -1780,6 +2225,16 @@ struct StoredScheduleImportResult {
 
 enum StoredScheduleStore {
     private static let directoryName = "SavedSchedules"
+
+    static func loadSchedules() -> [StoredSchedule] {
+        guard let json = UserDefaults.standard.string(forKey: "storedSchedulesJSON"),
+              let data = json.data(using: .utf8),
+              let schedules = try? JSONDecoder().decode([StoredSchedule].self, from: data) else {
+            return []
+        }
+
+        return schedules.sorted { $0.importedAt > $1.importedAt }
+    }
 
     static func importFile(from sourceURL: URL, existing: [StoredSchedule]) throws -> StoredScheduleImportResult {
         let didStartAccessing = sourceURL.startAccessingSecurityScopedResource()
@@ -1859,15 +2314,25 @@ private struct SavedScheduleListView: View {
     let onDelete: (StoredSchedule) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
+#if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+#else
+    @State private var previewSchedule: StoredSchedule?
+#endif
+
+    private var displayLocale: Locale {
+        Locale(identifier: appLanguage)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("保存した勤務表")
+                    Text(ShiftHubLocalization.string("PDF一覧", locale: displayLocale))
                         .font(.title2.bold())
 
-                    Text("保存した勤務表を選択して解析します。")
+                    Text(ShiftHubLocalization.string("保存した勤務表を選択して解析します。", locale: displayLocale))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -1879,7 +2344,7 @@ private struct SavedScheduleListView: View {
                         .font(.headline.monospacedDigit())
                         .foregroundStyle(.secondary)
 
-                    Button("完了") {
+                    Button(ShiftHubLocalization.string("完了", locale: displayLocale)) {
                         dismiss()
                     }
                     .buttonStyle(.borderedProminent)
@@ -1891,38 +2356,56 @@ private struct SavedScheduleListView: View {
 
             if schedules.isEmpty {
                 ContentUnavailableView(
-                    "保存した勤務表がありません",
+                    ShiftHubLocalization.string("保存した勤務表がありません", locale: displayLocale),
                     systemImage: "folder",
-                    description: Text("勤務表を選択すると、ここに保存されます。")
+                    description: Text(
+                        ShiftHubLocalization.string("勤務表を選択すると、ここに保存されます。", locale: displayLocale)
+                    )
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
                     ForEach(schedules) { schedule in
-                        Button {
-                            onSelect(schedule)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "doc.text.fill")
-                                    .font(.title3)
-                                    .foregroundStyle(Color.accentColor)
-                                    .frame(width: 38, height: 38)
-                                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        HStack(spacing: 8) {
+                            Button {
+                                onSelect(schedule)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "doc.text.fill")
+                                        .font(.title3)
+                                        .foregroundStyle(Color.accentColor)
+                                        .frame(width: 38, height: 38)
+                                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(schedule.fileName)
-                                        .font(.body.weight(.semibold))
-                                        .lineLimit(1)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(schedule.fileName)
+                                            .font(.body.weight(.semibold))
+                                            .lineLimit(1)
 
-                                    Text(schedule.importedAt, style: .date)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        Text(schedule.importedAt, style: .date)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer(minLength: 4)
                                 }
-
-                                Spacer(minLength: 4)
                             }
+                            .buttonStyle(SavedScheduleRowButtonStyle())
+
+                            Button {
+#if os(macOS)
+                                openWindow(id: "pdf-preview", value: schedule)
+#else
+                                previewSchedule = schedule
+#endif
+                            } label: {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .frame(width: 34, height: 34)
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("保存したPDFを表示")
                         }
-                        .buttonStyle(SavedScheduleRowButtonStyle())
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(role: .destructive) {
                                 onDelete(schedule)
@@ -1940,12 +2423,657 @@ private struct SavedScheduleListView: View {
             }
         }
 #if os(iOS)
+        .sheet(item: $previewSchedule) { schedule in
+            SavedSchedulePreviewView(
+                schedule: schedule,
+                onSelect: { selectedSchedule in
+                    previewSchedule = nil
+                    onSelect(selectedSchedule)
+                }
+            )
+        }
+#endif
+#if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 #else
         .frame(width: 540, height: 440)
 #endif
     }
 }
+
+private struct PDFListView: View {
+    let schedules: [StoredSchedule]
+    let onDelete: (StoredSchedule) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
+#if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+#else
+    @State private var previewSchedule: StoredSchedule?
+#endif
+
+    private var displayLocale: Locale {
+        Locale(identifier: appLanguage)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(ShiftHubLocalization.string("PDF一覧", locale: displayLocale))
+                        .font(.title2.bold())
+
+                    Text(ShiftHubLocalization.string("保存したPDFを表示または削除できます。", locale: displayLocale))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 10) {
+                    Text("\(schedules.count)")
+                        .font(.headline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+
+                    Button(ShiftHubLocalization.string("完了", locale: displayLocale)) {
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
+
+            if schedules.isEmpty {
+                ContentUnavailableView(
+                    ShiftHubLocalization.string("保存したPDFがありません", locale: displayLocale),
+                    systemImage: "folder",
+                    description: Text(
+                        ShiftHubLocalization.string("PDFを読み込むと、ここに保存されます。", locale: displayLocale)
+                    )
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(schedules) { schedule in
+                        HStack(spacing: 8) {
+                            Button {
+#if os(macOS)
+                                openWindow(id: "pdf-viewer", value: schedule)
+#else
+                                previewSchedule = schedule
+#endif
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "doc.text.fill")
+                                        .font(.title3)
+                                        .foregroundStyle(Color.accentColor)
+                                        .frame(width: 38, height: 38)
+                                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(schedule.fileName)
+                                            .font(.body.weight(.semibold))
+                                            .lineLimit(1)
+
+                                        Text(schedule.importedAt, style: .date)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer(minLength: 4)
+                                }
+                            }
+                            .buttonStyle(SavedScheduleRowButtonStyle())
+
+                            Button(role: .destructive) {
+                                onDelete(schedule)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .frame(width: 34, height: 34)
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel(ShiftHubLocalization.string("削除", locale: displayLocale))
+                        }
+                        .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                    }
+                }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+            }
+        }
+#if os(iOS)
+        .sheet(item: $previewSchedule) { schedule in
+            SavedSchedulePreviewView(
+                schedule: schedule,
+                onSelect: nil,
+                showsScanAction: false
+            )
+        }
+#endif
+#if os(iOS)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+#else
+        .frame(width: 540, height: 440)
+#endif
+    }
+}
+
+struct SavedSchedulePreviewView: View {
+    let onSelect: ((StoredSchedule) -> Void)?
+    let showsScanAction: Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
+#if os(macOS)
+    @StateObject private var primaryController = PDFPreviewController()
+    @StateObject private var secondaryController = PDFPreviewController()
+#else
+    @StateObject private var controller = PDFPreviewController()
+#endif
+    @State private var displayedSchedule: StoredSchedule
+    @State private var document: PDFDocument?
+#if os(macOS)
+    @State private var secondaryDocument: PDFDocument?
+    @State private var showingSecondaryDocument = false
+    @State private var hasVisibleDocument = false
+    @State private var loadingDocumentSlot: MacPDFDocumentSlot?
+#endif
+    @State private var loadError = false
+    @State private var availableSchedules: [StoredSchedule] = []
+    @State private var isLoadingDocument = false
+    @State private var loadingScheduleID: UUID?
+
+    init(
+        schedule: StoredSchedule,
+        onSelect: ((StoredSchedule) -> Void)?,
+        showsScanAction: Bool = true
+    ) {
+        self.onSelect = onSelect
+        self.showsScanAction = showsScanAction
+        _displayedSchedule = State(initialValue: schedule)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text.fill")
+                    .foregroundStyle(Color.accentColor)
+
+                Text(displayedSchedule.fileName)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Button {
+                    showPreviousSchedule()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                .help("前のPDF")
+                .accessibilityLabel("前のPDF")
+                .disabled(isLoadingDocument || !canShowPreviousSchedule)
+
+                Button {
+                    showNextSchedule()
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .buttonStyle(.borderless)
+                .help("次のPDF")
+                .accessibilityLabel("次のPDF")
+                .disabled(isLoadingDocument || !canShowNextSchedule)
+
+                Button {
+                    activePreviewController.zoomOut()
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .buttonStyle(.borderless)
+                .help("縮小")
+                .accessibilityLabel("縮小")
+
+                Button {
+                    activePreviewController.zoomIn()
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .buttonStyle(.borderless)
+                .help("拡大")
+                .accessibilityLabel("拡大")
+
+                Button {
+                    activePreviewController.fitToPage()
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .buttonStyle(.borderless)
+                .help("ページに合わせる")
+                .accessibilityLabel("ページに合わせる")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+
+            Divider()
+
+            if let document {
+#if os(macOS)
+                ZStack {
+                    macPDFDocumentView
+                        .opacity(hasVisibleDocument ? 1 : 0)
+
+                    if !hasVisibleDocument {
+                        ProgressView()
+                    }
+                }
+#else
+                PDFDocumentView(document: document, controller: controller)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+#endif
+            } else if loadError {
+                ContentUnavailableView(
+                    "PDFを表示できません",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("保存したPDFを開けませんでした。")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+#if os(macOS)
+            Divider()
+            previewActionBar
+#endif
+        }
+#if os(iOS)
+        .safeAreaInset(edge: .bottom) {
+            previewActionBar
+        }
+#endif
+#if os(iOS)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+#else
+        .frame(minWidth: 760, minHeight: 560)
+#endif
+        .onAppear {
+            availableSchedules = StoredScheduleStore.loadSchedules()
+            loadDisplayedSchedule()
+        }
+    }
+
+    private func loadDisplayedSchedule() {
+        loadSchedule(displayedSchedule)
+    }
+
+    private var activePreviewController: PDFPreviewController {
+#if os(macOS)
+        showingSecondaryDocument ? secondaryController : primaryController
+#else
+        controller
+#endif
+    }
+
+#if os(macOS)
+    private var macPDFDocumentView: some View {
+        ZStack {
+            if let document {
+                PDFDocumentView(
+                    document: document,
+                    controller: primaryController,
+                    onFirstRender: {
+                        finishRenderingDocument(in: .primary)
+                    }
+                )
+                .id(ObjectIdentifier(document))
+                .opacity(showingSecondaryDocument ? 0 : 1)
+            }
+
+            if let secondaryDocument {
+                PDFDocumentView(
+                    document: secondaryDocument,
+                    controller: secondaryController,
+                    onFirstRender: {
+                        finishRenderingDocument(in: .secondary)
+                    }
+                )
+                .id(ObjectIdentifier(secondaryDocument))
+                .opacity(showingSecondaryDocument ? 1 : 0)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func finishRenderingDocument(in slot: MacPDFDocumentSlot) {
+        guard loadingDocumentSlot == slot else { return }
+
+        showingSecondaryDocument = slot == .secondary
+        hasVisibleDocument = true
+        loadingDocumentSlot = nil
+        loadingScheduleID = nil
+        isLoadingDocument = false
+    }
+#endif
+
+    private func loadSchedule(_ schedule: StoredSchedule) {
+        guard !isLoadingDocument else { return }
+
+        let scheduleID = schedule.id
+        isLoadingDocument = true
+        loadingScheduleID = scheduleID
+        loadError = false
+
+        Task { @MainActor in
+            do {
+                let url = try StoredScheduleStore.fileURL(for: schedule)
+                guard FileManager.default.fileExists(atPath: url.path),
+                      let loadedDocument = PDFDocument(url: url),
+                      loadedDocument.pageCount > 0 else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+
+                guard loadingScheduleID == scheduleID else { return }
+#if os(macOS)
+                displayedSchedule = schedule
+
+                if document == nil {
+                    document = loadedDocument
+                    loadingDocumentSlot = .primary
+                } else if showingSecondaryDocument {
+                    document = loadedDocument
+                    loadingDocumentSlot = .primary
+                } else {
+                    secondaryDocument = loadedDocument
+                    loadingDocumentSlot = .secondary
+                }
+#else
+                document = loadedDocument
+                displayedSchedule = schedule
+#endif
+            } catch {
+                guard loadingScheduleID == scheduleID else { return }
+#if os(macOS)
+                if !hasVisibleDocument {
+                    loadError = true
+                }
+                loadingDocumentSlot = nil
+                loadingScheduleID = nil
+                isLoadingDocument = false
+#else
+                if document == nil {
+                    loadError = true
+                }
+#endif
+            }
+
+#if os(iOS)
+            loadingScheduleID = nil
+            isLoadingDocument = false
+#endif
+        }
+    }
+
+    private var displayedScheduleIndex: Int? {
+        availableSchedules.firstIndex { $0.id == displayedSchedule.id }
+    }
+
+    private var canShowPreviousSchedule: Bool {
+        guard let index = displayedScheduleIndex else { return false }
+        return index > 0
+    }
+
+    private var canShowNextSchedule: Bool {
+        guard let index = displayedScheduleIndex else { return false }
+        return index + 1 < availableSchedules.count
+    }
+
+    private func showPreviousSchedule() {
+        guard let index = displayedScheduleIndex, index > 0 else { return }
+        loadSchedule(availableSchedules[index - 1])
+    }
+
+    private func showNextSchedule() {
+        guard let index = displayedScheduleIndex,
+              index + 1 < availableSchedules.count else { return }
+        loadSchedule(availableSchedules[index + 1])
+    }
+
+    private var previewActionBar: some View {
+        HStack {
+            Button("閉じる") {
+                dismiss()
+            }
+            .buttonStyle(.bordered)
+
+            Spacer()
+
+#if os(macOS)
+            if showsScanAction {
+                Button(
+                    ShiftHubLocalization.string("このPDFをスキャン", locale: Locale(identifier: appLanguage))
+                ) {
+                    NotificationCenter.default.post(
+                        name: .shiftHubScanStoredSchedule,
+                        object: displayedSchedule
+                    )
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(document == nil || isLoadingDocument)
+            }
+#else
+            if showsScanAction, let onSelect {
+                Button(
+                    ShiftHubLocalization.string("このPDFをスキャン", locale: Locale(identifier: appLanguage))
+                ) {
+                    dismiss()
+                    onSelect(displayedSchedule)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(document == nil || isLoadingDocument)
+            }
+#endif
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.bar)
+    }
+}
+
+private final class PDFPreviewController: ObservableObject {
+    weak var pdfView: PDFView?
+
+    func zoomIn() {
+        guard let pdfView else { return }
+        pdfView.scaleFactor = min(pdfView.scaleFactor * 1.25, pdfView.maxScaleFactor)
+    }
+
+    func zoomOut() {
+        guard let pdfView else { return }
+        pdfView.scaleFactor = max(pdfView.scaleFactor / 1.25, pdfView.minScaleFactor)
+    }
+
+    func fitToPage() {
+        pdfView?.autoScales = true
+    }
+}
+
+#if os(macOS)
+private enum MacPDFDocumentSlot {
+    case primary
+    case secondary
+}
+#endif
+
+private struct PDFDocumentView: View {
+    let document: PDFDocument
+    let controller: PDFPreviewController
+    let onFirstRender: (() -> Void)?
+
+    init(
+        document: PDFDocument,
+        controller: PDFPreviewController,
+        onFirstRender: (() -> Void)? = nil
+    ) {
+        self.document = document
+        self.controller = controller
+        self.onFirstRender = onFirstRender
+    }
+
+    var body: some View {
+#if os(iOS)
+        PDFKitRepresentable(document: document, controller: controller)
+#else
+        PDFKitRepresentable(
+            document: document,
+            controller: controller,
+            onFirstRender: onFirstRender
+        )
+#endif
+    }
+}
+
+#if os(iOS)
+private final class IOSPDFPreviewView: PDFView {
+    private var shouldFitPageToWidth = true
+    private var pendingDocument: PDFDocument?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        applyInitialPageWidthFitIfNeeded()
+        applyPageCornerRadius()
+    }
+
+    func prepareForInitialWidthFit() {
+        shouldFitPageToWidth = true
+        setNeedsLayout()
+    }
+
+    func setDocumentWhenReady(_ document: PDFDocument) {
+        guard self.document !== document else { return }
+
+        pendingDocument = document
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.pendingDocument === document else { return }
+
+            pendingDocument = nil
+            prepareForInitialWidthFit()
+            self.document = document
+        }
+    }
+
+    private func applyInitialPageWidthFitIfNeeded() {
+        guard shouldFitPageToWidth,
+              bounds.width > 0,
+              let page = document?.page(at: 0) else { return }
+
+        let pageWidth = page.bounds(for: displayBox).width
+        guard pageWidth > 0 else { return }
+
+        // Mark the fit as complete before changing PDFView layout state to avoid reentrant layout.
+        shouldFitPageToWidth = false
+        autoScales = false
+        scaleFactor = min(max(bounds.width / pageWidth, minScaleFactor), maxScaleFactor)
+    }
+
+    private func applyPageCornerRadius() {
+        documentView?.layer.cornerRadius = 15
+        documentView?.layer.masksToBounds = true
+    }
+}
+
+private struct PDFKitRepresentable: UIViewRepresentable {
+    let document: PDFDocument
+    let controller: PDFPreviewController
+
+    func makeUIView(context: Context) -> IOSPDFPreviewView {
+        let pdfView = IOSPDFPreviewView()
+        configure(pdfView)
+        return pdfView
+    }
+
+    func updateUIView(_ pdfView: IOSPDFPreviewView, context: Context) {
+        pdfView.setDocumentWhenReady(document)
+        controller.pdfView = pdfView
+    }
+
+    private func configure(_ pdfView: IOSPDFPreviewView) {
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        pdfView.displaysPageBreaks = true
+        pdfView.pageBreakMargins = .zero
+        pdfView.minScaleFactor = 0.75
+        pdfView.maxScaleFactor = 5.0
+        pdfView.autoScales = false
+        pdfView.prepareForInitialWidthFit()
+        pdfView.document = document
+        controller.pdfView = pdfView
+    }
+}
+#else
+private final class MacPDFPreviewView: PDFView {
+    var onFirstRender: (() -> Void)?
+    private var didReportFirstRender = false
+
+    override func layout() {
+        super.layout()
+        applyPageCornerRadius()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        guard !didReportFirstRender, document?.pageCount ?? 0 > 0 else { return }
+        didReportFirstRender = true
+
+        DispatchQueue.main.async { [weak self] in
+            self?.onFirstRender?()
+        }
+    }
+
+    private func applyPageCornerRadius() {
+        documentView?.wantsLayer = true
+        documentView?.layer?.cornerRadius = 15
+        documentView?.layer?.masksToBounds = true
+    }
+}
+
+private struct PDFKitRepresentable: NSViewRepresentable {
+    let document: PDFDocument
+    let controller: PDFPreviewController
+    let onFirstRender: (() -> Void)?
+
+    func makeNSView(context: Context) -> MacPDFPreviewView {
+        let pdfView = MacPDFPreviewView()
+        pdfView.onFirstRender = onFirstRender
+        configure(pdfView)
+        return pdfView
+    }
+
+    func updateNSView(_ pdfView: MacPDFPreviewView, context: Context) {
+        pdfView.onFirstRender = onFirstRender
+        controller.pdfView = pdfView
+    }
+
+    private func configure(_ pdfView: PDFView) {
+        pdfView.document = document
+        pdfView.displayMode = .singlePage
+        pdfView.displayDirection = .vertical
+        pdfView.displaysPageBreaks = false
+        pdfView.minScaleFactor = 0.75
+        pdfView.maxScaleFactor = 5.0
+        pdfView.autoScales = true
+        controller.pdfView = pdfView
+    }
+}
+#endif
 
 private struct SavedScheduleRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -2012,7 +3140,7 @@ private struct SingleShiftRegistrationView: View {
                     Text("日付ごとに登録")
                         .font(.title.bold())
 
-                    Text("登録する日付と勤務を選択します。")
+                    Text("登録する日付とイベントを選択します。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -2056,7 +3184,7 @@ private struct SingleShiftRegistrationView: View {
                     }
                 }
 
-                Picker("勤務", selection: $selectedTitle) {
+                Picker("イベント", selection: $selectedTitle) {
                     Text("休（終日）")
                         .tag("休")
 
@@ -2136,7 +3264,29 @@ private struct CalendarEventRecord: Identifiable, Hashable {
     let title: String
     let detail: String
     let isAllDay: Bool
+    let startDate: Date?
     let calendarColor: CalendarDisplayColor?
+    let isReadOnly: Bool
+
+    init(
+        id: String,
+        day: Int,
+        title: String,
+        detail: String,
+        isAllDay: Bool,
+        startDate: Date? = nil,
+        calendarColor: CalendarDisplayColor?,
+        isReadOnly: Bool = false
+    ) {
+        self.id = id
+        self.day = day
+        self.title = title
+        self.detail = detail
+        self.isAllDay = isAllDay
+        self.startDate = startDate
+        self.calendarColor = calendarColor
+        self.isReadOnly = isReadOnly
+    }
 
     var isRestEvent: Bool {
         let normalizedTitle = title
@@ -2150,6 +3300,40 @@ private struct CalendarEventRecord: Identifiable, Hashable {
 
     var confirmationText: String {
         detail.isEmpty ? "\(day)日の「\(title)」" : "\(day)日の「\(title)」\n\(detail)"
+    }
+}
+
+private func calendarEventComesBefore(
+    _ lhs: CalendarEventRecord,
+    _ rhs: CalendarEventRecord
+) -> Bool {
+    if lhs.isReadOnly != rhs.isReadOnly {
+        return !lhs.isReadOnly
+    }
+
+    switch (lhs.startDate, rhs.startDate) {
+    case let (lhsDate?, rhsDate?):
+        if lhsDate != rhsDate {
+            return lhsDate < rhsDate
+        }
+    case (_?, nil):
+        return true
+    case (nil, _?):
+        return false
+    default:
+        break
+    }
+
+    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+}
+
+private struct CalendarDaySelection: Hashable {
+    let year: Int
+    let month: Int
+    let day: Int
+
+    var yearMonth: YearMonth {
+        YearMonth(year: year, month: month)
     }
 }
 
@@ -2174,10 +3358,10 @@ private struct ShiftSelectionView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("勤務を選択")
+                    Text("イベントを選択")
                         .font(.title2.bold())
 
-                    Text("登録する勤務を勤務設定から選択します。")
+                    Text("登録するイベントをイベント設定から選択します。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -2421,37 +3605,255 @@ private struct ToolbarIconButtonStyleD: ButtonStyle {
 
 private struct CalendarDayCardButtonStyle: ButtonStyle {
     let accent: Color
+    let isSelectionMode: Bool
 
-    init(accent: Color = .accentColor) {
+    init(accent: Color = .accentColor, isSelectionMode: Bool = false) {
         self.accent = accent
+        self.isSelectionMode = isSelectionMode
     }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.68 : 1)
+            .scaleEffect(isSelectionMode ? 1 : (configuration.isPressed ? 0.97 : 1))
+            .opacity(isSelectionMode ? 1 : (configuration.isPressed ? 0.68 : 1))
             .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(accent.opacity(configuration.isPressed ? 1 : 0), lineWidth: 2)
+                if !isSelectionMode {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(accent.opacity(configuration.isPressed ? 1 : 0), lineWidth: 2)
+                }
             }
-            .animation(.easeOut(duration: 0.5), value: configuration.isPressed)
+            .animation(isSelectionMode ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
+private struct CalendarYearMonthPopup: View {
+    @Binding var year: Int
+    @Binding var month: Int
+    let yearOptions: [Int]
+    let isEnglish: Bool
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            CalendarNumberOptionList(
+                title: isEnglish ? "Year" : "年",
+                options: yearOptions,
+                selection: $year
+            )
+
+            CalendarNumberOptionList(
+                title: isEnglish ? "Month" : "月",
+                options: Array(1...12),
+                selection: $month
+            )
+        }
+        .padding(12)
+        .frame(width: 220, height: 240)
+        .font(.body)
+        .foregroundStyle(.primary)
+        .background(
+            colorScheme == .dark ? Color.black : Color.white,
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.white.opacity(0.2), lineWidth: 1)
+        }
+        .shadow(radius: 10)
+    }
+}
+
+private struct CalendarOverlayAnchors {
+    var monthTitle: Anchor<CGRect>?
+    var destination: Anchor<CGRect>?
+
+    init(monthTitle: Anchor<CGRect>? = nil, destination: Anchor<CGRect>? = nil) {
+        self.monthTitle = monthTitle
+        self.destination = destination
+    }
+}
+
+private struct CalendarOverlayAnchorKey: PreferenceKey {
+    static var defaultValue = CalendarOverlayAnchors()
+
+    static func reduce(value: inout CalendarOverlayAnchors, nextValue: () -> CalendarOverlayAnchors) {
+        let next = nextValue()
+        value.monthTitle = value.monthTitle ?? next.monthTitle
+        value.destination = value.destination ?? next.destination
+    }
+}
+
+private struct CalendarNumberOptionList: View {
+    let title: String
+    let options: [Int]
+    @Binding var selection: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 0) {
+                        ForEach(options, id: \.self) { option in
+                            Button {
+                                selection = option
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Text(String(option))
+                                        .font(.body)
+                                        .lineLimit(1)
+
+                                    if selection == option {
+                                        Image(systemName: "checkmark")
+                                            .font(.caption2.weight(.semibold))
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 4)
+                            .id(option)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .onAppear {
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(selection, anchor: .center)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct CalendarDestinationPopup: View {
+    let selection: CalendarDestination?
+    @Binding var isPresented: Bool
+    let onSelect: (CalendarDestination) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(CalendarDestination.allCases) { destination in
+                Button {
+                    onSelect(destination)
+                    isPresented = false
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "calendar")
+                        Text(destination.title)
+                        Spacer(minLength: 12)
+                        if destination == selection {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+            }
+        }
+        .frame(width: 180, height: 116)
+        .foregroundStyle(.primary)
+        .background(
+            colorScheme == .dark ? Color.black : Color.white,
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.white.opacity(0.2), lineWidth: 1)
+        }
+        .shadow(radius: 10)
+    }
+}
+
+private struct CalendarDestinationSelector: View {
+    let selection: CalendarDestination?
+    let showsCalendarIcon: Bool
+    @Binding var isPresented: Bool
+    let rendersOverlay: Bool
+    let onOpen: () -> Void
+    let onSelect: (CalendarDestination) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button {
+            onOpen()
+            if isPresented {
+                isPresented = false
+            } else {
+                DispatchQueue.main.async {
+                    isPresented = true
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                if showsCalendarIcon {
+                    Image(systemName: "calendar")
+                }
+
+                Text(selection?.title ?? "カレンダー")
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+        }
+        .buttonStyle(ToolbarSelectorButtonStyleD())
+        .overlay(alignment: .topTrailing) {
+            if rendersOverlay && isPresented {
+                CalendarDestinationPopup(
+                    selection: selection,
+                    isPresented: $isPresented,
+                    onSelect: onSelect
+                )
+                .offset(y: 50)
+                .zIndex(100)
+            }
+        }
+        .zIndex(rendersOverlay && isPresented ? 100 : 0)
+        .accessibilityLabel("カレンダーを変更")
     }
 }
 
 private struct CalendarEventManagerView: View {
     let destination: CalendarDestination
+    let appleCalendarIdentifier: String
+    let googleCalendarID: String
+    let notionDataSourceID: String
+    let notionDateProperty: String
+    let notionTitleProperty: String
+    let notionTagProperty: String
+    let notionTagValue: String
     let appleCalendarName: String
     let googleCalendarName: String
     let notionDatabaseName: String
     let definitions: [ShiftDefinition]
     let onRegisterShift: (YearMonth, Int, String, RegistrationCompletion) -> Void
+    let onRegisterShifts: ([CalendarDaySelection], String, RegistrationCompletion) -> Void
     let onCalendarDestinationChange: (CalendarDestination) -> Void
     let onOpenShiftUpload: () -> Void
+    let onOpenPDFList: () -> Void
     let onOpenSettings: () -> Void
     let isSynchronizing: Bool
+    let isCloudSyncEnabled: Bool
     let onSynchronize: () -> Void
 
     @Environment(\.locale) private var locale
+    @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
+    @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: CalendarEventManagerModel
     @State private var selectedYear: Int
@@ -2460,6 +3862,14 @@ private struct CalendarEventManagerView: View {
     @State private var pendingShiftRegistration: PendingShiftRegistration?
     @State private var shiftTitleAfterDelete: String?
     @State private var selectedDayForActions: Int?
+    @State private var isDaySelectionMode = false
+    @State private var selectedCalendarDays: Set<CalendarDaySelection> = []
+#if os(iOS)
+    @State private var selectedEventForActions: CalendarEventRecord?
+    @State private var pendingInlineDeletion: CalendarEventRecord?
+#endif
+    @State private var isYearMonthPickerPresented = false
+    @State private var isCalendarDestinationMenuPresented = false
     @State private var monthPageID: Int?
     private let monthPageAnchor: YearMonth
     private static let monthPageRadius = 120
@@ -2479,33 +3889,48 @@ private struct CalendarEventManagerView: View {
         notionTagValue: String,
         definitions: [ShiftDefinition],
         onRegisterShift: @escaping (YearMonth, Int, String, RegistrationCompletion) -> Void,
+        onRegisterShifts: @escaping ([CalendarDaySelection], String, RegistrationCompletion) -> Void,
         onCalendarDestinationChange: @escaping (CalendarDestination) -> Void,
         onOpenShiftUpload: @escaping () -> Void,
+        onOpenPDFList: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         isSynchronizing: Bool,
+        isCloudSyncEnabled: Bool,
         onSynchronize: @escaping () -> Void
     ) {
         let initial = initialYearMonth ?? .current
         self.destination = destination
+        self.appleCalendarIdentifier = appleCalendarIdentifier
+        self.googleCalendarID = googleCalendarID
+        self.notionDataSourceID = notionDataSourceID
+        self.notionDateProperty = notionDateProperty
+        self.notionTitleProperty = notionTitleProperty
+        self.notionTagProperty = notionTagProperty
+        self.notionTagValue = notionTagValue
         self.appleCalendarName = appleCalendarName
         self.googleCalendarName = googleCalendarName
         self.notionDatabaseName = notionDatabaseName
         self.definitions = definitions
         self.onRegisterShift = onRegisterShift
+        self.onRegisterShifts = onRegisterShifts
         self.onCalendarDestinationChange = onCalendarDestinationChange
         self.onOpenShiftUpload = onOpenShiftUpload
+        self.onOpenPDFList = onOpenPDFList
         self.onOpenSettings = onOpenSettings
         self.isSynchronizing = isSynchronizing
+        self.isCloudSyncEnabled = isCloudSyncEnabled
         self.onSynchronize = onSynchronize
         self.monthPageAnchor = initial
         _selectedYear = State(initialValue: initial.year)
         _selectedMonth = State(initialValue: initial.month)
         _monthPageID = State(initialValue: Self.monthPageRadius)
+        let showJapaneseHolidays = UserDefaults.standard.bool(forKey: "googleShowJapaneseHolidays")
         _model = StateObject(wrappedValue: CalendarEventManagerModel(
             destination: destination,
             yearMonth: initial,
             appleCalendarIdentifier: appleCalendarIdentifier,
             googleCalendarID: googleCalendarID,
+            googleShowJapaneseHolidays: showJapaneseHolidays,
             notionDataSourceID: notionDataSourceID,
             notionDateProperty: notionDateProperty,
             notionTitleProperty: notionTitleProperty,
@@ -2516,6 +3941,20 @@ private struct CalendarEventManagerView: View {
 
     private var selectedYearMonth: YearMonth {
         YearMonth(year: selectedYear, month: selectedMonth)
+    }
+
+    private var calendarEventManagerConfigurationKey: String {
+        [
+            destination.rawValue,
+            appleCalendarIdentifier,
+            googleCalendarID,
+            String(googleShowJapaneseHolidays),
+            notionDataSourceID,
+            notionDateProperty,
+            notionTitleProperty,
+            notionTagProperty,
+            notionTagValue
+        ].joined(separator: "|")
     }
 
     private var managerAccentColor: Color {
@@ -2531,6 +3970,8 @@ private struct CalendarEventManagerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
 #if os(iOS)
+            iOSHomeHeader
+
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 12) {
                     eventManagerTitleView
@@ -2542,63 +3983,15 @@ private struct CalendarEventManagerView: View {
 
                     calendarDestinationMenu
                 }
+                .zIndex(1)
 
                 HStack(spacing: 8) {
-                    Text(eventMonthTitle)
+                    monthTitleSelector
                         .font(.title3.bold())
-                        .monospacedDigit()
 
                     Spacer(minLength: 4)
 
-#if os(iOS)
-                    Menu {
-                        ForEach(yearOptions, id: \.self) { year in
-                            Button(ShiftHubLocalization.yearText(year, locale: locale)) {
-                                selectedYear = year
-                            }
-                        }
-                    } label: {
-                        Text(ShiftHubLocalization.yearText(selectedYear, locale: locale))
-                            .font(.footnote)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    .frame(height: 34)
-                    .tint(.primary)
-#else
-                    Picker("年", selection: $selectedYear) {
-                        ForEach(yearOptions, id: \.self) { year in
-                            Text(ShiftHubLocalization.yearText(year, locale: locale)).tag(year)
-                        }
-                    }
-                    .labelsHidden()
-                    .tint(.primary)
-#endif
-
-#if os(iOS)
-                    Menu {
-                        ForEach(1...12, id: \.self) { month in
-                            Button(ShiftHubLocalization.monthText(month, locale: locale)) {
-                                selectedMonth = month
-                            }
-                        }
-                    } label: {
-                        Text(ShiftHubLocalization.monthText(selectedMonth, locale: locale))
-                            .font(.footnote)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    .frame(height: 34)
-                    .tint(.primary)
-#else
-                    Picker("月", selection: $selectedMonth) {
-                        ForEach(1...12, id: \.self) { month in
-                            Text(ShiftHubLocalization.monthText(month, locale: locale)).tag(month)
-                        }
-                    }
-                    .labelsHidden()
-                    .tint(.primary)
-#endif
+                    monthNavigationControls
 
                     Button {
                         model.load()
@@ -2621,6 +4014,7 @@ private struct CalendarEventManagerView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
+            .zIndex(1)
 #else
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .center, spacing: 12) {
@@ -2648,9 +4042,8 @@ private struct CalendarEventManagerView: View {
                 }
 
                 HStack(alignment: .center, spacing: 12) {
-                    Text(eventMonthTitle)
+                    monthTitleSelector
                         .font(.system(size: 26, weight: .bold, design: .rounded))
-                        .monospacedDigit()
 
                     if model.isLoading {
                         HStack(spacing: 6) {
@@ -2665,27 +4058,19 @@ private struct CalendarEventManagerView: View {
 
                     Spacer()
 
-                    Picker("年", selection: $selectedYear) {
-                        ForEach(yearOptions, id: \.self) { year in
-                            Text(ShiftHubLocalization.yearText(year, locale: locale)).tag(year)
-                        }
-                    }
-                    .labelsHidden()
-                    .tint(.primary)
-
-                    Picker("月", selection: $selectedMonth) {
-                        ForEach(1...12, id: \.self) { month in
-                            Text(ShiftHubLocalization.monthText(month, locale: locale)).tag(month)
-                        }
-                    }
-                    .labelsHidden()
-                    .tint(.primary)
+                    monthNavigationControls
 
                 }
                 .padding(.vertical)
             }
             .padding(24)
+            .zIndex(isYearMonthPickerPresented ? 100 : 0)
 #endif
+
+            if isDaySelectionMode {
+                daySelectionToolbar
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
             VStack(spacing: 0) {
                 eventWeekdayHeader(columns: eventCalendarColumns)
@@ -2699,6 +4084,20 @@ private struct CalendarEventManagerView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
+#if os(iOS)
+            ZStack(alignment: .topLeading) {
+                if !model.message.isEmpty && !model.isLoading {
+                    Text(LocalizedStringKey(model.message))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(height: 32, alignment: .topLeading)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+#else
             if !model.message.isEmpty && !model.isLoading {
                 Text(LocalizedStringKey(model.message))
                     .font(.callout)
@@ -2706,6 +4105,7 @@ private struct CalendarEventManagerView: View {
                     .padding(.horizontal, 24)
                     .padding(.bottom, 12)
             }
+#endif
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -2720,25 +4120,115 @@ private struct CalendarEventManagerView: View {
             alignment: .topLeading
         )
 #endif
-#if os(macOS)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    onSynchronize()
-                } label: {
-                    if isSynchronizing {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 36, height: 36)
-                    } else {
-                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
-                            .font(.body.weight(.semibold))
-                            .frame(width: 36, height: 36)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isCalendarDestinationMenuPresented {
+                isCalendarDestinationMenuPresented = false
+            }
+            if isYearMonthPickerPresented {
+                isYearMonthPickerPresented = false
+            }
+        }
+        .overlayPreferenceValue(CalendarOverlayAnchorKey.self) { anchors in
+            GeometryReader { geometry in
+                ZStack(alignment: .topLeading) {
+                    if isYearMonthPickerPresented || isCalendarDestinationMenuPresented {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                isYearMonthPickerPresented = false
+                                isCalendarDestinationMenuPresented = false
+                            }
+                    }
+
+                    if isYearMonthPickerPresented, let anchor = anchors.monthTitle {
+                        let titleFrame = geometry[anchor]
+                        CalendarYearMonthPopup(
+                            year: $selectedYear,
+                            month: $selectedMonth,
+                            yearOptions: yearOptions,
+                            isEnglish: locale.identifier.hasPrefix("en")
+                        )
+                        .position(
+                            x: titleFrame.minX + 110,
+                            y: titleFrame.minY + 42 + 120
+                        )
+                        .zIndex(1)
+                    }
+                    if isCalendarDestinationMenuPresented, let destinationAnchor = anchors.destination {
+                        let destinationFrame = geometry[destinationAnchor]
+
+                        CalendarDestinationPopup(
+                            selection: destination,
+                            isPresented: $isCalendarDestinationMenuPresented,
+                            onSelect: onCalendarDestinationChange
+                        )
+                        .position(
+                            x: destinationFrame.maxX - 90,
+                            y: destinationFrame.minY + 50 + 58
+                        )
+                        .zIndex(1)
                     }
                 }
+            }
+            .allowsHitTesting(isYearMonthPickerPresented || isCalendarDestinationMenuPresented)
+        }
+#if os(macOS)
+        .toolbar {
+            if isCloudSyncEnabled {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        onSynchronize()
+                    } label: {
+                        if isSynchronizing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 36, height: 36)
+                        } else {
+                            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
+                                .font(.body.weight(.semibold))
+                                .frame(width: 36, height: 36)
+                                .contentShape(Circle())
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isSynchronizing)
+                    .help("今すぐ同期")
+                }
+            }
+
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    onOpenPDFList()
+                } label: {
+                    Image(systemName: "folder")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Circle())
+                }
                 .buttonStyle(.plain)
-                .disabled(isSynchronizing)
-                .help("今すぐ同期")
+                .help(ShiftHubLocalization.string("PDF一覧", locale: locale))
+            }
+
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    toggleDaySelectionMode()
+                } label: {
+                    Image(
+                        systemName: isDaySelectionMode
+                            ? "xmark"
+                            : "circle.grid.2x2.topleft.checkmark.filled"
+                    )
+                        .font(.body.weight(.semibold))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(isDaySelectionMode ? "複数選択を解除" : "複数選択")
             }
 
             ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -2750,6 +4240,7 @@ private struct CalendarEventManagerView: View {
                     Image(systemName: "doc.viewfinder")
                         .font(.body.weight(.semibold))
                         .frame(width: 36, height: 36)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .help("勤務表")
@@ -2764,6 +4255,7 @@ private struct CalendarEventManagerView: View {
                     Image(systemName: "gearshape")
                         .font(.body.weight(.semibold))
                         .frame(width: 36, height: 36)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .help("設定")
@@ -2773,6 +4265,19 @@ private struct CalendarEventManagerView: View {
         .task {
             model.setLocaleIdentifier(locale.identifier)
             model.load()
+        }
+        .onChange(of: calendarEventManagerConfigurationKey) {
+            model.updateConfiguration(
+                destination: destination,
+                appleCalendarIdentifier: appleCalendarIdentifier,
+                googleCalendarID: googleCalendarID,
+                googleShowJapaneseHolidays: googleShowJapaneseHolidays,
+                notionDataSourceID: notionDataSourceID,
+                notionDateProperty: notionDateProperty,
+                notionTitleProperty: notionTitleProperty,
+                notionTagProperty: notionTagProperty,
+                notionTagValue: notionTagValue
+            )
         }
         .onChange(of: model.yearMonth) {
             selectedYear = model.yearMonth.year
@@ -2830,50 +4335,186 @@ private struct CalendarEventManagerView: View {
         }
         .sheet(isPresented: $isShiftSelectionPresented) {
             ShiftSelectionView(definitions: definitions, tint: managerAccentColor) { title in
-                completeShiftSelection(title)
+                if isDaySelectionMode {
+                    completeMultipleShiftSelection(title)
+                } else {
+                    completeShiftSelection(title)
+                }
             }
         }
 #if os(iOS)
-        .navigationTitle(LocalizedStringKey("イベント管理"))
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+        .toolbar(.hidden, for: .navigationBar)
+#endif
+    }
+
+#if os(iOS)
+    private var iOSHomeHeader: some View {
+        HStack(spacing: 12) {
+            if isCloudSyncEnabled {
                 Button {
                     onSynchronize()
                 } label: {
                     if isSynchronizing {
                         ProgressView()
                             .controlSize(.small)
+                            .frame(width: 36, height: 36)
                     } else {
                         Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
+                            .frame(width: 36, height: 36)
                     }
                 }
+                .buttonStyle(ToolbarIconButtonStyleD())
                 .accessibilityLabel("今すぐ同期")
                 .disabled(isSynchronizing)
+            } else {
+                Color.clear
+                    .frame(width: 36, height: 36)
             }
 
-            ToolbarItem(placement: .topBarTrailing) {
+            Text("Cal Hub")
+                .font(.system(size: 18, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .layoutPriority(1)
+
+            HStack(spacing: 8) {
+                Button {
+                    onOpenPDFList()
+                } label: {
+                    Image(systemName: "folder")
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(ToolbarIconButtonStyleD())
+                .accessibilityLabel(ShiftHubLocalization.string("PDF一覧", locale: locale))
+
+                Button {
+                    toggleDaySelectionMode()
+                } label: {
+                    Image(
+                        systemName: isDaySelectionMode
+                            ? "xmark"
+                            : "circle.grid.2x2.topleft.checkmark.filled"
+                    )
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(ToolbarIconButtonStyleD())
+                .accessibilityLabel(isDaySelectionMode ? "複数選択を解除" : "複数選択")
+
                 Button {
                     onOpenShiftUpload()
                 } label: {
                     Image(systemName: "doc.viewfinder")
+                        .frame(width: 36, height: 36)
                 }
+                .buttonStyle(ToolbarIconButtonStyleD())
                 .accessibilityLabel("勤務表")
-            }
 
-            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     onOpenSettings()
                 } label: {
                     Image(systemName: "gearshape")
+                        .frame(width: 36, height: 36)
                 }
+                .buttonStyle(ToolbarIconButtonStyleD())
                 .accessibilityLabel("設定")
             }
+            .fixedSize(horizontal: true, vertical: false)
         }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity)
+        .frame(height: 56)
+    }
+#endif
+
+    private var daySelectionToolbar: some View {
+        HStack(spacing: 10) {
+            Text(
+                ShiftHubLocalization.format(
+                    "選択中: %@",
+                    locale: locale,
+                    arguments: "\(selectedCalendarDays.count)"
+                )
+            )
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button {
+                exitDaySelectionMode()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 30, height: 30)
+                    .background(.background.secondary.opacity(0.72), in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(.primary.opacity(0.12), lineWidth: 1)
+                    }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ShiftHubLocalization.string("キャンセル", locale: locale))
+
+            Button {
+                selectedCalendarDays.removeAll()
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 30, height: 30)
+                    .background(.background.secondary.opacity(0.72), in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(.primary.opacity(0.12), lineWidth: 1)
+                    }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ShiftHubLocalization.string("選択を全解除", locale: locale))
+            .disabled(selectedCalendarDays.isEmpty)
+
+            Button {
+                guard !selectedCalendarDays.isEmpty else { return }
+                isShiftSelectionPresented = true
+            } label: {
+                Image(systemName: "list.bullet")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 30, height: 30)
+                    .background(.background.secondary.opacity(0.72), in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(.primary.opacity(0.12), lineWidth: 1)
+                    }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ShiftHubLocalization.string("イベントを選択", locale: locale))
+            .disabled(selectedCalendarDays.isEmpty)
+        }
+#if os(iOS)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+#else
+        .padding(.horizontal, 24)
+        .padding(.bottom, 8)
 #endif
     }
 
     private var calendarDestinationMenu: some View {
+#if os(iOS)
+        CalendarDestinationSelector(
+            selection: destination,
+            showsCalendarIcon: true,
+            isPresented: $isCalendarDestinationMenuPresented,
+            rendersOverlay: false,
+            onOpen: { isYearMonthPickerPresented = false },
+            onSelect: onCalendarDestinationChange
+        )
+        .anchorPreference(key: CalendarOverlayAnchorKey.self, value: .bounds) {
+            CalendarOverlayAnchors(destination: $0)
+        }
+#else
         Menu {
             ForEach(CalendarDestination.allCases) { destination in
                 Button {
@@ -2883,23 +4524,27 @@ private struct CalendarEventManagerView: View {
                 }
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "calendar")
-                Text(destination.title)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption.weight(.semibold))
-            }
+            calendarDestinationLabel
         }
-#if os(iOS)
-        .font(.footnote.weight(.semibold))
-        .lineLimit(1)
-        .buttonStyle(ToolbarSelectorButtonStyleD())
-#else
         .buttonStyle(.bordered)
-#endif
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                isYearMonthPickerPresented = false
+            }
+        )
         .accessibilityLabel("カレンダーを変更")
+#endif
+    }
+
+    private var calendarDestinationLabel: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "calendar")
+            Text(destination.title)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption.weight(.semibold))
+        }
     }
 
     @ViewBuilder
@@ -2973,6 +4618,68 @@ private struct CalendarEventManagerView: View {
         return String(format: "%04d-%02d", model.yearMonth.year, model.yearMonth.month)
     }
 
+    private var monthTitleSelector: some View {
+        Button {
+            if isYearMonthPickerPresented {
+                isYearMonthPickerPresented = false
+            } else {
+                DispatchQueue.main.async {
+                    isYearMonthPickerPresented = true
+                }
+            }
+        } label: {
+            Text(eventMonthTitle)
+                .monospacedDigit()
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .contentShape(Rectangle())
+        .anchorPreference(key: CalendarOverlayAnchorKey.self, value: .bounds) {
+            CalendarOverlayAnchors(monthTitle: $0)
+        }
+        .zIndex(isYearMonthPickerPresented ? 100 : 0)
+        .accessibilityLabel(locale.identifier.hasPrefix("en") ? "Select year and month" : "年と月を選択")
+    }
+
+    private var monthNavigationControls: some View {
+        HStack(spacing: 12) {
+            Button {
+                isYearMonthPickerPresented = false
+                moveMonth(by: -1)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.primary)
+            .accessibilityLabel(locale.identifier.hasPrefix("en") ? "Previous month" : "前の月")
+
+            Button {
+                isYearMonthPickerPresented = false
+                moveMonth(by: 1)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.primary)
+            .accessibilityLabel(locale.identifier.hasPrefix("en") ? "Next month" : "次の月")
+        }
+    }
+
+    private func moveMonth(by offset: Int) {
+        let target = model.yearMonth.addingMonths(offset)
+        guard let pageID = pageID(for: target) else { return }
+
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            monthPageID = pageID
+        }
+    }
+
     private func reloadSelectedMonth() {
         guard selectedYearMonth != model.yearMonth else { return }
         if let pageID = pageID(for: selectedYearMonth) {
@@ -3015,8 +4722,13 @@ private struct CalendarEventManagerView: View {
                         let pageMonth = monthForPageID(pageID)
                         let pageEvents = pageMonth == model.yearMonth ? model.events : []
 
-                        eventCalendarPage(for: pageMonth, events: pageEvents)
+                        eventCalendarPage(
+                            for: pageMonth,
+                            events: pageEvents,
+                            availableHeight: geometry.size.height
+                        )
                             .frame(width: pageWidth)
+                            .frame(height: geometry.size.height)
                             .id(pageID)
                     }
                 }
@@ -3031,14 +4743,23 @@ private struct CalendarEventManagerView: View {
 
     private func eventCalendarPage(
         for yearMonth: YearMonth,
-        events: [CalendarEventRecord]
+        events: [CalendarEventRecord],
+        availableHeight: CGFloat
     ) -> some View {
         let leadingBlankCount = yearMonth.leadingBlankCount
         let totalSlots = leadingBlankCount + yearMonth.numberOfDays
+        let slots = Swift.Array<Int>(0..<totalSlots)
         let isCurrentMonth = yearMonth == model.yearMonth
 #if os(iOS)
-        let cardHeight: CGFloat = 80
         let gridSpacing: CGFloat = 5
+        let rowCount = 6
+        let verticalInsets: CGFloat = 8
+        let fittedCardHeight = (
+            availableHeight
+                - verticalInsets
+                - CGFloat(max(rowCount - 1, 0)) * gridSpacing
+        ) / CGFloat(max(rowCount, 1))
+        let cardHeight = min(80, max(52, fittedCardHeight))
 #else
         let cardHeight: CGFloat = 112
         let gridSpacing: CGFloat = 8
@@ -3046,16 +4767,26 @@ private struct CalendarEventManagerView: View {
 
         return ScrollView {
             LazyVGrid(columns: eventCalendarColumns, spacing: gridSpacing) {
-                ForEach(0..<totalSlots, id: \.self) { slot in
+                ForEach(slots, id: \.self) { (slot: Int) in
                     if slot < leadingBlankCount {
                         Color.clear
-                            .frame(maxWidth: .infinity, minHeight: cardHeight)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: cardHeight)
                     } else {
                         eventDayCell(
                             day: slot - leadingBlankCount + 1,
                             yearMonth: yearMonth,
                             events: events,
-                            isInteractive: isCurrentMonth
+                            isInteractive: isCurrentMonth,
+                            isSelectionMode: isDaySelectionMode,
+                            isSelected: selectedCalendarDays.contains(
+                                CalendarDaySelection(
+                                    year: yearMonth.year,
+                                    month: yearMonth.month,
+                                    day: slot - leadingBlankCount + 1
+                                )
+                            ),
+                            cardHeight: cardHeight
                         )
                     }
                 }
@@ -3095,9 +4826,19 @@ private struct CalendarEventManagerView: View {
         day: Int,
         yearMonth: YearMonth,
         events: [CalendarEventRecord],
-        isInteractive: Bool
+        isInteractive: Bool,
+        isSelectionMode: Bool,
+        isSelected: Bool,
+        cardHeight: CGFloat
     ) -> some View {
         let dayEvents = events.filter { $0.day == day }
+        let actionableEventCount = dayEvents.reduce(into: 0) { count, event in
+            if !event.isReadOnly { count += 1 }
+        }
+        let hasDisplayOnlyEvents = dayEvents.contains { $0.isReadOnly }
+        let displayEvents = Array(dayEvents.sorted(by: calendarEventComesBefore).prefix(3))
+        let shouldShowEventDetail = displayEvents.count <= 2
+        let selection = CalendarDaySelection(year: yearMonth.year, month: yearMonth.month, day: day)
 #if os(iOS)
         let contentSpacing: CGFloat = 3
         let eventSpacing: CGFloat = 2
@@ -3113,14 +4854,29 @@ private struct CalendarEventManagerView: View {
 
         return Button {
             guard isInteractive else { return }
-            selectedDayForActions = day
+
+            if isSelectionMode {
+                if selectedCalendarDays.contains(selection) {
+                    selectedCalendarDays.remove(selection)
+                } else {
+                    selectedCalendarDays.insert(selection)
+                }
+                return
+            }
+
+            isCalendarDestinationMenuPresented = false
+            isYearMonthPickerPresented = false
+            Task { @MainActor in
+                await Task.yield()
+                selectedDayForActions = day
+            }
         } label: {
             ZStack(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: contentSpacing) {
                     Color.clear
                         .frame(height: dateHeaderHeight)
 
-                    ForEach(dayEvents) { event in
+                    ForEach(displayEvents) { event in
                         HStack(alignment: .top, spacing: eventSpacing) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(event.title)
@@ -3130,19 +4886,23 @@ private struct CalendarEventManagerView: View {
                                     .fixedSize(horizontal: false, vertical: true)
 #else
                                     .font(.caption.weight(.medium))
-                                    .lineLimit(2)
+                                    .lineLimit(1)
 #endif
 
-                                Text(event.detail.isEmpty ? "終日" : event.detail)
+                                if shouldShowEventDetail {
+                                    Text(event.detail.isEmpty ? "終日" : event.detail)
 #if os(iOS)
-                                    .font(.system(size: 7))
+                                        .font(.system(size: 7))
 #else
-                                    .font(.caption2)
+                                        .font(.caption2)
 #endif
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.35)
-                                    .allowsTightening(true)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+#if os(iOS)
+                                        .minimumScaleFactor(0.35)
+                                        .allowsTightening(true)
+#endif
+                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -3177,22 +4937,39 @@ private struct CalendarEventManagerView: View {
             }
             .padding(6)
 #if os(iOS)
-            .frame(height: 80, alignment: .top)
+            .frame(height: cardHeight, alignment: .top)
             .frame(maxWidth: .infinity, alignment: .topLeading)
 #else
-            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+            .frame(height: cardHeight, alignment: .topLeading)
 #endif
             .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(
+                        isSelectionMode
+                            ? Color.blue.opacity(isSelected ? 1 : 0.32)
+                            : .clear,
+                        lineWidth: isSelectionMode ? 1.5 : 0
+                    )
+            }
+            .animation(.easeOut(duration: 0.16), value: isSelected)
             .clipped()
         }
 #if os(iOS)
-        .frame(height: 80, alignment: .top)
+        .frame(height: cardHeight, alignment: .top)
+#else
+        .frame(height: cardHeight, alignment: .top)
 #endif
-        .buttonStyle(CalendarDayCardButtonStyle(accent: isInteractive ? managerAccentColor : .accentColor))
+        .buttonStyle(
+            CalendarDayCardButtonStyle(
+                accent: isInteractive ? managerAccentColor : .accentColor,
+                isSelectionMode: isSelectionMode
+            )
+        )
         .disabled(model.isDeleting || !isInteractive)
         .popover(
             isPresented: Binding(
-                get: { isInteractive && selectedDayForActions == day },
+                get: { isInteractive && !isSelectionMode && selectedDayForActions == day },
                 set: { isPresented in
                     if isInteractive && !isPresented && selectedDayForActions == day {
                         selectedDayForActions = nil
@@ -3202,7 +4979,7 @@ private struct CalendarEventManagerView: View {
         ) {
 #if os(iOS)
             dayActionsPopover(for: day)
-                .presentationDetents([.height(320)])
+                .presentationDetents([.height(actionableEventCount == 0 ? (hasDisplayOnlyEvents ? 210 : 140) : 380)])
                 .presentationDragIndicator(.visible)
 #else
             dayActionsPopover(for: day)
@@ -3213,113 +4990,253 @@ private struct CalendarEventManagerView: View {
     @ViewBuilder
     private func dayActionsPopover(for day: Int) -> some View {
         let dayEvents = model.events(for: day)
+        let actionableEvents = dayEvents.filter { !$0.isReadOnly }
+        let displayOnlyEvents = dayEvents.filter(\.isReadOnly)
+#if os(iOS)
+        let sheetHorizontalPadding: CGFloat = dayEvents.isEmpty ? 16 : 14
+        let sheetTopPadding: CGFloat = dayEvents.isEmpty ? 20 : 14
+        let sheetBottomPadding: CGFloat = dayEvents.isEmpty ? 0 : 14
+        let sheetMaxHeight: CGFloat? = dayEvents.isEmpty ? .infinity : nil
+#else
+        let sheetHorizontalPadding: CGFloat = 14
+        let sheetTopPadding: CGFloat = 14
+        let sheetBottomPadding: CGFloat = 14
+#endif
 
         VStack(alignment: .leading, spacing: 0) {
             Text(model.dayHeader(for: day, locale: locale))
                 .font(.headline)
                 .padding(.bottom, 10)
 
-            Divider()
+            ForEach(displayOnlyEvents) { event in
+                eventListRowContent(for: event)
+                    .padding(.top, 12)
+            }
 
-            if dayEvents.isEmpty {
-                Button {
-                    presentShiftSelection(forDay: day, deleteExisting: false)
-                } label: {
-                    Label("イベントの登録", systemImage: "calendar.badge.plus")
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 12)
-            } else if dayEvents.count == 1, let event = dayEvents.first {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(event.title)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(2)
-
-                    Text(event.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    eventActions(for: event)
-                }
-                .padding(.top, 12)
-            } else {
+#if os(iOS)
+            if !actionableEvents.isEmpty {
                 Text("イベントを選択")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.top, 12)
                     .padding(.bottom, 6)
 
-                ForEach(dayEvents) { event in
-                    Menu {
-                        eventActions(for: event)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(event.title)
-                                .lineLimit(2)
-
-                            Text(event.detail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                eventSelectionList(for: day, events: actionableEvents)
+            }
+#else
+            if !actionableEvents.isEmpty {
+                if actionableEvents.count == 1, let event = actionableEvents.first {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 8) {
+                            eventListRowContent(for: event)
+                            eventActions(for: event)
                         }
+                        .padding(.top, 12)
                     }
-                    .menuStyle(.borderlessButton)
+                } else {
+                    Text("イベントを選択")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 12)
+                        .padding(.bottom, 6)
+
+                    eventSelectionList(for: day, events: actionableEvents)
                 }
             }
+#endif
+
+            eventRegistrationButton(forDay: day)
+                .padding(.top, 12)
         }
-        .padding(14)
+        .padding(.horizontal, sheetHorizontalPadding)
+        .padding(.top, sheetTopPadding)
+        .padding(.bottom, sheetBottomPadding)
 #if os(iOS)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: sheetMaxHeight, alignment: .topLeading)
 #else
         .frame(width: 250, alignment: .leading)
 #endif
     }
+
+    private func eventRegistrationButton(forDay day: Int) -> some View {
+        Button {
+            presentShiftSelection(forDay: day, deleteExisting: false)
+        } label: {
+            Label("イベントを登録", systemImage: "calendar.badge.plus")
+                .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .leading)
+        }
+#if os(iOS)
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+#else
+        .buttonStyle(.plain)
+#endif
+    }
+
+    private func eventListRowContent(for event: CalendarEventRecord) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(event.title)
+                .font(.callout.weight(.medium))
+                .lineLimit(2)
+
+            Text(event.detail.isEmpty ? "終日" : event.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func eventSelectionList(
+        for day: Int,
+        events: [CalendarEventRecord]
+    ) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(events) { event in
+                    Divider()
+#if os(macOS)
+                    Menu {
+                        eventActions(for: event)
+                    } label: {
+                        (Text(event.title)
+                            .font(.callout.weight(.medium))
+                         + Text("\n")
+                         + Text(event.detail.isEmpty ? "終日" : event.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary))
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+#else
+                    Button {
+                        selectedEventForActions = event
+                    } label: {
+                        HStack(spacing: 0) {
+                            eventListRowContent(for: event)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .popover(
+                        isPresented: Binding(
+                            get: { selectedEventForActions?.id == event.id },
+                            set: { isPresented in
+                                if !isPresented && selectedEventForActions?.id == event.id {
+                                    selectedEventForActions = nil
+                                }
+                            }
+                        )
+                    ) {
+                        eventActionsPopover(for: event, day: day)
+                            .presentationCompactAdaptation(.popover)
+                    }
+#endif
+                }
+            }
+        }
+        .frame(maxHeight: 220)
+    }
+
+#if os(iOS)
+    private func eventActionsPopover(for event: CalendarEventRecord, day: Int) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(model.dayHeader(for: day, locale: locale))
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            Text(event.title)
+                .font(.body.weight(.medium))
+                .foregroundStyle(.primary)
+                .padding(.top, 10)
+
+            if !event.detail.isEmpty {
+                Text(event.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
+
+            Divider()
+                .padding(.vertical, 12)
+
+            if pendingInlineDeletion?.id == event.id {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("イベントを削除しますか？")
+                        .font(.subheadline.weight(.medium))
+
+                    HStack(spacing: 8) {
+                        Button(role: .destructive) {
+                            pendingInlineDeletion = nil
+                            selectedEventForActions = nil
+                            selectedDayForActions = nil
+                            model.deleteImmediately(event)
+                        } label: {
+                            Label("削除", systemImage: "trash")
+                                .frame(maxWidth: .infinity)
+                        }
+
+                        Button {
+                            pendingInlineDeletion = nil
+                        } label: {
+                            Text("キャンセル")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            } else {
+                eventActions(for: event)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 280, alignment: .leading)
+    }
+#endif
 
     @ViewBuilder
     private func eventActions(for event: CalendarEventRecord) -> some View {
 #if os(iOS)
         VStack(spacing: 8) {
             Button {
-                presentShiftSelection(for: event, deleteExisting: false)
-            } label: {
-                Label("イベントの登録", systemImage: "calendar.badge.plus")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Button {
+                selectedEventForActions = nil
                 presentShiftSelection(for: event, deleteExisting: true)
             } label: {
                 Label("削除してイベントの登録", systemImage: "arrow.triangle.2.circlepath")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .disabled(event.isReadOnly)
 
             Button(role: .destructive) {
-                selectedDayForActions = nil
-                shiftTitleAfterDelete = nil
-                model.requestDelete(event)
+                pendingInlineDeletion = event
             } label: {
                 Label("削除", systemImage: "trash")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .disabled(event.isReadOnly)
         }
         .buttonStyle(.bordered)
         .controlSize(.large)
 #else
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                presentShiftSelection(for: event, deleteExisting: false)
-            } label: {
-                Label("イベントの登録", systemImage: "calendar.badge.plus")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Button {
                 presentShiftSelection(for: event, deleteExisting: true)
             } label: {
                 Label("削除してイベントの登録", systemImage: "arrow.triangle.2.circlepath")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .disabled(event.isReadOnly)
 
             Button(role: .destructive) {
                 selectedDayForActions = nil
@@ -3330,6 +5247,7 @@ private struct CalendarEventManagerView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .foregroundStyle(.red)
+            .disabled(event.isReadOnly)
         }
 #endif
     }
@@ -3342,6 +5260,51 @@ private struct CalendarEventManagerView: View {
             deleteExisting: deleteExisting
         )
         isShiftSelectionPresented = true
+    }
+
+    private func enterDaySelectionMode() {
+        selectedDayForActions = nil
+        isCalendarDestinationMenuPresented = false
+        isYearMonthPickerPresented = false
+        withAnimation(.easeInOut(duration: 0.25)) {
+            selectedCalendarDays.removeAll()
+            isDaySelectionMode = true
+        }
+    }
+
+    private func toggleDaySelectionMode() {
+        if isDaySelectionMode {
+            exitDaySelectionMode()
+        } else {
+            enterDaySelectionMode()
+        }
+    }
+
+    private func exitDaySelectionMode() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            selectedCalendarDays.removeAll()
+            isDaySelectionMode = false
+        }
+    }
+
+    private func completeMultipleShiftSelection(_ title: String) {
+        let selections = selectedCalendarDays.sorted {
+            if $0.year != $1.year { return $0.year < $1.year }
+            if $0.month != $1.month { return $0.month < $1.month }
+            return $0.day < $1.day
+        }
+
+        guard !selections.isEmpty else { return }
+
+        isShiftSelectionPresented = false
+        exitDaySelectionMode()
+        onRegisterShifts(
+            selections,
+            title,
+            RegistrationCompletion {
+                model.load()
+            }
+        )
     }
 
     private func presentShiftSelection(forDay day: Int, deleteExisting: Bool) {
@@ -3389,179 +5352,716 @@ private enum AppLanguage: String, CaseIterable, Identifiable {
     }
 }
 
-private struct SettingsSection<Content: View>: View {
-    let title: LocalizedStringKey
-    let symbol: String
-    let content: Content
+#if os(macOS)
+private enum ShiftHubMacSettingsPane: String, CaseIterable, Identifiable {
+    case general
+    case shifts
+    case calendars
+    case about
 
-    init(
-        _ title: LocalizedStringKey,
-        symbol: String,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.title = title
-        self.symbol = symbol
-        self.content = content()
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general:
+            return "一般"
+        case .shifts:
+            return "イベント管理"
+        case .calendars:
+            return "カレンダー設定"
+        case .about:
+            return "About"
+        }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: symbol)
-                .font(.headline)
+    var subtitle: String {
+        switch self {
+        case .general:
+            return "言語とiCloud同期を設定"
+        case .shifts:
+            return "イベントタイトルと開始・終了時刻を管理"
+        case .calendars:
+            return "カレンダー接続と登録先を設定"
+        case .about:
+            return "アプリ情報・プライバシー・著作権"
+        }
+    }
 
-            content
-                .padding(12)
-                .background(.background.secondary.opacity(0.42), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    var systemImage: String {
+        switch self {
+        case .general:
+            return "gearshape"
+        case .shifts:
+            return "clock.badge.checkmark"
+        case .calendars:
+            return "calendar.badge.clock"
+        case .about:
+            return "info.circle"
+        }
+    }
+
+    var searchKeywords: [String] {
+        switch self {
+        case .general:
+            return ["General", "Language", "言語", "iCloud", "同期"]
+        case .shifts:
+            return ["Shifts", "Shift", "勤務", "タイトル", "時間"]
+        case .calendars:
+            return ["Calendar", "Apple", "Google", "Notion", "カレンダー"]
+        case .about:
+            return ["About", "Privacy", "Copyright", "情報", "プライバシー", "著作権"]
         }
     }
 }
 
-private struct SettingsActionRow: View {
-    let title: LocalizedStringKey
-    let subtitle: LocalizedStringKey
-    let symbol: String
-    let action: () -> Void
+private struct ShiftHubMacSettingsView: View {
+    @Binding var definitions: [ShiftDefinition]
+    @Binding var appLanguage: String
+    @Binding var isCloudSyncEnabled: Bool
+
+    @State private var selectedPane: ShiftHubMacSettingsPane = .general
+    @State private var sidebarSearchText = ""
+    @State private var isShiftSettingsPresented = false
+    @State private var isCalendarSettingsPresented = false
+
+    private var locale: Locale {
+        Locale(identifier: appLanguage)
+    }
+
+    private func localized(_ key: String) -> String {
+        ShiftHubLocalization.string(key, locale: locale)
+    }
+
+    private var filteredPanes: [ShiftHubMacSettingsPane] {
+        let query = sidebarSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return ShiftHubMacSettingsPane.allCases
+        }
+
+        return ShiftHubMacSettingsPane.allCases.filter { pane in
+            pane.title.localizedCaseInsensitiveContains(query)
+                || pane.subtitle.localizedCaseInsensitiveContains(query)
+                || pane.searchKeywords.contains {
+                    $0.localizedCaseInsensitiveContains(query)
+                }
+        }
+    }
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(.white.opacity(0.07), in: Circle())
+        HStack(spacing: 0) {
+            settingsSidebar
+                .frame(width: 220)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.body.weight(.semibold))
+            Divider()
 
-                    Text(subtitle)
-                        .font(.caption)
+            settingsDetail
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $isShiftSettingsPresented) {
+            ShiftDefinitionSettingsView(definitions: $definitions)
+                .environment(\.locale, Locale(identifier: appLanguage))
+        }
+        .sheet(isPresented: $isCalendarSettingsPresented) {
+            CalendarSettingsView()
+                .environment(\.locale, Locale(identifier: appLanguage))
+        }
+    }
+
+    private var settingsSidebar: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            TextField("検索", text: $sidebarSearchText)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 16)
+                .padding(.top, 18)
+
+            VStack(spacing: 2) {
+                ForEach(filteredPanes) { pane in
+                    Button {
+                        selectedPane = pane
+                    } label: {
+                        ShiftHubMacSettingsSidebarRow(
+                            title: localized(pane.title),
+                            systemImage: pane.systemImage,
+                            isSelected: selectedPane == pane
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+
+            Spacer()
+        }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+    }
+
+    private var settingsDetail: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                settingsHero(for: selectedPane)
+                settingsContent(for: selectedPane)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func settingsHero(for pane: ShiftHubMacSettingsPane) -> some View {
+        VStack(spacing: 8) {
+            ShiftHubMacSettingsHeroIcon(systemImage: pane.systemImage)
+
+            Text(localized(pane.title))
+                .font(.title2.weight(.semibold))
+
+            Text(localized(pane.subtitle))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22)
+        .padding(.horizontal, 18)
+        .background(ShiftHubMacSettingsCardBackground())
+    }
+
+    @ViewBuilder
+    private func settingsContent(for pane: ShiftHubMacSettingsPane) -> some View {
+        switch pane {
+        case .general:
+            generalSettings
+        case .shifts:
+            detailActionCard(
+                title: localized("イベント管理"),
+                subtitle: localized("イベントタイトルと開始・終了時刻を管理"),
+                systemImage: "clock.badge.checkmark"
+            ) {
+                isShiftSettingsPresented = true
+            }
+        case .calendars:
+            detailActionCard(
+                title: localized("カレンダー設定"),
+                subtitle: localized("Apple・Google・Notionの接続先を管理"),
+                systemImage: "calendar.badge.clock"
+            ) {
+                isCalendarSettingsPresented = true
+            }
+        case .about:
+            aboutSettings
+        }
+    }
+
+    private var generalSettings: some View {
+        ShiftHubMacSettingsSectionCard {
+            ShiftHubMacSettingsRow(
+                title: localized("言語"),
+                subtitle: localized("アプリの表示言語"),
+                systemImage: "globe"
+            ) {
+                Picker("言語", selection: $appLanguage) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.title)
+                            .tag(language.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+
+            Divider()
+
+            ShiftHubMacSettingsRow(
+                title: localized("iCloud同期"),
+                subtitle: localized("設定とPDFをiCloudで同期します。"),
+                systemImage: "icloud"
+            ) {
+                Toggle("", isOn: $isCloudSyncEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+        }
+    }
+
+    private func detailActionCard(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        ShiftHubMacSettingsSectionCard {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    ShiftHubMacSettingsRowIcon(systemImage: systemImage)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.callout.weight(.medium))
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 16)
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
-
-                Spacer(minLength: 12)
-
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tertiary)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
         }
-        .buttonStyle(SettingsActionRowButtonStyle())
+    }
+
+    private var aboutSettings: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ShiftHubMacSettingsSectionCard {
+                HStack(spacing: 14) {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.system(size: 34))
+                        .foregroundStyle(.tint)
+                        .frame(width: 50, height: 50)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Cal Hub")
+                            .font(.title3.weight(.semibold))
+                        Text(shiftHubAppVersion)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(shiftHubCopyrightText)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            ShiftHubMacSettingsSectionCard {
+                Text("このアプリについて")
+                    .font(.headline)
+                Text("イベントのタイトルや時間をアプリ内に保存し、任意のカレンダーへ簡単に登録・削除できるアプリです。勤務表を読み込んでイベントを登録することもできます。勤務表の読み込みは、年月・日付・勤務名・日ごとの勤務値を文字データとして含む、アプリが想定する形式の横向きPDFに対応しています。画像だけで構成されたスキャンPDFや縦向きPDFには対応していません。年月を取得できない場合は、ファイル名を「2026-01.pdf」のように変更してください。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+            }
+
+            ShiftHubMacSettingsSectionCard {
+                Text("主な機能")
+                    .font(.headline)
+
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("PDFスキャン"),
+                    detail: localized("勤務表を読み込み、保存した名前に一致する行から日付と勤務情報を抽出します。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("カレンダー登録"),
+                    detail: localized("Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("イベント管理"),
+                    detail: localized("月を移動し、日付ごとのイベントを確認、変更、削除できます。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("複数選択"),
+                    detail: localized("複数の日付を選択し、保存済みのイベントをまとめて登録できます。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("言語切替"),
+                    detail: localized("設定から日本語と英語を切り替えられます。")
+                )
+            }
+
+            ShiftHubMacSettingsSectionCard {
+                Text(localized("接続の準備"))
+                    .font(.headline)
+
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("Appleカレンダー"),
+                    detail: localized("用意するもの: Apple IDでiCloudにサインインし、カレンダーを有効にした端末。クライアントIDやトークンは不要です。\n設定方法: 端末のカレンダーへのアクセスを許可し、カレンダー設定で「カレンダー一覧を取得」から登録先カレンダーを選択します。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("Googleカレンダー"),
+                    detail: localized("用意するもの: Googleアカウント。\n設定方法: Googleログインを選択し、カレンダーへのアクセスを許可して登録先を選択してください。OAuthクライアントの設定はアプリ側で管理します。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("Notion DB"),
+                    detail: localized("用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型・複数選択型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列・タグ列・タグ値を選択してください。")
+                )
+            }
+
+            ShiftHubMacSettingsSectionCard {
+                Text("プライバシーポリシー")
+                    .font(.headline)
+                Text("このアプリは、ユーザーが選択したPDFと、カレンダー登録に必要な設定を使用します。")
+                Text("Appleカレンダーを使用する場合、カレンダーへのアクセスはイベントの読み取りと登録のためにのみ使用します。")
+                Text("GoogleカレンダーとNotionを使用する場合、入力された認証情報は登録先との通信に使用されます。")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var shiftHubAppVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        switch (version, build) {
+        case let (.some(version), .some(build)) where !build.isEmpty:
+            return "\(version) (\(build))"
+        case let (.some(version), _):
+            return version
+        default:
+            return "Unknown"
+        }
+    }
+
+    private var shiftHubCopyrightText: String {
+        Bundle.main.object(forInfoDictionaryKey: "NSHumanReadableCopyright") as? String
+            ?? "Copyright © 2026 Tomoaki Narita. All rights reserved."
     }
 }
 
-private struct SettingsActionRowButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 4)
-            .background(
-                .white.opacity(configuration.isPressed ? 0.1 : 0),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
+private struct ShiftHubMacSettingsSidebarRow: View {
+    let title: String
+    let systemImage: String
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 9) {
+            ShiftHubMacSettingsRowIcon(systemImage: systemImage, isSelected: isSelected)
+
+            Text(title)
+                .font(.callout.weight(isSelected ? .semibold : .medium))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(isSelected ? Color.white : Color.primary)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 30)
+        .contentShape(Rectangle())
+        .background {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isSelected ? Color.accentColor : Color.clear)
+        }
     }
 }
+
+private struct ShiftHubMacSettingsHeroIcon: View {
+    let systemImage: String
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 34, weight: .regular))
+            .symbolRenderingMode(.hierarchical)
+            .frame(width: 58, height: 58)
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+            }
+    }
+}
+
+private struct ShiftHubMacSettingsCardBackground: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color(nsColor: .controlBackgroundColor).opacity(0.82))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+            }
+    }
+}
+
+private struct ShiftHubMacSettingsSectionCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ShiftHubMacSettingsCardBackground())
+    }
+}
+
+private struct ShiftHubMacSettingsRow<Control: View>: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    @ViewBuilder let control: Control
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ShiftHubMacSettingsRowIcon(systemImage: systemImage)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 16)
+            control
+        }
+        .frame(minHeight: 44)
+        .padding(.vertical, 3)
+    }
+}
+
+private struct ShiftHubMacSettingsRowIcon: View {
+    let systemImage: String
+    var isSelected = false
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .frame(width: 22, height: 22)
+            .background {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.18) : Color.secondary.opacity(0.12))
+            }
+    }
+}
+
+private struct ShiftHubMacAboutFeatureRow: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.callout.weight(.medium))
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
+    }
+}
+#endif
 
 private struct AppSettingsView: View {
     @Binding var definitions: [ShiftDefinition]
 
-    @Environment(\.dismiss) private var dismiss
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
-    @State private var isShiftSettingsPresented = false
-    @State private var isCalendarSettingsPresented = false
+    @AppStorage("iCloudSyncEnabled") private var isCloudSyncEnabled = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("設定")
-                        .font(.title.bold())
-
-                    Text("アプリの表示と言語、勤務・カレンダー設定を管理します。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-            }
-            .padding(24)
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    SettingsSection("一般", symbol: "slider.horizontal.3") {
-                        HStack(spacing: 16) {
-                            Label("言語", systemImage: "character.book.closed")
-                                .foregroundStyle(.secondary)
-
-                            Spacer()
-
-                            Picker("言語", selection: $appLanguage) {
-                                ForEach(AppLanguage.allCases) { language in
-                                    Text(language.title)
-                                        .tag(language.rawValue)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.segmented)
-                            .frame(width: 150)
-                        }
-                        .frame(minHeight: 40)
-                    }
-
-                    SettingsSection("勤務", symbol: "clock.badge.checkmark") {
-                        SettingsActionRow(
-                            title: "勤務タイトルと時間を設定",
-                            subtitle: "勤務名と開始・終了時刻を管理",
-                            symbol: "clock.badge.checkmark"
-                        ) {
-                            isShiftSettingsPresented = true
-                        }
-                    }
-
-                    SettingsSection("カレンダー", symbol: "calendar.badge.clock") {
-                        SettingsActionRow(
-                            title: "カレンダー接続と登録先を設定",
-                            subtitle: "Apple・Google・Notionの接続先を管理",
-                            symbol: "calendar.badge.clock"
-                        ) {
-                            isCalendarSettingsPresented = true
-                        }
-                    }
-                }
-                .frame(maxWidth: 760, alignment: .leading)
-                .padding(28)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-            .scrollIndicators(.automatic)
-            .background(.clear)
-        }
+#if os(macOS)
+        ShiftHubMacSettingsView(
+            definitions: $definitions,
+            appLanguage: $appLanguage,
+            isCloudSyncEnabled: $isCloudSyncEnabled
+        )
         .environment(\.locale, Locale(identifier: appLanguage))
-#if os(iOS)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-#else
+        .navigationTitle("設定")
         .frame(
-            minWidth: 680,
-            idealWidth: 680,
+            minWidth: 720,
+            idealWidth: 760,
             maxWidth: .infinity,
-            minHeight: 520,
-            idealHeight: 520,
+            minHeight: 560,
+            idealHeight: 620,
             maxHeight: .infinity,
             alignment: .topLeading
         )
+#else
+        Form {
+            Section("一般") {
+                Picker("言語", selection: $appLanguage) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.title)
+                            .tag(language.rawValue)
+                    }
+                }
+
+                Toggle(isOn: $isCloudSyncEnabled) {
+                    Label("iCloud同期", systemImage: "icloud")
+                }
+
+                Text("設定とPDFをiCloudで同期します。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("イベント") {
+                NavigationLink {
+                    ShiftDefinitionSettingsView(definitions: $definitions)
+                } label: {
+                    Label("イベント管理", systemImage: "clock.badge.checkmark")
+                }
+                    Text("イベントタイトルと開始・終了時刻を管理")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("カレンダー") {
+                NavigationLink {
+                    CalendarSettingsView()
+                } label: {
+                    Label("カレンダー設定", systemImage: "calendar.badge.clock")
+                }
+                Text("Apple・Google・Notionの接続先を管理")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("About") {
+                NavigationLink {
+                    ShiftHubAboutView()
+                } label: {
+                            Label("Cal Hubについて", systemImage: "info.circle")
+                }
+            }
+        }
+        .environment(\.locale, Locale(identifier: appLanguage))
+        .navigationTitle("設定")
+        .navigationBarTitleDisplayMode(.inline)
 #endif
-        .sheet(isPresented: $isShiftSettingsPresented) {
-            ShiftDefinitionSettingsView(definitions: $definitions)
+    }
+}
+
+private struct ShiftHubAboutView: View {
+    private var appVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        switch (version, build) {
+        case let (.some(version), .some(build)) where !build.isEmpty:
+            return "\(version) (\(build))"
+        case let (.some(version), _):
+            return version
+        default:
+            return "Unknown"
         }
-        .sheet(isPresented: $isCalendarSettingsPresented) {
-            CalendarSettingsView()
+    }
+
+    private var copyrightText: String {
+        Bundle.main.object(forInfoDictionaryKey: "NSHumanReadableCopyright") as? String
+            ?? "Copyright © 2026 Tomoaki Narita. All rights reserved."
+    }
+
+    var body: some View {
+        List {
+            Section {
+                HStack(spacing: 14) {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.system(size: 42))
+                        .foregroundStyle(.tint)
+                        .frame(width: 56, height: 56)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Cal Hub")
+                            .font(.title3.weight(.semibold))
+                        Text(appVersion)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(copyrightText)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section("このアプリについて") {
+                Text("イベントのタイトルや時間をアプリ内に保存し、任意のカレンダーへ簡単に登録・削除できるアプリです。勤務表を読み込んでイベントを登録することもできます。勤務表の読み込みは、年月・日付・勤務名・日ごとの勤務値を文字データとして含む、アプリが想定する形式の横向きPDFに対応しています。画像だけで構成されたスキャンPDFや縦向きPDFには対応していません。年月を取得できない場合は、ファイル名を「2026-01.pdf」のように変更してください。")
+            }
+
+            Section("主な機能") {
+                ShiftHubAboutRow(
+                    title: "PDFスキャン",
+                    detail: "勤務表を読み込み、保存した名前に一致する行から日付と勤務情報を抽出します。"
+                )
+                ShiftHubAboutRow(
+                    title: "カレンダー登録",
+                    detail: "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。"
+                )
+                ShiftHubAboutRow(
+                    title: "イベント管理",
+                    detail: "月を移動し、日付ごとのイベントを確認、変更、削除できます。"
+                )
+                ShiftHubAboutRow(
+                    title: "複数選択",
+                    detail: "複数の日付を選択し、保存済みのイベントをまとめて登録できます。"
+                )
+                ShiftHubAboutRow(
+                    title: "言語切替",
+                    detail: "設定から日本語と英語を切り替えられます。"
+                )
+            }
+
+            Section("接続の準備") {
+                ShiftHubAboutRow(
+                    title: "Appleカレンダー",
+                    detail: "用意するもの: Apple IDでiCloudにサインインし、カレンダーを有効にした端末。クライアントIDやトークンは不要です。\n設定方法: 端末のカレンダーへのアクセスを許可し、カレンダー設定で「カレンダー一覧を取得」から登録先カレンダーを選択します。"
+                )
+                ShiftHubAboutRow(
+                    title: "Googleカレンダー",
+                    detail: "用意するもの: Googleアカウント。\n設定方法: Googleログインを選択し、カレンダーへのアクセスを許可して登録先を選択してください。OAuthクライアントの設定はアプリ側で管理します。"
+                )
+                ShiftHubAboutRow(
+                    title: "Notion DB",
+                    detail: "用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型・複数選択型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列・タグ列・タグ値を選択してください。"
+                )
+            }
+
+            Section("プライバシーポリシー") {
+                Text("勤務表、イベント設定、登録先の設定は、この端末に保存されます。iCloud同期を有効にした場合は、同期対象の設定と保存済みPDFがユーザー専用のiCloud領域に保存されます。")
+                Text("Appleカレンダー、Googleカレンダー、Notionの情報は、ユーザーが接続・取得・登録を実行した場合にのみ、それぞれのサービスへ送信されます。Notionのアクセストークンなどの認証情報は端末の安全な保存領域で管理されます。")
+                Text("このアプリは、ユーザーが選択した勤務表やカレンダーの内容を広告目的で利用しません。各サービスの利用やデータ保存については、それぞれのサービスのポリシーも適用されます。")
+            }
+
+            Section("著作権") {
+                Text(copyrightText)
+                Text("Cal Hubの名称、画面、ソフトウェアおよび関連資料の著作権は、別途記載がある場合を除き、Tomoaki Naritaに帰属します。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("サポート") {
+                Link(destination: URL(string: "https://github.com/tomoaki-narita/Shift-Upload")!) {
+                    Label("サポート・ソースコード", systemImage: "link")
+                }
+            }
         }
+        .navigationTitle("About")
+#if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+#endif
+    }
+}
+
+private struct ShiftHubAboutRow: View {
+    let title: LocalizedStringKey
+    let detail: LocalizedStringKey
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            Text(detail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -3582,10 +6082,10 @@ private struct MissingShiftSelectionView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("勤務一覧にありません")
+                    Text("イベント一覧にありません")
                         .font(.title2.bold())
 
-                    Text("保存する勤務を選択してください。")
+                    Text("保存するイベントを選択してください。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -3662,9 +6162,10 @@ struct ShiftDefinitionSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+#if os(macOS)
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("勤務設定")
+                    Text("イベント管理")
                         .font(.title.bold())
 
 //                    Text("勤務タイトルと時間を保存します。")
@@ -3674,21 +6175,24 @@ struct ShiftDefinitionSettingsView: View {
 
                 Spacer()
 
+#if os(macOS)
                 Button("完了") {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+#endif
             }
             .padding(24)
 
             Divider()
+#endif
 
             VStack(alignment: .leading, spacing: 12) {
                 if definitions.isEmpty {
                     ContentUnavailableView(
-                        "勤務設定がありません",
+                        "イベント設定がありません",
                         systemImage: "clock.badge.questionmark",
-                        description: Text("追加ボタンから勤務タイトルと時間を登録してください。")
+                        description: Text("追加ボタンからイベントタイトルと時間を登録してください。")
                     )
                     .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
@@ -3700,15 +6204,32 @@ struct ShiftDefinitionSettingsView: View {
                                     definitions.removeAll { $0.id == definition.id }
                                 }
                             )
+#if os(iOS)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    definitions.removeAll { $0.id == definition.id }
+                                } label: {
+                                    Label("削除", systemImage: "trash")
+                                }
+                            }
+#else
                             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                             .listRowSeparator(.hidden)
+#endif
                         }
                         .onMove(perform: moveDefinitions)
                     }
                     .listStyle(.plain)
                 }
             }
+#if os(iOS)
+            .padding(.horizontal, 0)
+#else
             .padding(24)
+#endif
 
             Divider()
 
@@ -3718,14 +6239,22 @@ struct ShiftDefinitionSettingsView: View {
                 } label: {
                     Label("追加", systemImage: "plus")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
 
                 Spacer()
             }
+#if os(iOS)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+#else
             .padding(24)
+#endif
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("イベント管理")
+        .navigationBarTitleDisplayMode(.inline)
 #else
         .frame(minWidth: 680, minHeight: 460)
 #endif
@@ -3744,10 +6273,10 @@ struct CalendarSettingsView: View {
     @AppStorage("appleCalendarIdentifier") private var appleCalendarIdentifier = ""
     @AppStorage("appleCalendarName") private var appleCalendarName = ""
     @AppStorage("appleRestEventTitle") private var appleRestEventTitle = "休"
-    @AppStorage("googleCalendarClientID") private var googleCalendarClientID = ""
     @AppStorage("googleCalendarID") private var googleCalendarID = "primary"
     @AppStorage("googleCalendarName") private var googleCalendarName = ""
     @AppStorage("googleRestEventTitle") private var googleRestEventTitle = "休"
+    @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
     @AppStorage("notionDataSourceID") private var notionDataSourceID = ""
     @AppStorage("notionDatabaseName") private var notionDatabaseName = ""
     @AppStorage("notionTitleProperty") private var notionTitleProperty = "tasks"
@@ -3757,7 +6286,6 @@ struct CalendarSettingsView: View {
     @AppStorage("notionRestEventTitle") private var notionRestEventTitle = "休"
     @StateObject private var appleCalendarProvider = AppleCalendarProvider()
     @StateObject private var googleCalendarProvider = GoogleCalendarProvider()
-    @State private var googleCalendarClientSecret = ""
     @State private var notionToken = ""
     @State private var notionProperties: [NotionPropertyOption] = []
     @State private var notionPropertyMessage = ""
@@ -3765,26 +6293,30 @@ struct CalendarSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+#if os(macOS)
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("カレンダー設定")
                         .font(.title.bold())
 
-                    Text("勤務情報の登録先を設定します。")
+                    Text("イベント情報の登録先を設定します。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
+#if os(macOS)
                 Button("完了") {
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
+#endif
             }
             .padding(24)
 
             Divider()
+#endif
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -3797,7 +6329,7 @@ struct CalendarSettingsView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        Text("ここで選択したカレンダーを、勤務イベントの登録先として使用します。")
+                        Text("ここで選択したカレンダーを、イベントの登録先として使用します。")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
@@ -3845,14 +6377,6 @@ struct CalendarSettingsView: View {
                                     .foregroundStyle(.orange)
                             }
 
-                            HStack(spacing: 8) {
-                                Text("休 →")
-                                    .foregroundStyle(.secondary)
-                                TextField("登録名（例: off）", text: $appleRestEventTitle)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                            .help("勤務表の「休」を、この名前で登録します。")
-
                             if !appleCalendarProvider.message.isEmpty {
                                 Text(appleCalendarProvider.message)
                                     .font(.callout)
@@ -3862,18 +6386,9 @@ struct CalendarSettingsView: View {
 
                     case .google:
                         calendarSection("Googleカレンダー", systemImage: "g.circle") {
-                            TextField("OAuthクライアントID", text: $googleCalendarClientID)
-                                .textFieldStyle(.roundedBorder)
-
-                            SecureField("OAuthクライアントシークレット", text: $googleCalendarClientSecret)
-                                .textFieldStyle(.roundedBorder)
-
                             HStack(spacing: 10) {
                                 Button {
-                                    googleCalendarProvider.signIn(
-                                        clientID: googleCalendarClientID,
-                                        clientSecret: googleCalendarClientSecret
-                                    )
+                                    googleCalendarProvider.signIn()
                                 } label: {
                                     Label(
                                         googleCalendarProvider.isAuthorized ? "Googleに再ログイン" : "Googleにログイン",
@@ -3881,11 +6396,7 @@ struct CalendarSettingsView: View {
                                     )
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(
-                                    googleCalendarProvider.isAuthorizing
-                                    || googleCalendarClientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                    || googleCalendarClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                )
+                                .disabled(googleCalendarProvider.isAuthorizing)
 
                                 if googleCalendarProvider.isAuthorized {
                                     Label("接続済み", systemImage: "checkmark.circle.fill")
@@ -3900,10 +6411,7 @@ struct CalendarSettingsView: View {
 
                             if googleCalendarProvider.isAuthorized {
                                 Button {
-                                    googleCalendarProvider.loadCalendars(
-                                        clientID: googleCalendarClientID,
-                                        clientSecret: googleCalendarClientSecret
-                                    )
+                                    googleCalendarProvider.loadCalendars()
                                 } label: {
                                     Label("カレンダー一覧を取得", systemImage: "arrow.clockwise")
                                 }
@@ -3937,13 +6445,14 @@ struct CalendarSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
 
-                            HStack(spacing: 8) {
-                                Text("休 →")
-                                    .foregroundStyle(.secondary)
-                                TextField("登録名（例: off）", text: $googleRestEventTitle)
-                                    .textFieldStyle(.roundedBorder)
+                            if googleCalendarProvider.japaneseHolidayCalendarID != nil {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Toggle("日本の祝日を表示", isOn: $googleShowJapaneseHolidays)
+                                    Text("Googleカレンダーの「日本の祝日」を、登録先と一緒に表示します。")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-                            .help("勤務表の「休」を、この名前で登録します。")
 
                             if !googleCalendarProvider.message.isEmpty {
                                 Text(googleCalendarProvider.message)
@@ -3951,7 +6460,7 @@ struct CalendarSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
 
-                            Text("Google Cloudで作成したOAuthクライアントIDとシークレットを入力し、Googleログイン後に登録先を選択します。")
+                            Text("Googleにログインしてカレンダーへのアクセスを許可し、登録先を選択します。")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
@@ -3973,46 +6482,6 @@ struct CalendarSettingsView: View {
                                 Label("接続先: \(notionDatabaseName)", systemImage: "checkmark.circle.fill")
                                     .foregroundStyle(.green)
                             }
-
-                            HStack(alignment: .top, spacing: 12) {
-                                notionPropertyField(
-                                    label: "タイトル列名",
-                                    help: "勤務名を入れるタイトル型",
-                                    placeholder: "例: tasks",
-                                    text: $notionTitleProperty
-                                )
-
-                                notionPropertyField(
-                                    label: "日付列名",
-                                    help: "日付・時間を入れる日付型",
-                                    placeholder: "例: due date",
-                                    text: $notionDateProperty
-                                )
-                            }
-
-                            HStack(alignment: .top, spacing: 12) {
-                                notionPropertyField(
-                                    label: "タグ列名",
-                                    help: "タグを入れる複数選択型",
-                                    placeholder: "例: tag",
-                                    text: $notionTagProperty
-                                )
-
-                                notionPropertyField(
-                                    label: "タグ値",
-                                    help: "登録するタグの名前",
-                                    placeholder: "例: shift",
-                                    text: $notionTagValue
-                                )
-                            }
-
-                            HStack(spacing: 8) {
-                                Text("休 →")
-                                    .foregroundStyle(.secondary)
-                                TextField("登録名（例: off）", text: $notionRestEventTitle)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                            .help("勤務表の「休」を、この名前で登録します。")
 
                             if isLoadingNotionProperties {
                                 ProgressView("Notionの列を取得中です...")
@@ -4074,23 +6543,34 @@ struct CalendarSettingsView: View {
                         }
                     }
 
+                    calendarSection("休の登録名", systemImage: "textformat") {
+                        switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
+                        case .apple:
+                            restEventTitleField($appleRestEventTitle)
+                        case .google:
+                            restEventTitleField($googleRestEventTitle)
+                        case .notion:
+                            restEventTitleField($notionRestEventTitle)
+                        }
+                    }
+
                     calendarSection("登録ルール", systemImage: "checklist") {
                         switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
                         case .apple:
                             ruleRow("休", "時間を指定しない終日イベントとして登録")
-                            ruleRow("勤務", "開始・終了時刻を指定して登録")
-                            ruleRow("複合勤務", "登録済みの勤務情報から時間を参照")
-                            ruleRow("日をまたぐ勤務", "現時点では未対応")
+                            ruleRow("イベント", "開始・終了時刻を指定して登録")
+                            ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
+                            ruleRow("日をまたぐイベント", "現時点では未対応")
                         case .notion:
                             ruleRow("休", "00:00〜23:59の時間付きデータとして登録")
-                            ruleRow("勤務", "日付プロパティに開始・終了時刻を登録")
-                            ruleRow("複合勤務", "登録済みの勤務情報から時間を参照")
-                            ruleRow("日をまたぐ勤務", "現時点では未対応")
+                            ruleRow("イベント", "日付プロパティに開始・終了時刻を登録")
+                            ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
+                            ruleRow("日をまたぐイベント", "現時点では未対応")
                         case .google:
                             ruleRow("休", "時間を指定しない終日イベントとして登録")
-                            ruleRow("勤務", "開始・終了時刻を指定して登録")
-                            ruleRow("複合勤務", "登録済みの勤務情報から時間を参照")
-                            ruleRow("日をまたぐ勤務", "現時点では未対応")
+                            ruleRow("イベント", "開始・終了時刻を指定して登録")
+                            ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
+                            ruleRow("日をまたぐイベント", "現時点では未対応")
                         }
                     }
                 }
@@ -4099,6 +6579,8 @@ struct CalendarSettingsView: View {
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("カレンダー設定")
+        .navigationBarTitleDisplayMode(.inline)
 #else
         .frame(minWidth: 680, minHeight: 620)
 #endif
@@ -4109,14 +6591,8 @@ struct CalendarSettingsView: View {
             googleCalendarProvider.loadSavedState()
             updateAppleCalendarName()
             updateGoogleCalendarName()
-            googleCalendarClientSecret = KeychainStore.string(for: "google-calendar-client-secret") ?? ""
-            if googleCalendarProvider.isAuthorized,
-               !googleCalendarClientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               !googleCalendarClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                googleCalendarProvider.loadCalendars(
-                    clientID: googleCalendarClientID,
-                    clientSecret: googleCalendarClientSecret
-                )
+            if googleCalendarProvider.isAuthorized {
+                googleCalendarProvider.loadCalendars()
             }
             notionToken = KeychainStore.string(for: "notion-access-token") ?? ""
 
@@ -4143,6 +6619,7 @@ struct CalendarSettingsView: View {
             updateAppleCalendarName()
         }
         .onChange(of: appleCalendarProvider.calendars) {
+            reconcileAppleCalendarSelection()
             updateAppleCalendarName()
         }
         .onChange(of: googleCalendarID) {
@@ -4150,9 +6627,6 @@ struct CalendarSettingsView: View {
         }
         .onChange(of: googleCalendarProvider.calendars) {
             updateGoogleCalendarName()
-        }
-        .onChange(of: googleCalendarClientSecret) {
-            KeychainStore.set(googleCalendarClientSecret, for: "google-calendar-client-secret")
         }
         .onChange(of: notionToken) {
             KeychainStore.set(notionToken, for: "notion-access-token")
@@ -4168,8 +6642,18 @@ struct CalendarSettingsView: View {
         }
     }
 
+    private func restEventTitleField(_ title: Binding<String>) -> some View {
+        HStack(spacing: 8) {
+            Text("休 →")
+                .foregroundStyle(.secondary)
+            TextField("登録名（例: off）", text: title)
+                .textFieldStyle(.roundedBorder)
+        }
+        .help("勤務表の「休」を、この名前で登録します。")
+    }
+
     private func calendarSection<Content: View>(
-        _ title: String,
+        _ title: LocalizedStringKey,
         systemImage: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -4194,26 +6678,6 @@ struct CalendarSettingsView: View {
         }
     }
 
-    private func notionPropertyField(
-        label: String,
-        help: String,
-        placeholder: String,
-        text: Binding<String>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.callout.weight(.semibold))
-
-            Text(help)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            TextField(placeholder, text: text)
-                .textFieldStyle(.roundedBorder)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private func updateAppleCalendarName() {
         let name: String
         if appleCalendarIdentifier.isEmpty {
@@ -4225,6 +6689,20 @@ struct CalendarSettingsView: View {
         }
 
         appleCalendarName = name
+    }
+
+    private func reconcileAppleCalendarSelection() {
+        guard !appleCalendarIdentifier.isEmpty,
+              !appleCalendarProvider.isLoading,
+              !appleCalendarProvider.calendars.isEmpty,
+              !appleCalendarProvider.calendars.contains(where: {
+                  $0.id == appleCalendarIdentifier
+              }) else {
+            return
+        }
+
+        appleCalendarIdentifier = ""
+        updateAppleCalendarName()
     }
 
     private func updateGoogleCalendarName() {
@@ -4242,7 +6720,6 @@ struct CalendarSettingsView: View {
             calendarDestination,
             appleCalendarIdentifier,
             appleRestEventTitle,
-            googleCalendarClientID,
             googleCalendarID,
             googleRestEventTitle,
             notionDataSourceID,
@@ -4641,15 +7118,16 @@ private final class CalendarEventManagerModel: ObservableObject {
     @Published private(set) var pendingDeletion: CalendarEventRecord?
     @Published private(set) var message = ""
 
-    private let destination: CalendarDestination
+    private var destination: CalendarDestination
     @Published private(set) var yearMonth: YearMonth
-    private let appleCalendarIdentifier: String
-    private let googleCalendarID: String
-    private let notionDataSourceID: String
-    private let notionDateProperty: String
-    private let notionTitleProperty: String
-    private let notionTagProperty: String
-    private let notionTagValue: String
+    private var appleCalendarIdentifier: String
+    private var googleCalendarID: String
+    private var googleShowJapaneseHolidays: Bool
+    private var notionDataSourceID: String
+    private var notionDateProperty: String
+    private var notionTitleProperty: String
+    private var notionTagProperty: String
+    private var notionTagValue: String
     private var localeIdentifier = "ja"
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = 0
@@ -4659,6 +7137,7 @@ private final class CalendarEventManagerModel: ObservableObject {
         yearMonth: YearMonth,
         appleCalendarIdentifier: String,
         googleCalendarID: String,
+        googleShowJapaneseHolidays: Bool,
         notionDataSourceID: String,
         notionDateProperty: String,
         notionTitleProperty: String,
@@ -4669,6 +7148,7 @@ private final class CalendarEventManagerModel: ObservableObject {
         self.yearMonth = yearMonth
         self.appleCalendarIdentifier = appleCalendarIdentifier
         self.googleCalendarID = googleCalendarID
+        self.googleShowJapaneseHolidays = googleShowJapaneseHolidays
         self.notionDataSourceID = notionDataSourceID
         self.notionDateProperty = notionDateProperty
         self.notionTitleProperty = notionTitleProperty
@@ -4687,6 +7167,42 @@ private final class CalendarEventManagerModel: ObservableObject {
         localeIdentifier = identifier
     }
 
+    func updateConfiguration(
+        destination: CalendarDestination,
+        appleCalendarIdentifier: String,
+        googleCalendarID: String,
+        googleShowJapaneseHolidays: Bool,
+        notionDataSourceID: String,
+        notionDateProperty: String,
+        notionTitleProperty: String,
+        notionTagProperty: String,
+        notionTagValue: String
+    ) {
+        let hasChanged = self.destination != destination
+            || self.appleCalendarIdentifier != appleCalendarIdentifier
+            || self.googleCalendarID != googleCalendarID
+            || self.googleShowJapaneseHolidays != googleShowJapaneseHolidays
+            || self.notionDataSourceID != notionDataSourceID
+            || self.notionDateProperty != notionDateProperty
+            || self.notionTitleProperty != notionTitleProperty
+            || self.notionTagProperty != notionTagProperty
+            || self.notionTagValue != notionTagValue
+
+        self.destination = destination
+        self.appleCalendarIdentifier = appleCalendarIdentifier
+        self.googleCalendarID = googleCalendarID
+        self.googleShowJapaneseHolidays = googleShowJapaneseHolidays
+        self.notionDataSourceID = notionDataSourceID
+        self.notionDateProperty = notionDateProperty
+        self.notionTitleProperty = notionTitleProperty
+        self.notionTagProperty = notionTagProperty
+        self.notionTagValue = notionTagValue
+
+        if hasChanged {
+            load()
+        }
+    }
+
     var groupedDays: [Int] {
         Array(Set(events.map(\.day))).sorted()
     }
@@ -4694,9 +7210,7 @@ private final class CalendarEventManagerModel: ObservableObject {
     func events(for day: Int) -> [CalendarEventRecord] {
         events
             .filter { $0.day == day }
-            .sorted { lhs, rhs in
-                lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-            }
+            .sorted(by: calendarEventComesBefore)
     }
 
     func dayHeader(for day: Int, locale: Locale) -> String {
@@ -4741,18 +7255,21 @@ private final class CalendarEventManagerModel: ObservableObject {
                     calendarColor = try client.fetchCalendarColor()
                     fetchedEvents = try client.fetch(yearMonth: yearMonth)
                 case .google:
-                    guard let clientSecret = KeychainStore.string(for: "google-calendar-client-secret"),
-                          !clientSecret.isEmpty,
-                          let clientID = UserDefaults.standard.string(forKey: "googleCalendarClientID"),
-                          !clientID.isEmpty else {
+                    guard GoogleTokenStore.load() != nil else {
                         throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
                     }
 
                     let client = GoogleCalendarAPIClient(
-                        clientID: clientID,
-                        clientSecret: clientSecret
+                        clientID: GoogleOAuthConfiguration.clientID
                     )
-                    fetchedEvents = try await client.fetchEvents(yearMonth: yearMonth, calendarID: googleCalendarID)
+                    var googleEvents = try await client.fetchEvents(
+                        yearMonth: yearMonth,
+                        calendarID: googleCalendarID
+                    )
+                    if googleShowJapaneseHolidays {
+                        googleEvents.append(contentsOf: try await client.fetchJapaneseHolidayEvents(yearMonth: yearMonth))
+                    }
+                    fetchedEvents = googleEvents
                     if let fetchedColor = fetchedEvents.compactMap({ $0.calendarColor }).first {
                         calendarColor = fetchedColor
                     } else {
@@ -4790,7 +7307,9 @@ private final class CalendarEventManagerModel: ObservableObject {
                             ? ShiftHubLocalization.string("終日", locale: displayLocale)
                             : event.detail,
                         isAllDay: event.isAllDay,
-                        calendarColor: event.calendarColor
+                        startDate: event.startDate,
+                        calendarColor: event.calendarColor,
+                        isReadOnly: event.isReadOnly
                     )
                 }
                 let eventsByDay = Dictionary(grouping: displayEvents, by: { $0.day })
@@ -4822,12 +7341,19 @@ private final class CalendarEventManagerModel: ObservableObject {
     }
 
     func requestDelete(_ event: CalendarEventRecord) {
+        guard !event.isReadOnly else { return }
         pendingDeletion = event
         isDeleteConfirmationPresented = true
     }
 
+    func deleteImmediately(_ event: CalendarEventRecord, completion: (() -> Void)? = nil) {
+        guard !event.isReadOnly else { return }
+        pendingDeletion = event
+        deletePending(completion: completion)
+    }
+
     func deletePending(completion: (() -> Void)? = nil) {
-        guard let target = pendingDeletion, !isDeleting else { return }
+        guard let target = pendingDeletion, !target.isReadOnly, !isDeleting else { return }
 
         isDeleting = true
         message = ""
@@ -4842,14 +7368,12 @@ private final class CalendarEventManagerModel: ObservableObject {
                         calendarIdentifier: appleCalendarIdentifier
                     ).deleteEvent(identifier: target.id)
                 case .google:
-                    guard let clientSecret = KeychainStore.string(for: "google-calendar-client-secret"),
-                          let clientID = UserDefaults.standard.string(forKey: "googleCalendarClientID") else {
+                    guard GoogleTokenStore.load() != nil else {
                         throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
                     }
 
                     try await GoogleCalendarAPIClient(
-                        clientID: clientID,
-                        clientSecret: clientSecret
+                        clientID: GoogleOAuthConfiguration.clientID
                     ).deleteEvent(calendarID: googleCalendarID, eventID: target.id)
                 case .notion:
                     guard let token = KeychainStore.string(for: "notion-access-token") else {
@@ -4954,6 +7478,7 @@ private final class AppleCalendarEventClient {
                 title: event.title?.isEmpty == false ? event.title! : "無題",
                 detail: event.isAllDay ? "終日" : timeRangeText(start: event.startDate, end: event.endDate),
                 isAllDay: event.isAllDay,
+                startDate: event.startDate,
                 calendarColor: calendarColor
             )
         }
@@ -5083,6 +7608,7 @@ private struct NotionCalendarEventClient {
                     title: title.isEmpty ? "無題" : title,
                     detail: detail,
                     isAllDay: !start.contains("T"),
+                    startDate: parseISO8601Date(start),
                     calendarColor: nil
                 ))
             }
@@ -5309,6 +7835,7 @@ private enum GoogleTokenStore {
 @MainActor
 private final class GoogleCalendarProvider: ObservableObject {
     @Published private(set) var calendars: [GoogleCalendarOption] = []
+    @Published private(set) var japaneseHolidayCalendarID: String?
     @Published private(set) var message = ""
     @Published private(set) var isLoading = false
     @Published private(set) var isAuthorizing = false
@@ -5323,30 +7850,19 @@ private final class GoogleCalendarProvider: ObservableObject {
         isAuthorized = GoogleTokenStore.load() != nil
     }
 
-    func signIn(clientID: String, clientSecret: String) {
-        let trimmedClientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedClientSecret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedClientID.isEmpty, !trimmedClientSecret.isEmpty else {
-            message = ShiftHubLocalization.string(
-                "OAuthクライアントIDとシークレットを入力してください。",
-                locale: Locale(identifier: localeIdentifier)
-            )
-            return
-        }
-
+    func signIn() {
         isAuthorizing = true
         message = ""
 
         Task { @MainActor [weak self] in
             do {
                 let tokens = try await GoogleOAuthClient.authorize(
-                    clientID: trimmedClientID,
-                    clientSecret: trimmedClientSecret,
                     localeIdentifier: self?.localeIdentifier ?? "ja"
                 )
                 GoogleTokenStore.save(tokens)
                 self?.isAuthorized = true
                 self?.calendars = []
+                self?.japaneseHolidayCalendarID = nil
                 self?.message = ShiftHubLocalization.string(
                     "Googleアカウントに接続しました。カレンダー一覧を取得してください。",
                     locale: Locale(identifier: self?.localeIdentifier ?? "ja")
@@ -5366,27 +7882,19 @@ private final class GoogleCalendarProvider: ObservableObject {
         }
     }
 
-    func loadCalendars(clientID: String, clientSecret: String) {
-        let trimmedClientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedClientSecret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedClientID.isEmpty, !trimmedClientSecret.isEmpty else {
-            message = ShiftHubLocalization.string(
-                "OAuthクライアントIDとシークレットを入力してください。",
-                locale: Locale(identifier: localeIdentifier)
-            )
-            return
-        }
-
+    func loadCalendars() {
         isLoading = true
         message = ""
 
         Task { @MainActor [weak self] in
             do {
-                let calendars = try await GoogleCalendarAPIClient(
-                    clientID: trimmedClientID,
-                    clientSecret: trimmedClientSecret
-                ).fetchCalendars()
+                let client = GoogleCalendarAPIClient(
+                    clientID: GoogleOAuthConfiguration.clientID
+                )
+                let calendars = try await client.fetchCalendars()
+                let holidayCalendarID = try await client.fetchJapaneseHolidayCalendarID()
                 self?.calendars = calendars
+                self?.japaneseHolidayCalendarID = holidayCalendarID
                 self?.isAuthorized = true
                 self?.message = calendars.isEmpty
                     ? ShiftHubLocalization.string(
@@ -5424,17 +7932,18 @@ private enum GoogleOAuthClient {
         "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
     ]
 
-    static func authorize(
-        clientID: String,
-        clientSecret: String,
-        localeIdentifier: String
-    ) async throws -> GoogleOAuthTokens {
+    static func authorize(localeIdentifier: String) async throws -> GoogleOAuthTokens {
+        let clientID = GoogleOAuthConfiguration.clientID
         let state = randomString(length: 32)
         let codeVerifier = randomString(length: 64)
         let codeChallenge = base64URL(SHA256.hash(data: Data(codeVerifier.utf8)))
+#if os(iOS)
+        let redirectURI = "\(GoogleOAuthConfiguration.callbackURLScheme):/oauthredirect"
+#else
         let server = GoogleOAuthLoopbackServer(localeIdentifier: localeIdentifier)
         let redirectURI = try await server.start()
         defer { server.stop() }
+#endif
 
         var components = URLComponents(url: authorizationEndpoint, resolvingAgainstBaseURL: false)
         components?.queryItems = [
@@ -5457,13 +7966,22 @@ private enum GoogleOAuthClient {
         guard NSWorkspace.shared.open(authorizationURL) else {
             throw GoogleCalendarError.browserUnavailable
         }
-#elseif os(iOS)
-        guard await UIApplication.shared.open(authorizationURL) else {
-            throw GoogleCalendarError.browserUnavailable
-        }
 #endif
 
+#if os(iOS)
+        let callbackURL = try await GoogleOAuthWebAuthenticationSession.authenticate(
+            authorizationURL: authorizationURL,
+            callbackURLScheme: GoogleOAuthConfiguration.callbackURLScheme
+        )
+        guard let callbackComponents = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+              let code = callbackComponents.queryItems?.first(where: { $0.name == "code" })?.value,
+              let callbackState = callbackComponents.queryItems?.first(where: { $0.name == "state" })?.value else {
+            throw GoogleCalendarError.invalidResponse
+        }
+        let callback = GoogleOAuthCallback(code: code, state: callbackState)
+#else
         let callback = try await server.waitForCallback()
+#endif
         guard callback.state == state else {
             throw GoogleCalendarError.invalidOAuthState
         }
@@ -5471,7 +7989,6 @@ private enum GoogleOAuthClient {
         return try await exchangeCode(
             callback.code,
             clientID: clientID,
-            clientSecret: clientSecret,
             redirectURI: redirectURI,
             codeVerifier: codeVerifier
         )
@@ -5480,21 +7997,23 @@ private enum GoogleOAuthClient {
     private static func exchangeCode(
         _ code: String,
         clientID: String,
-        clientSecret: String,
         redirectURI: String,
         codeVerifier: String
     ) async throws -> GoogleOAuthTokens {
         var request = URLRequest(url: tokenEndpoint)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = formBody([
+        var values = [
             "code": code,
             "client_id": clientID,
-            "client_secret": clientSecret,
             "redirect_uri": redirectURI,
             "grant_type": "authorization_code",
             "code_verifier": codeVerifier
-        ])
+        ]
+        if let clientSecret = GoogleOAuthConfiguration.clientSecret, !clientSecret.isEmpty {
+            values["client_secret"] = clientSecret
+        }
+        request.httpBody = formBody(values)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -5569,6 +8088,66 @@ private enum GoogleOAuthClient {
         return payload["message"] as? String ?? "不明なエラー"
     }
 }
+
+#if os(iOS)
+@MainActor
+private final class GoogleOAuthWebAuthenticationSession: NSObject, ASWebAuthenticationPresentationContextProviding {
+    private var session: ASWebAuthenticationSession?
+    private var continuation: CheckedContinuation<URL, Error>?
+
+    static func authenticate(authorizationURL: URL, callbackURLScheme: String) async throws -> URL {
+        let coordinator = GoogleOAuthWebAuthenticationSession()
+        return try await coordinator.start(
+            authorizationURL: authorizationURL,
+            callbackURLScheme: callbackURLScheme
+        )
+    }
+
+    private func start(authorizationURL: URL, callbackURLScheme: String) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            let session = ASWebAuthenticationSession(
+                url: authorizationURL,
+                callbackURLScheme: callbackURLScheme
+            ) { [weak self] callbackURL, error in
+                guard let self else { return }
+                self.session = nil
+
+                if let callbackURL {
+                    self.finish(.success(callbackURL))
+                } else if let error {
+                    self.finish(.failure(error))
+                } else {
+                    self.finish(.failure(GoogleCalendarError.authorizationCancelled))
+                }
+            }
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+            self.session = session
+
+            guard session.start() else {
+                self.session = nil
+                self.finish(.failure(GoogleCalendarError.browserUnavailable))
+                return
+            }
+        }
+    }
+
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: { $0.isKeyWindow })
+            ?? UIWindow(frame: UIScreen.main.bounds)
+    }
+
+    private func finish(_ result: Result<URL, Error>) {
+        let continuation = continuation
+        self.continuation = nil
+        continuation?.resume(with: result)
+    }
+}
+#endif
 
 private final class GoogleOAuthLoopbackServer: @unchecked Sendable {
     private let localeIdentifier: String
@@ -5672,7 +8251,7 @@ private final class GoogleOAuthLoopbackServer: @unchecked Sendable {
             sendResponse(
                 to: connection,
                 body: ShiftHubLocalization.string(
-                    "認証情報を受け取れませんでした。Shift Hubに戻ってください。",
+                    "認証情報を受け取れませんでした。Cal Hubに戻ってください。",
                     locale: Locale(identifier: localeIdentifier)
                 )
             )
@@ -5682,7 +8261,7 @@ private final class GoogleOAuthLoopbackServer: @unchecked Sendable {
         sendResponse(
             to: connection,
             body: ShiftHubLocalization.string(
-                "Googleログインが完了しました。このページを閉じてShift Hubに戻ってください。",
+                "Googleログインが完了しました。このページを閉じてCal Hubに戻ってください。",
                 locale: Locale(identifier: localeIdentifier)
             )
         )
@@ -5710,7 +8289,7 @@ private final class GoogleOAuthLoopbackServer: @unchecked Sendable {
 
 private struct GoogleCalendarAPIClient {
     let clientID: String
-    let clientSecret: String
+    let clientSecret: String? = GoogleOAuthConfiguration.clientSecret
 
     func fetchCalendars() async throws -> [GoogleCalendarOption] {
         var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/users/me/calendarList")!
@@ -5750,6 +8329,34 @@ private struct GoogleCalendarAPIClient {
             }
             return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
         }
+    }
+
+    func fetchJapaneseHolidayCalendarID() async throws -> String? {
+        var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/users/me/calendarList")!
+        components.queryItems = [
+            URLQueryItem(name: "minAccessRole", value: "reader")
+        ]
+
+        let data = try await sendRequest(url: components.url!, method: "GET")
+        guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = payload["items"] as? [[String: Any]] else {
+            throw GoogleCalendarError.invalidResponse
+        }
+
+        return items.compactMap { (item: [String: Any]) -> String? in
+            guard let id = item["id"] as? String else { return nil }
+            let title = ((item["summaryOverride"] as? String) ?? (item["summary"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let normalizedID = id.lowercased()
+            guard title.contains("日本の祝日")
+                    || title.contains("japanese holidays")
+                    || title.contains("japanese holiday")
+                    || normalizedID.contains("japanese#holiday") else {
+                return nil
+            }
+            return id
+        }.first
     }
 
     func createEvent(
@@ -5805,7 +8412,11 @@ private struct GoogleCalendarAPIClient {
         _ = try await sendRequest(url: url, method: "POST", body: bodyData)
     }
 
-    func fetchEvents(yearMonth: YearMonth, calendarID: String) async throws -> [CalendarEventRecord] {
+    func fetchEvents(
+        yearMonth: YearMonth,
+        calendarID: String,
+        isReadOnly: Bool = false
+    ) async throws -> [CalendarEventRecord] {
         guard let startDate = monthStart(yearMonth),
               let endDate = Calendar.current.date(byAdding: .month, value: 1, to: startDate) else {
             throw CalendarEventManagementError.invalidDate
@@ -5833,7 +8444,7 @@ private struct GoogleCalendarAPIClient {
         }
         let calendarColor = try? await fetchCalendarColor(calendarID: calendarID)
 
-        return items.compactMap { item in
+        return items.compactMap { (item: [String: Any]) -> CalendarEventRecord? in
             guard let identifier = item["id"] as? String,
                   let start = item["start"] as? [String: Any] else {
                 return nil
@@ -5850,7 +8461,9 @@ private struct GoogleCalendarAPIClient {
                     title: title,
                     detail: "終日",
                     isAllDay: true,
-                    calendarColor: calendarColor ?? nil
+                    startDate: dateOnlyDate(from: dateText),
+                    calendarColor: calendarColor ?? nil,
+                    isReadOnly: isReadOnly
                 )
             }
 
@@ -5868,9 +8481,23 @@ private struct GoogleCalendarAPIClient {
                 title: title,
                 detail: timeRangeText(start: dateTime, end: endDate),
                 isAllDay: false,
-                calendarColor: calendarColor ?? nil
+                startDate: dateTime,
+                calendarColor: calendarColor ?? nil,
+                isReadOnly: isReadOnly
             )
         }
+    }
+
+    func fetchJapaneseHolidayEvents(yearMonth: YearMonth) async throws -> [CalendarEventRecord] {
+        guard let calendarID = try await fetchJapaneseHolidayCalendarID() else {
+            return []
+        }
+
+        return try await fetchEvents(
+            yearMonth: yearMonth,
+            calendarID: calendarID,
+            isReadOnly: true
+        )
     }
 
     func fetchCalendarColor(calendarID: String) async throws -> CalendarDisplayColor? {
@@ -5904,6 +8531,15 @@ private struct GoogleCalendarAPIClient {
         formatter.timeZone = .current
         formatter.dateFormat = "H:mm"
         return "\(formatter.string(from: start))-\(formatter.string(from: end))"
+    }
+
+    private func dateOnlyDate(from value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: value)
     }
 
     private func sendRequest(url: URL, method: String, body: Data? = nil) async throws -> Data {
@@ -5955,12 +8591,15 @@ private struct GoogleCalendarAPIClient {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
         var components = URLComponents()
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
-            URLQueryItem(name: "client_secret", value: clientSecret),
             URLQueryItem(name: "refresh_token", value: tokens.refreshToken),
             URLQueryItem(name: "grant_type", value: "refresh_token")
         ]
+        if let clientSecret, !clientSecret.isEmpty {
+            queryItems.append(URLQueryItem(name: "client_secret", value: clientSecret))
+        }
+        components.queryItems = queryItems
         request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -6035,7 +8674,6 @@ private struct GoogleCalendarRegistrationResult {
 
 private struct GoogleCalendarEventWriter {
     let clientID: String
-    let clientSecret: String
 
     func register(
         cells: [ExtractedShiftCell],
@@ -6049,7 +8687,7 @@ private struct GoogleCalendarEventWriter {
             throw GoogleCalendarError.missingYearMonth
         }
 
-        let client = GoogleCalendarAPIClient(clientID: clientID, clientSecret: clientSecret)
+        let client = GoogleCalendarAPIClient(clientID: clientID)
         let definitionByTitle = Dictionary(
             uniqueKeysWithValues: definitions.map { (normalizedTitle($0.title), $0) }
         )
@@ -6411,7 +9049,7 @@ private enum AppleCalendarRegistrationError: LocalizedError {
     }
 }
 
-private enum CalendarDestination: String, CaseIterable, Identifiable {
+private enum CalendarDestination: String, CaseIterable, Identifiable, Equatable {
     case apple
     case google
     case notion
@@ -6500,46 +9138,39 @@ struct ShiftDefinitionRowView: View {
 
 #if os(iOS)
     private var iOSRow: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 18)
+        HStack(spacing: 6) {
+            TextField("タイトル", text: $definition.title)
+                .textFieldStyle(.roundedBorder)
+                .font(.callout)
+                .layoutPriority(1)
 
-                TextField("タイトル", text: $definition.title)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
+            compactTimePickerView("Start", selection: dateBinding(for: \.startMinutes))
 
-                Button(role: .destructive, action: deleteAction) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .frame(width: 28, height: 32)
-                .accessibilityLabel("削除")
-            }
+            Image(systemName: "minus")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
 
-            HStack(spacing: 10) {
-                compactTimePickerView("Start", selection: dateBinding(for: \.startMinutes))
-                compactTimePickerView("End", selection: dateBinding(for: \.endMinutes))
-            }
+            compactTimePickerView("End", selection: dateBinding(for: \.endMinutes))
         }
-        .padding(10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            Color.secondary.opacity(0.12),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
     }
 
     private func compactTimePickerView(_ title: String, selection: Binding<Date>) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 36, alignment: .leading)
-
-            DatePicker(title, selection: selection, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .datePickerStyle(.compact)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        DatePicker(title, selection: selection, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .datePickerStyle(.compact)
+        .controlSize(.small)
+        .font(.caption)
+        .frame(width: 76, height: 32)
+        .scaleEffect(0.78)
+        .environment(\.locale, Locale(identifier: "en_GB"))
+        .accessibilityLabel(title)
     }
 #else
     private var macOSRow: some View {
@@ -6584,6 +9215,7 @@ struct ShiftDefinitionRowView: View {
 
             DatePicker("", selection: selection, displayedComponents: .hourAndMinute)
                 .labelsHidden()
+                .environment(\.locale, Locale(identifier: "en_GB"))
                 .frame(width: 78)
         }
         .frame(width: 118, alignment: .leading)

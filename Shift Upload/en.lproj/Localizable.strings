@@ -8,10 +8,13 @@
 "勤務表を選択" = "Choose schedule";
 "読み込みを解除" = "Clear loaded schedule";
 "勤務表の読み込みを解除しました。" = "The loaded schedule was cleared.";
-"保存した勤務表" = "Saved schedules";
+"PDF一覧" = "PDF List";
 "保存した勤務表を選択して解析します。" = "Choose a saved schedule to analyze it.";
 "保存した勤務表がありません" = "No saved schedules";
 "勤務表を選択すると、ここに保存されます。" = "Schedules are saved here when you choose one.";
+"保存したPDFを表示または削除できます。" = "View or delete saved PDFs.";
+"保存したPDFがありません" = "No saved PDFs";
+"PDFを読み込むと、ここに保存されます。" = "Imported PDFs will be saved here.";
 "カレンダーへ登録" = "Register in calendar";
 "Appleカレンダーへ登録" = "Register in Apple Calendar";
 "Googleカレンダーへ登録" = "Register in Google Calendar";
@@ -19,7 +22,7 @@
 "カレンダーへ登録中です..." = "Registering events...";
 "「休」も登録しますか？" = "Register days off too?";
 "休も登録" = "Register days off";
-"勤務だけ登録" = "Register shifts only";
+"イベントだけ登録" = "Register events only";
 "キャンセル" = "Cancel";
 "表示" = "View";
 "表示形式" = "View mode";
@@ -43,14 +46,14 @@
 "PDFファイルを開けませんでした。" = "The PDF file could not be opened.";
 
 /* Single registration */
-"登録する日付と勤務を選択します。" = "Choose the date and shift to register.";
+"登録する日付とイベントを選択します。" = "Choose the date and event to register.";
 "年" = "Year";
 "月" = "Month";
 "日付" = "Date";
-"勤務" = "Shift";
+"イベント" = "Event";
 "休" = "Day off";
-"複合勤務" = "Combined shift";
-"日をまたぐ勤務" = "Overnight shift";
+"複合イベント" = "Combined event";
+"日をまたぐイベント" = "Overnight event";
 "休（終日）" = "Day off (all day)";
 "終日" = "All day";
 "日付未判定" = "Date undetermined";
@@ -71,25 +74,61 @@
 "イベント操作" = "Event actions";
 
 /* General settings */
-"アプリの表示と言語、勤務・カレンダー設定を管理します。" = "Manage the app language, shifts, and calendar settings.";
+"アプリの表示と言語、イベント・カレンダー設定を管理します。" = "Manage the app language, events, and calendar settings.";
 "一般" = "General";
 "言語" = "Language";
 "日本語" = "日本語";
-"勤務タイトルと時間を設定" = "Shift titles and times";
+"イベント設定" = "Event Settings";
+"検索" = "Search";
+"言語とiCloud同期を設定します。" = "Configure the language and iCloud sync.";
+"アプリの表示言語" = "App display language";
+"iCloud同期" = "iCloud Sync";
+"設定とPDFをiCloudで同期します。" = "Sync settings and PDFs with iCloud.";
+"イベントタイトルと時間を設定" = "Event titles and times";
 "カレンダー接続と登録先を設定" = "Calendar connections and destinations";
+"イベントタイトルと時間を管理します。" = "Manage event titles and times.";
+"イベントタイトルと開始・終了時刻を管理" = "Manage event titles and start/end times";
+"カレンダー接続と登録先を設定します。" = "Configure calendar connections and destinations.";
+"アプリ情報、プライバシー、著作権。" = "App information, privacy, and copyright.";
+
+/* About */
+"About" = "About";
+"Cal Hubについて" = "About Cal Hub";
+"このアプリについて" = "About this app";
+"イベントのタイトルや時間をアプリ内に保存し、任意のカレンダーへ簡単に登録・削除できるアプリです。勤務表を読み込んでイベントを登録することもできます。勤務表の読み込みは、年月・日付・勤務名・日ごとの勤務値を文字データとして含む、アプリが想定する形式の横向きPDFに対応しています。画像だけで構成されたスキャンPDFや縦向きPDFには対応していません。年月を取得できない場合は、ファイル名を「2026-01.pdf」のように変更してください。" = "Save event titles and times in the app, then easily register or delete them in your chosen calendar. You can also import schedules and register shift events. Schedule import supports landscape PDFs in the format expected by the app, with an extractable text layer containing the year and month, dates, the saved shift name, and daily shift values. Image-only scanned PDFs and portrait PDFs are not supported. If the year and month cannot be detected, rename the file in a format such as 2026-01.pdf.";
+"主な機能" = "Key Features";
+"勤務表を読み込み、保存した名前に一致する行から日付と勤務情報を抽出します。" = "Load a schedule and extract dates and shift information from the row matching the saved name.";
+"カレンダー登録" = "Calendar Registration";
+"Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。" = "Choose Apple Calendar, Google Calendar, or a Notion database as the destination.";
+"月を移動し、日付ごとのイベントを確認、変更、削除できます。" = "Move between months and review, change, or delete events by date.";
+"言語切替" = "Language";
+"設定から日本語と英語を切り替えられます。" = "Switch between Japanese and English in Settings.";
+"接続の準備" = "Connection Setup";
+"用意するもの: Apple IDでiCloudにサインインし、カレンダーを有効にした端末。クライアントIDやトークンは不要です。\n設定方法: 端末のカレンダーへのアクセスを許可し、カレンダー設定で「カレンダー一覧を取得」から登録先カレンダーを選択します。" = "What you need: A device signed in to iCloud with Calendar enabled. No client ID or token is required.\nSetup: Allow Cal Hub to access your calendars, then open Calendar Settings, choose Fetch Calendar List, and select a destination calendar.";
+"用意するもの: Googleアカウント。\n設定方法: Googleログインを選択し、カレンダーへのアクセスを許可して登録先を選択してください。OAuthクライアントの設定はアプリ側で管理します。" = "What you need: A Google account.\nSetup: Choose Sign in with Google, allow calendar access, and choose a destination calendar. OAuth client settings are managed by the app.";
+"用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型・複数選択型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列・タグ列・タグ値を選択してください。" = "What you need: A Notion internal integration, its access token, and the target database ID. The database must have title, date, and multi-select properties.\nSetup: Create an internal integration in Notion's My integrations and copy its token. Add the integration to the target database's connections, get the database ID from its URL, and enter it in Settings. Fetch the properties, then choose the title, date, tag, and tag value.";
+"プライバシーポリシー" = "Privacy Policy";
+"勤務表、イベント設定、登録先の設定は、この端末に保存されます。iCloud同期を有効にした場合は、同期対象の設定と保存済みPDFがユーザー専用のiCloud領域に保存されます。" = "Schedules, event settings, and destination settings are stored on this device. When iCloud Sync is enabled, syncable settings and saved PDFs are stored in the user's private iCloud storage.";
+"Appleカレンダー、Googleカレンダー、Notionの情報は、ユーザーが接続・取得・登録を実行した場合にのみ、それぞれのサービスへ送信されます。Notionのアクセストークンなどの認証情報は端末の安全な保存領域で管理されます。" = "Apple Calendar, Google Calendar, and Notion data are sent to each service only when you connect, fetch, or register data. Credentials such as the Notion access token are stored in the device's secure storage.";
+"このアプリは、ユーザーが選択した勤務表やカレンダーの内容を広告目的で利用しません。各サービスの利用やデータ保存については、それぞれのサービスのポリシーも適用されます。" = "This app does not use your selected schedules or calendar content for advertising. Each service's policies also apply to your use of that service and its data storage.";
+"著作権" = "Copyright";
+"Cal Hubの名称、画面、ソフトウェアおよび関連資料の著作権は、別途記載がある場合を除き、Tomoaki Naritaに帰属します。" = "Unless otherwise noted, the Cal Hub name, screens, software, and related materials are copyrighted by Tomoaki Narita.";
+"サポート" = "Support";
+"サポート・ソースコード" = "Support and Source Code";
 
 /* Shift settings */
-"勤務設定" = "Shift settings";
-"追加ボタンから勤務タイトルと時間を登録してください。" = "Use Add to save shift titles and times.";
+"追加ボタンからイベントタイトルと時間を登録してください。" = "Use Add to save event titles and times.";
 "追加" = "Add";
 "削除" = "Delete";
 
 /* Calendar settings */
 "カレンダー設定" = "Calendar settings";
-"勤務情報の登録先を設定します。" = "Configure where shift information is registered.";
+"イベント情報の登録先を設定します。" = "Configure where event information is registered.";
 "登録先カレンダー" = "Destination calendar";
 "登録先" = "Destination";
-"ここで選択したカレンダーを、勤務イベントの登録先として使用します。" = "The selected calendar will be used for shift events.";
+"ここで選択したカレンダーを、イベントの登録先として使用します。" = "The selected calendar will be used for events.";
+"日本の祝日を表示" = "Show Japanese holidays";
+"Googleカレンダーの「日本の祝日」を、登録先と一緒に表示します。" = "Show Google Calendar's Japanese holidays together with the registration calendar.";
 "Appleカレンダー" = "Apple Calendar";
 "Googleカレンダー" = "Google Calendar";
 "Notion Calendar / Notionデータベース" = "Notion Calendar / Notion database";
@@ -105,7 +144,7 @@
 "接続済み" = "Connected";
 "ブラウザでGoogleログインを待っています..." = "Waiting for Google sign-in in the browser...";
 "カレンダー一覧を取得して登録先を選択してください。" = "Fetch the calendar list and choose a destination.";
-"Google Cloudで作成したOAuthクライアントIDとシークレットを入力し、Googleログイン後に登録先を選択します。" = "Enter the OAuth client ID and secret from Google Cloud, sign in, then choose a destination.";
+"Google Cloudで作成したOAuthクライアントIDとシークレットを入力し、Googleログイン後に登録先を選択します。" = "Sign in with Google, allow calendar access, and choose a destination calendar.";
 "Bearer" = "Bearer";
 "ntn_から始まるトークン" = "Token beginning with ntn_";
 "データベースID" = "Database ID";
@@ -113,7 +152,7 @@
 "日付列名" = "Date property";
 "タグ列名" = "Tag property";
 "タグ値" = "Tag value";
-"勤務名を入れるタイトル型" = "Title property for the shift name";
+"イベント名を入れるタイトル型" = "Title property for the event name";
 "日付・時間を入れる日付型" = "Date property for dates and times";
 "タグを入れる複数選択型" = "Multi-select property for the tag";
 "登録するタグの名前" = "Name of the tag to register";
@@ -134,16 +173,16 @@
 "時間を指定しない終日イベントとして登録" = "Register as an all-day event without specifying a time";
 "開始・終了時刻を指定して登録" = "Register with start and end times";
 "日付プロパティに開始・終了時刻を登録" = "Register start and end times in the date property";
-"登録済みの勤務情報から時間を参照" = "Use times from saved shift information";
+"登録済みのイベント情報から時間を参照" = "Use times from saved event information";
 "現時点では未対応" = "Not supported yet";
 
 /* Common placeholders and messages */
-"保存する勤務を選択してください。" = "Choose the shifts to save.";
-"勤務一覧にありません" = "Not in the saved shifts";
+"保存するイベントを選択してください。" = "Choose the events to save.";
+"イベント一覧にありません" = "Not in the saved events";
 "保存" = "Save";
 "閉じる" = "Close";
 "休 →" = "Day off →";
-"勤務タイトルと時間を保存します。" = "Save shift titles and times.";
+"イベントタイトルと時間を保存します。" = "Save event titles and times.";
 "Name..." = "Name...";
 "タイトル" = "Title";
 "PDF、JPG、PNGの勤務表を選択" = "Choose a PDF, JPG, or PNG schedule";
@@ -166,13 +205,16 @@
 
 /* Additional UI and dynamic messages */
 "今すぐ同期" = "Sync now";
-"勤務名" = "Shift name";
-"勤務を選択" = "Choose shift";
-"変更を適用" = "Apply changes";
+"イベント名" = "Event name";
 "イベントを選択" = "Choose event";
+"変更を適用" = "Apply changes";
+"複数選択" = "Select multiple";
+"複数の日付を選択し、保存済みのイベントをまとめて登録できます。" = "Select multiple dates and register a saved event for them at once.";
+"選択中: %@" = "Selected: %@";
+"選択を全解除" = "Clear selection";
 "カレンダーを変更" = "Change calendar";
-"勤務設定がありません" = "No shift settings";
-"勤務名と開始・終了時刻を管理" = "Manage shift names and start/end times";
+"イベント設定がありません" = "No event settings";
+"イベント名と開始・終了時刻を管理" = "Manage event names and start/end times";
 "Apple・Google・Notionの接続先を管理" = "Manage Apple, Google, and Notion destinations";
 "Notion DBへ登録" = "Register in Notion database";
 "Notion APIエラー" = "Notion API error";
@@ -218,8 +260,8 @@
 "列を取得できませんでした: %@" = "Could not fetch properties: %@";
 "Googleログインに失敗しました: %@" = "Google sign-in failed: %@";
 "Googleアカウントに接続しました。カレンダー一覧を取得してください。" = "Connected to Google. Fetch the calendar list.";
-"Googleログインが完了しました。このページを閉じてShift Hubに戻ってください。" = "Google sign-in is complete. Close this page and return to Shift Hub.";
-"認証情報を受け取れませんでした。Shift Hubに戻ってください。" = "Authentication information was not received. Return to Shift Hub.";
+"Googleログインが完了しました。このページを閉じてCal Hubに戻ってください。" = "Google sign-in is complete. Close this page and return to Cal Hub.";
+"認証情報を受け取れませんでした。Cal Hubに戻ってください。" = "Authentication information was not received. Return to Cal Hub.";
 "現在の登録先: %@" = "Current destination: %@";
 "接続先: %@" = "Connected destination: %@";
 "日付を作成できませんでした: %@" = "Could not create the date: %@";
@@ -227,10 +269,10 @@
 "勤務表の「休」を、この名前で登録します。" = "Register schedule days off with this name.";
 "勤務表に含まれる「休」を、00:00〜23:59の時間付きデータとして登録できます。" = "Days off can be registered with a 00:00-23:59 time range.";
 "勤務表に含まれる「休」を、時間を指定しない終日イベントとして登録できます。" = "Days off can be registered as all-day events without a specified time.";
-"%@日の勤務名を変更しました。カレンダーへ登録すると反映されます。" = "The shift name for day %@ was changed. Register it in the calendar to apply the change.";
-"%@日の勤務を変更しました。カレンダーへ登録すると反映されます。" = "The shift for day %@ was changed. Register it in the calendar to apply the change.";
-"%@件の勤務を勤務一覧に保存しました。時間は勤務設定から変更できます。" = "Saved %@ shifts to the shift list. You can change their times in Shift Settings.";
-"選択した勤務を勤務一覧に保存しませんでした。" = "The selected shifts were not saved to the shift list.";
+"%@日のイベント名を変更しました。カレンダーへ登録すると反映されます。" = "The event name for day %@ was changed. Register it in the calendar to apply the change.";
+"%@日のイベントを変更しました。カレンダーへ登録すると反映されます。" = "The event for day %@ was changed. Register it in the calendar to apply the change.";
+"%@件のイベントをイベント一覧に保存しました。時間はイベント設定から変更できます。" = "Saved %@ events to the event list. You can change their times in Event Settings.";
+"選択したイベントをイベント一覧に保存しませんでした。" = "The selected events were not saved to the event list.";
 "文字を認識できませんでした。画像が暗い、傾いている、または解像度が低い可能性があります。" = "No text could be recognized. The image may be dark, tilted, or low-resolution.";
 "%@件のイベントを取得しました。" = "Fetched %@ events.";
 "%@件のカレンダーを取得しました。" = "Fetched %@ calendars.";
@@ -238,12 +280,22 @@
 "文字データを持つPDFではありません" = "This PDF does not contain text data";
 "横型のPDFのみ対応しています" = "Only landscape PDFs are supported";
 "Google Calendar APIエラー: %@" = "Google Calendar API error: %@";
-"未登録の勤務はスキップしました: %@" = "Skipped unregistered shifts: %@";
+"未登録のイベントはスキップしました: %@" = "Skipped unregistered events: %@";
 "%@件をAppleカレンダーへ登録しました。%@" = "Registered %@ events in Apple Calendar.%@";
 "%@件をGoogleカレンダーへ登録しました。%@" = "Registered %@ events in Google Calendar.%@";
 "%@件をNotionへ登録しました。%@" = "Registered %@ events in Notion.%@";
 "00:00〜23:59の時間付きデータとして登録" = "Register with a 00:00-23:59 time range";
-"登録する勤務を勤務設定から選択します。" = "Choose a shift to register from Shift Settings.";
+"登録するイベントをイベント設定から選択します。" = "Choose an event to register from Event Settings.";
 "無題" = "Untitled";
 "%@日の「%@」" = "Day %@: %@";
 "%@日の「%@」\n%@" = "Day %@: %@\n%@";
+"保存したPDFを表示" = "View saved PDF";
+"縮小" = "Zoom out";
+"拡大" = "Zoom in";
+"ページに合わせる" = "Fit to page";
+"PDFを表示できません" = "Could not display the PDF";
+"保存したPDFを開けませんでした。" = "The saved PDF could not be opened.";
+"閉じる" = "Close";
+"このPDFをスキャン" = "Scan this PDF";
+"前のPDF" = "Previous PDF";
+"次のPDF" = "Next PDF";

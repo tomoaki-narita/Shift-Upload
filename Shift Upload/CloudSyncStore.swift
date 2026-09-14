@@ -22,6 +22,10 @@ struct ShiftHubCloudSettings: Codable, Equatable {
 enum ShiftHubCloudSync {
     static let containerIdentifier = "iCloud.net.unwraps.Shift-Hub"
 
+    static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: "iCloudSyncEnabled") as? Bool ?? true
+    }
+
     private static let settingsKey = "shiftHub.settings.v1"
     private static let schedulesKey = "shiftHub.schedules.v1"
     private static let settingsRecordType = "ShiftHubSettings"
@@ -44,6 +48,7 @@ enum ShiftHubCloudSync {
     }
 
     static func saveSettings(_ settings: ShiftHubCloudSettings) {
+        guard isEnabled else { return }
         cacheSettings(settings)
         Task {
             await saveSettingsToCloudKit(settings)
@@ -51,11 +56,13 @@ enum ShiftHubCloudSync {
     }
 
     static func loadSettings() -> ShiftHubCloudSettings? {
+        guard isEnabled else { return nil }
         guard let data = keyValueStore.data(forKey: settingsKey) else { return nil }
         return try? JSONDecoder().decode(ShiftHubCloudSettings.self, from: data)
     }
 
     static func saveSchedules(_ schedules: [StoredSchedule]) {
+        guard isEnabled else { return }
         guard let data = try? JSONEncoder().encode(schedules) else { return }
         keyValueStore.set(data, forKey: schedulesKey)
         keyValueStore.synchronize()
@@ -65,6 +72,7 @@ enum ShiftHubCloudSync {
     }
 
     static func loadSchedules() -> [StoredSchedule] {
+        guard isEnabled else { return [] }
         guard let data = keyValueStore.data(forKey: schedulesKey),
               let schedules = try? JSONDecoder().decode([StoredSchedule].self, from: data) else {
             return []
@@ -74,6 +82,7 @@ enum ShiftHubCloudSync {
     }
 
     static func loadSettingsFromCloudKit() async -> Result<ShiftHubCloudSettings?, Error> {
+        guard isEnabled else { return .success(nil) }
         let recordID = CKRecord.ID(recordName: settingsRecordName)
 
         do {
@@ -108,6 +117,7 @@ enum ShiftHubCloudSync {
     }
 
     static func synchronizeSchedulesFromCloudKit(with localSchedules: [StoredSchedule]) async -> Result<[StoredSchedule], Error> {
+        guard isEnabled else { return .success(localSchedules) }
         let cloudSchedules: [(StoredSchedule, URL)]
         do {
             cloudSchedules = try await fetchCloudSchedules().get()
@@ -138,6 +148,7 @@ enum ShiftHubCloudSync {
     }
 
     static func mirrorPDF(from localURL: URL, named fileName: String) {
+        guard isEnabled else { return }
         guard let cloudURL = cloudDirectoryURL()?.appendingPathComponent(fileName) else { return }
 
         do {
@@ -157,6 +168,7 @@ enum ShiftHubCloudSync {
     }
 
     static func removePDF(named fileName: String) {
+        guard isEnabled else { return }
         guard let cloudURL = cloudDirectoryURL()?.appendingPathComponent(fileName) else { return }
         try? FileManager.default.removeItem(at: cloudURL)
     }
