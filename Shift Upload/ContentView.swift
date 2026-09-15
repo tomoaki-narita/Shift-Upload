@@ -12,16 +12,71 @@ import ImageIO
 import Network
 import PDFKit
 import Security
-import SwiftUI
 import UniformTypeIdentifiers
 import Vision
 import AuthenticationServices
+import SwiftUI
 
 #if os(macOS)
 import AppKit
 #elseif os(iOS)
 import UIKit
 #endif
+
+private struct CalHubDateActionSheetHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct CalHubDateActionSheetContainer<Content: View>: View {
+    private let content: Content
+#if os(iOS)
+    @State private var measuredHeight: CGFloat = 240
+#endif
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content
+        }
+#if os(iOS)
+            .padding(.horizontal, 20)
+            .padding(.top, 30)
+            .padding(.bottom, 20)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .preference(
+                            key: CalHubDateActionSheetHeightPreferenceKey.self,
+                            value: proxy.size.height
+                        )
+                }
+            }
+            .onPreferenceChange(CalHubDateActionSheetHeightPreferenceKey.self) { height in
+                guard height > 0, abs(measuredHeight - height) > 0.5 else { return }
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    measuredHeight = ceil(height)
+                }
+            }
+            .presentationDetents([.height(measuredHeight)])
+#else
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 14)
+        .frame(width: 250, alignment: .leading)
+#endif
+    }
+}
 
 private extension Notification.Name {
     static let shiftHubSettingsDidChange = Notification.Name("ShiftHubSettingsDidChange")
@@ -911,7 +966,6 @@ struct ContentView: View {
         .sheet(item: $selectedExtractedDirectDayAction) { action in
             if let cell = extractedCells.first(where: { Int($0.dateText) == action.day }) {
                 extractedShiftActionsPopover(for: cell, day: action.day)
-                    .presentationDetents([.height(extractedShiftActionSheetHeight)])
                     .presentationDragIndicator(.visible)
                     .onDisappear {
                         selectedExtractedDirectDayAction = nil
@@ -1196,12 +1250,13 @@ struct ContentView: View {
 #endif
             }
         }
+#if os(iOS)
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+#else
         .padding(.horizontal, 16)
         .padding(.top, 20)
         .padding(.bottom, 16)
-#if os(iOS)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-#else
         .frame(width: 250, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
 #endif
@@ -1235,18 +1290,21 @@ struct ContentView: View {
         let buttonSpacing: CGFloat = 8
         let dividerPadding: CGFloat = hasShift ? 12 : 10
         let fieldBottomPadding: CGFloat = 8
-        let contentTopPadding: CGFloat = 20
 
-        return VStack(alignment: .leading, spacing: 0) {
+        return CalHubDateActionSheetContainer {
+            VStack(alignment: .leading, spacing: 0) {
             Text(dayActionHeader(for: day))
                 .font(.headline)
                 .foregroundStyle(.primary)
+                .padding(.bottom, 10)
+
+            Divider()
 
             if hasShift {
                 Text(shiftName)
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary)
-                    .padding(.top, 8)
+                    .padding(.top, 11)
 
                 if let detail = extractedShiftDetail(for: cell) {
                     Text(detail)
@@ -1298,14 +1356,9 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .controlSize(.regular)
             .padding(.top, 12)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, contentTopPadding)
-        .padding(.bottom, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-
-    private let extractedShiftActionSheetHeight: CGFloat = 360
 
     private func extractedShiftActionMenu(for cell: ExtractedShiftCell, day: Int) -> some View {
         let shiftName = cell.valueText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3852,6 +3905,7 @@ private struct CalendarEventManagerView: View {
     let onSynchronize: () -> Void
 
     @Environment(\.locale) private var locale
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
     @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
     @Environment(\.dismiss) private var dismiss
@@ -3871,6 +3925,10 @@ private struct CalendarEventManagerView: View {
     @State private var isYearMonthPickerPresented = false
     @State private var isCalendarDestinationMenuPresented = false
     @State private var monthPageID: Int?
+    @State private var didEnterBackground = false
+#if os(macOS)
+    @State private var isCalendarLiveResizing = false
+#endif
     private let monthPageAnchor: YearMonth
     private static let monthPageRadius = 120
 
@@ -3994,7 +4052,7 @@ private struct CalendarEventManagerView: View {
                     monthNavigationControls
 
                     Button {
-                        model.load()
+                        model.load(forceRefresh: true)
                     } label: {
                         if model.isLoading {
                             ProgressView()
@@ -4026,7 +4084,7 @@ private struct CalendarEventManagerView: View {
                     calendarDestinationMenu
 
                     Button {
-                        model.load()
+                        model.load(forceRefresh: true)
                     } label: {
                         if model.isLoading {
                             ProgressView()
@@ -4090,11 +4148,12 @@ private struct CalendarEventManagerView: View {
                     Text(LocalizedStringKey(model.message))
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .frame(height: 32, alignment: .topLeading)
+            .frame(minHeight: 20, alignment: .topLeading)
             .padding(.horizontal, 24)
             .padding(.bottom, 12)
 #else
@@ -4102,6 +4161,8 @@ private struct CalendarEventManagerView: View {
                 Text(LocalizedStringKey(model.message))
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 12)
             }
@@ -4201,7 +4262,7 @@ private struct CalendarEventManagerView: View {
 
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    onOpenPDFList()
+                    leaveDaySelectionModeAndOpen(onOpenPDFList)
                 } label: {
                     Image(systemName: "folder")
                         .font(.body.weight(.semibold))
@@ -4235,7 +4296,7 @@ private struct CalendarEventManagerView: View {
 
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    onOpenShiftUpload()
+                    leaveDaySelectionModeAndOpen(onOpenShiftUpload)
                 } label: {
                     Image(systemName: "doc.viewfinder")
                         .font(.body.weight(.semibold))
@@ -4250,7 +4311,7 @@ private struct CalendarEventManagerView: View {
 
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    onOpenSettings()
+                    leaveDaySelectionModeAndOpen(onOpenSettings)
                 } label: {
                     Image(systemName: "gearshape")
                         .font(.body.weight(.semibold))
@@ -4265,6 +4326,21 @@ private struct CalendarEventManagerView: View {
         .task {
             model.setLocaleIdentifier(locale.identifier)
             model.load()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                didEnterBackground = true
+            case .active where didEnterBackground:
+                didEnterBackground = false
+                model.refreshAllCachedMonths()
+            default:
+                break
+            }
+        }
+        .onChange(of: isSynchronizing) { wasSynchronizing, isSynchronizing in
+            guard wasSynchronizing, !isSynchronizing, isCloudSyncEnabled else { return }
+            model.refreshAllCachedMonths()
         }
         .onChange(of: calendarEventManagerConfigurationKey) {
             model.updateConfiguration(
@@ -4296,6 +4372,11 @@ private struct CalendarEventManagerView: View {
         .onChange(of: monthPageID) { _, pageID in
             guard let pageID,
                   (0...Self.monthPageRadius * 2).contains(pageID) else { return }
+#if os(macOS)
+            if isCalendarLiveResizing {
+                return
+            }
+#endif
 
             let target = monthForPageID(pageID)
             guard target != model.yearMonth else { return }
@@ -4305,6 +4386,21 @@ private struct CalendarEventManagerView: View {
             selectedMonth = target.month
             model.load()
         }
+#if os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willStartLiveResizeNotification)) { _ in
+            isCalendarLiveResizing = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { _ in
+            isCalendarLiveResizing = false
+            if let currentPageID = pageID(for: model.yearMonth) {
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    monthPageID = currentPageID
+                }
+            }
+        }
+#endif
         .alert(
             shiftTitleAfterDelete == nil ? "イベントを削除しますか？" : "削除してイベントを登録しますか？",
             isPresented: $model.isDeleteConfirmationPresented
@@ -4322,7 +4418,7 @@ private struct CalendarEventManagerView: View {
                             model.yearMonth,
                             deletedEvent.day,
                             selectedTitle,
-                            RegistrationCompletion { model.load() }
+                            RegistrationCompletion { model.load(forceRefresh: true) }
                         )
                     }
                 }
@@ -4380,7 +4476,7 @@ private struct CalendarEventManagerView: View {
 
             HStack(spacing: 8) {
                 Button {
-                    onOpenPDFList()
+                    leaveDaySelectionModeAndOpen(onOpenPDFList)
                 } label: {
                     Image(systemName: "folder")
                         .frame(width: 36, height: 36)
@@ -4402,7 +4498,7 @@ private struct CalendarEventManagerView: View {
                 .accessibilityLabel(isDaySelectionMode ? "複数選択を解除" : "複数選択")
 
                 Button {
-                    onOpenShiftUpload()
+                    leaveDaySelectionModeAndOpen(onOpenShiftUpload)
                 } label: {
                     Image(systemName: "doc.viewfinder")
                         .frame(width: 36, height: 36)
@@ -4411,7 +4507,7 @@ private struct CalendarEventManagerView: View {
                 .accessibilityLabel("勤務表")
 
                 Button {
-                    onOpenSettings()
+                    leaveDaySelectionModeAndOpen(onOpenSettings)
                 } label: {
                     Image(systemName: "gearshape")
                         .frame(width: 36, height: 36)
@@ -4714,29 +4810,35 @@ private struct CalendarEventManagerView: View {
 
     private var eventCalendarView: some View {
         GeometryReader { geometry in
-            let pageWidth = geometry.size.width
-
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 0) {
                     ForEach(0...(Self.monthPageRadius * 2), id: \.self) { pageID in
                         let pageMonth = monthForPageID(pageID)
-                        let pageEvents = pageMonth == model.yearMonth ? model.events : []
+                        let pageEvents = model.cachedEvents(for: pageMonth)
 
                         eventCalendarPage(
                             for: pageMonth,
                             events: pageEvents,
                             availableHeight: geometry.size.height
                         )
-                            .frame(width: pageWidth)
-                            .frame(height: geometry.size.height)
-                            .id(pageID)
+                        .containerRelativeFrame(.horizontal)
+                        .frame(height: geometry.size.height)
+                        .id(pageID)
                     }
                 }
                 .scrollTargetLayout()
             }
             .scrollIndicators(.hidden)
-            .scrollTargetBehavior(.paging)
+            .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
             .scrollPosition(id: $monthPageID)
+#if os(macOS)
+            .transaction { transaction in
+                if isCalendarLiveResizing {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            }
+#endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -4767,7 +4869,7 @@ private struct CalendarEventManagerView: View {
 
         return ScrollView {
             LazyVGrid(columns: eventCalendarColumns, spacing: gridSpacing) {
-                ForEach(slots, id: \.self) { (slot: Int) in
+                ForEach(slots, id: \.self) { slot in
                     if slot < leadingBlankCount {
                         Color.clear
                             .frame(maxWidth: .infinity)
@@ -4822,6 +4924,30 @@ private struct CalendarEventManagerView: View {
         .background(.background)
     }
 
+    private func roundedEventAccent(color: Color, width: CGFloat) -> some View {
+        GeometryReader { proxy in
+            let radius = width / 2
+            Path { path in
+                path.move(to: CGPoint(x: radius, y: radius))
+                path.addLine(to: CGPoint(x: radius, y: max(radius, proxy.size.height - radius)))
+            }
+            .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
+        }
+        .frame(width: width)
+    }
+
+    private func roundedTodayUnderline() -> some View {
+        GeometryReader { proxy in
+            Path { path in
+                path.move(to: CGPoint(x: 1, y: 1))
+                path.addLine(to: CGPoint(x: max(1, proxy.size.width - 1), y: 1))
+            }
+            .stroke(managerAccentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        }
+        .frame(height: 2)
+        .offset(y: 1)
+    }
+
     private func eventDayCell(
         day: Int,
         yearMonth: YearMonth,
@@ -4832,15 +4958,14 @@ private struct CalendarEventManagerView: View {
         cardHeight: CGFloat
     ) -> some View {
         let dayEvents = events.filter { $0.day == day }
-        let actionableEventCount = dayEvents.reduce(into: 0) { count, event in
-            if !event.isReadOnly { count += 1 }
-        }
-        let hasDisplayOnlyEvents = dayEvents.contains { $0.isReadOnly }
         let displayEvents = Array(dayEvents.sorted(by: calendarEventComesBefore).prefix(3))
         let shouldShowEventDetail = displayEvents.count <= 2
         let selection = CalendarDaySelection(year: yearMonth.year, month: yearMonth.month, day: day)
+        let isToday = Calendar.current.date(
+            from: DateComponents(year: yearMonth.year, month: yearMonth.month, day: day)
+        ).map(Calendar.current.isDateInToday) ?? false
 #if os(iOS)
-        let contentSpacing: CGFloat = 3
+        let contentSpacing: CGFloat = 5
         let eventSpacing: CGFloat = 2
 #else
         let contentSpacing: CGFloat = 7
@@ -4912,14 +5037,19 @@ private struct CalendarEventManagerView: View {
                         .padding(.leading, 6)
 #endif
                         .overlay(alignment: .leading) {
-                            Capsule()
+                            Group {
 #if os(iOS)
-                                .fill(event.isRestEvent ? Color.red : event.calendarColor?.color ?? Color.accentColor)
-                                .frame(width: 2)
+                                roundedEventAccent(
+                                    color: event.isRestEvent ? Color.red : event.calendarColor?.color ?? Color.accentColor,
+                                    width: 2
+                                )
 #else
-                                .fill(event.isRestEvent ? Color.red : event.calendarColor?.color ?? Color.accentColor)
-                                .frame(width: 3)
+                                roundedEventAccent(
+                                    color: event.isRestEvent ? Color.red : event.calendarColor?.color ?? Color.accentColor,
+                                    width: 3
+                                )
 #endif
+                            }
                             .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
                     }
@@ -4934,6 +5064,11 @@ private struct CalendarEventManagerView: View {
 #else
                     .font(.body.weight(.semibold))
 #endif
+                    .overlay(alignment: .bottom) {
+                        if isToday {
+                            roundedTodayUnderline()
+                        }
+                    }
             }
             .padding(6)
 #if os(iOS)
@@ -4943,17 +5078,17 @@ private struct CalendarEventManagerView: View {
             .frame(height: cardHeight, alignment: .topLeading)
 #endif
             .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(
                         isSelectionMode
-                            ? Color.blue.opacity(isSelected ? 1 : 0.32)
+                            ? managerAccentColor.opacity(isSelected ? 1 : 0.18)
                             : .clear,
-                        lineWidth: isSelectionMode ? 1.5 : 0
+                        lineWidth: isSelectionMode ? 2 : 0
                     )
             }
             .animation(.easeOut(duration: 0.16), value: isSelected)
-            .clipped()
         }
 #if os(iOS)
         .frame(height: cardHeight, alignment: .top)
@@ -4967,6 +5102,21 @@ private struct CalendarEventManagerView: View {
             )
         )
         .disabled(model.isDeleting || !isInteractive)
+#if os(iOS)
+        .sheet(
+            isPresented: Binding(
+                get: { isInteractive && !isSelectionMode && selectedDayForActions == day },
+                set: { isPresented in
+                    if isInteractive && !isPresented && selectedDayForActions == day {
+                        selectedDayForActions = nil
+                    }
+                }
+            )
+        ) {
+            dayActionsPopover(for: day)
+                .presentationDragIndicator(.visible)
+        }
+#else
         .popover(
             isPresented: Binding(
                 get: { isInteractive && !isSelectionMode && selectedDayForActions == day },
@@ -4977,33 +5127,18 @@ private struct CalendarEventManagerView: View {
                 }
             )
         ) {
-#if os(iOS)
             dayActionsPopover(for: day)
-                .presentationDetents([.height(actionableEventCount == 0 ? (hasDisplayOnlyEvents ? 210 : 140) : 380)])
-                .presentationDragIndicator(.visible)
-#else
-            dayActionsPopover(for: day)
-#endif
         }
+#endif
     }
 
-    @ViewBuilder
     private func dayActionsPopover(for day: Int) -> some View {
         let dayEvents = model.events(for: day)
         let actionableEvents = dayEvents.filter { !$0.isReadOnly }
         let displayOnlyEvents = dayEvents.filter(\.isReadOnly)
-#if os(iOS)
-        let sheetHorizontalPadding: CGFloat = dayEvents.isEmpty ? 16 : 14
-        let sheetTopPadding: CGFloat = dayEvents.isEmpty ? 20 : 14
-        let sheetBottomPadding: CGFloat = dayEvents.isEmpty ? 0 : 14
-        let sheetMaxHeight: CGFloat? = dayEvents.isEmpty ? .infinity : nil
-#else
-        let sheetHorizontalPadding: CGFloat = 14
-        let sheetTopPadding: CGFloat = 14
-        let sheetBottomPadding: CGFloat = 14
-#endif
 
-        VStack(alignment: .leading, spacing: 0) {
+        return CalHubDateActionSheetContainer {
+            VStack(alignment: .leading, spacing: 0) {
             Text(model.dayHeader(for: day, locale: locale))
                 .font(.headline)
                 .padding(.bottom, 10)
@@ -5048,15 +5183,8 @@ private struct CalendarEventManagerView: View {
 
             eventRegistrationButton(forDay: day)
                 .padding(.top, 12)
+            }
         }
-        .padding(.horizontal, sheetHorizontalPadding)
-        .padding(.top, sheetTopPadding)
-        .padding(.bottom, sheetBottomPadding)
-#if os(iOS)
-        .frame(maxWidth: .infinity, maxHeight: sheetMaxHeight, alignment: .topLeading)
-#else
-        .frame(width: 250, alignment: .leading)
-#endif
     }
 
     private func eventRegistrationButton(forDay day: Int) -> some View {
@@ -5093,59 +5221,76 @@ private struct CalendarEventManagerView: View {
         for day: Int,
         events: [CalendarEventRecord]
     ) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                ForEach(events) { event in
-                    Divider()
-#if os(macOS)
-                    Menu {
-                        eventActions(for: event)
-                    } label: {
-                        (Text(event.title)
-                            .font(.callout.weight(.medium))
-                         + Text("\n")
-                         + Text(event.detail.isEmpty ? "終日" : event.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary))
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 6)
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-#else
-                    Button {
-                        selectedEventForActions = event
-                    } label: {
-                        HStack(spacing: 0) {
-                            eventListRowContent(for: event)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .popover(
-                        isPresented: Binding(
-                            get: { selectedEventForActions?.id == event.id },
-                            set: { isPresented in
-                                if !isPresented && selectedEventForActions?.id == event.id {
-                                    selectedEventForActions = nil
-                                }
-                            }
-                        )
-                    ) {
-                        eventActionsPopover(for: event, day: day)
-                            .presentationCompactAdaptation(.popover)
-                    }
-#endif
+        Group {
+            if events.count > 3 {
+                ScrollView {
+                    eventSelectionRows(for: day, events: events)
                 }
+                .frame(maxHeight: 220)
+            } else {
+                eventSelectionRows(for: day, events: events)
             }
         }
-        .frame(maxHeight: 220)
+    }
+
+    @ViewBuilder
+    private func eventSelectionRows(
+        for day: Int,
+        events: [CalendarEventRecord]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(events) { event in
+                Divider()
+#if os(macOS)
+                Menu {
+                    eventActions(for: event)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(event.title)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+
+                        Text(event.detail.isEmpty ? "終日" : event.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .frame(maxWidth: .infinity, alignment: .leading)
+#else
+                Button {
+                    selectedEventForActions = event
+                } label: {
+                    HStack(spacing: 0) {
+                        eventListRowContent(for: event)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .popover(
+                    isPresented: Binding(
+                        get: { selectedEventForActions?.id == event.id },
+                        set: { isPresented in
+                            if !isPresented && selectedEventForActions?.id == event.id {
+                                selectedEventForActions = nil
+                            }
+                        }
+                    )
+                ) {
+                    eventActionsPopover(for: event, day: day)
+                        .presentationCompactAdaptation(.popover)
+                }
+#endif
+            }
+        }
     }
 
 #if os(iOS)
@@ -5262,6 +5407,13 @@ private struct CalendarEventManagerView: View {
         isShiftSelectionPresented = true
     }
 
+    private func leaveDaySelectionModeAndOpen(_ action: () -> Void) {
+        if isDaySelectionMode {
+            exitDaySelectionMode()
+        }
+        action()
+    }
+
     private func enterDaySelectionMode() {
         selectedDayForActions = nil
         isCalendarDestinationMenuPresented = false
@@ -5298,11 +5450,15 @@ private struct CalendarEventManagerView: View {
 
         isShiftSelectionPresented = false
         exitDaySelectionMode()
+        let registeredYearMonths = Set(selections.map {
+            YearMonth(year: $0.year, month: $0.month)
+        })
         onRegisterShifts(
             selections,
             title,
             RegistrationCompletion {
-                model.load()
+                model.invalidateCachedMonths(registeredYearMonths)
+                model.load(forceRefresh: true)
             }
         )
     }
@@ -5330,7 +5486,7 @@ private struct CalendarEventManagerView: View {
                 model.yearMonth,
                 pendingShiftRegistration.day,
                 title,
-                RegistrationCompletion { model.load() }
+                RegistrationCompletion { model.load(forceRefresh: true) }
             )
         }
     }
@@ -5639,9 +5795,9 @@ private struct ShiftHubMacSettingsView: View {
             }
 
             ShiftHubMacSettingsSectionCard {
-                Text("このアプリについて")
+                Text(localized("このアプリについて"))
                     .font(.headline)
-                Text("イベントのタイトルや時間をアプリ内に保存し、任意のカレンダーへ簡単に登録・削除できるアプリです。勤務表を読み込んでイベントを登録することもできます。勤務表の読み込みは、年月・日付・勤務名・日ごとの勤務値を文字データとして含む、アプリが想定する形式の横向きPDFに対応しています。画像だけで構成されたスキャンPDFや縦向きPDFには対応していません。年月を取得できない場合は、ファイル名を「2026-01.pdf」のように変更してください。")
+                Text(localized("イベント設定に保存したイベントを、Appleカレンダー、Googleカレンダー、Notionデータベースへ登録・変更・削除できるアプリです。勤務表のPDFを読み込み、日付ごとのイベントを抽出して登録できます。"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -5649,22 +5805,27 @@ private struct ShiftHubMacSettingsView: View {
             }
 
             ShiftHubMacSettingsSectionCard {
-                Text("主な機能")
+                Text(localized("主な機能"))
                     .font(.headline)
 
                 ShiftHubMacAboutFeatureRow(
                     title: localized("PDFスキャン"),
-                    detail: localized("勤務表を読み込み、保存した名前に一致する行から日付と勤務情報を抽出します。")
+                    detail: localized("文字データを持つ横向きPDFから、保存した名前に一致する行を抽出します。抽出結果はカレンダー表示と横並び表示を切り替えられ、日付ごとのイベント名を編集・削除できます。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("保存済みPDF"),
+                    detail: localized("読み込んだPDFをアプリ内に保存し、一覧から再解析・削除できます。同じ内容のPDFは重複保存しません。保存したPDFのプレビュー、ページ移動、拡大縮小にも対応します。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("カレンダー登録"),
-                    detail: localized("Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。")
+                    detail: localized("Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。勤務イベントは保存済みの開始・終了時刻で登録できます。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("イベント管理"),
-                    detail: localized("月を移動し、日付ごとのイベントを確認、変更、削除できます。")
+                    detail: localized("月を移動し、日付ごとの通常イベントを確認、変更、削除できます。空の日付への新規登録、既存イベントの置き換えにも対応します。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
@@ -5673,8 +5834,63 @@ private struct ShiftHubMacSettingsView: View {
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
+                    title: localized("祝日表示"),
+                    detail: localized("Googleカレンダーの「日本の祝日」を登録先と一緒に表示できます。祝日は表示専用で、イベント件数には含まれません。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("イベント設定"),
+                    detail: localized("イベントタイトルと開始・終了時刻を保存、編集、並べ替え、削除できます。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("iCloud同期"),
+                    detail: localized("設定と保存済みPDFをiCloudで同期できます。カレンダー上のイベントと認証情報は同期しません。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("カレンダーキャッシュ"),
+                    detail: localized("表示中の月を中心に前後12か月をキャッシュし、月移動時はキャッシュを先に表示します。表示範囲外の月は破棄し、手動更新、バックグラウンドからの復帰、iCloud同期完了、接続先設定の変更後に再取得します。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
                     title: localized("言語切替"),
                     detail: localized("設定から日本語と英語を切り替えられます。")
+                )
+            }
+
+            ShiftHubMacSettingsSectionCard {
+                Text(localized("対応形式と注意点"))
+                    .font(.headline)
+
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("PDF入力条件"),
+                    detail: localized("PDFのみ対応しています。文字を選択・コピーできる文字データ層を持つ横向きの勤務表を使用してください。画像だけのスキャンPDFや縦向きPDFには対応していません。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("年月の判定"),
+                    detail: localized("PDFから年月を取得できない場合は、ファイル名を「2026-01.pdf」のようなYYYY-MM形式にしてください。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("イベント名の照合"),
+                    detail: localized("PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-16:40です。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("休の登録"),
+                    detail: localized("「休」は登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("日付カードの表示"),
+                    detail: localized("日付カードには時間順に最大3件を表示します。3件以上の場合、カード内の時間は省略され、日付メニューで全件を確認できます。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("日をまたぐイベント"),
+                    detail: localized("日付をまたぐイベントには対応していません。")
                 )
             }
 
@@ -5699,11 +5915,11 @@ private struct ShiftHubMacSettingsView: View {
             }
 
             ShiftHubMacSettingsSectionCard {
-                Text("プライバシーポリシー")
+                Text(localized("プライバシーポリシー"))
                     .font(.headline)
-                Text("このアプリは、ユーザーが選択したPDFと、カレンダー登録に必要な設定を使用します。")
-                Text("Appleカレンダーを使用する場合、カレンダーへのアクセスはイベントの読み取りと登録のためにのみ使用します。")
-                Text("GoogleカレンダーとNotionを使用する場合、入力された認証情報は登録先との通信に使用されます。")
+                Text(localized("このアプリは、ユーザーが選択したPDFと、カレンダー登録に必要な設定を使用します。"))
+                Text(localized("Appleカレンダーを使用する場合、カレンダーへのアクセスはイベントの読み取りと登録のためにのみ使用します。"))
+                Text(localized("GoogleカレンダーとNotionを使用する場合、入力された認証情報は登録先との通信に使用されます。"))
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -5982,29 +6198,76 @@ private struct ShiftHubAboutView: View {
             }
 
             Section("このアプリについて") {
-                Text("イベントのタイトルや時間をアプリ内に保存し、任意のカレンダーへ簡単に登録・削除できるアプリです。勤務表を読み込んでイベントを登録することもできます。勤務表の読み込みは、年月・日付・勤務名・日ごとの勤務値を文字データとして含む、アプリが想定する形式の横向きPDFに対応しています。画像だけで構成されたスキャンPDFや縦向きPDFには対応していません。年月を取得できない場合は、ファイル名を「2026-01.pdf」のように変更してください。")
+                Text("イベント設定に保存したイベントを、Appleカレンダー、Googleカレンダー、Notionデータベースへ登録・変更・削除できるアプリです。勤務表のPDFを読み込み、日付ごとのイベントを抽出して登録できます。")
             }
 
             Section("主な機能") {
                 ShiftHubAboutRow(
                     title: "PDFスキャン",
-                    detail: "勤務表を読み込み、保存した名前に一致する行から日付と勤務情報を抽出します。"
+                    detail: "文字データを持つ横向きPDFから、保存した名前に一致する行を抽出します。抽出結果はカレンダー表示と横並び表示を切り替えられ、日付ごとのイベント名を編集・削除できます。"
+                )
+                ShiftHubAboutRow(
+                    title: "保存済みPDF",
+                    detail: "読み込んだPDFをアプリ内に保存し、一覧から再解析・削除できます。同じ内容のPDFは重複保存しません。保存したPDFのプレビュー、ページ移動、拡大縮小にも対応します。"
                 )
                 ShiftHubAboutRow(
                     title: "カレンダー登録",
-                    detail: "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。"
+                    detail: "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。勤務イベントは保存済みの開始・終了時刻で登録できます。"
                 )
                 ShiftHubAboutRow(
                     title: "イベント管理",
-                    detail: "月を移動し、日付ごとのイベントを確認、変更、削除できます。"
+                    detail: "月を移動し、日付ごとの通常イベントを確認、変更、削除できます。空の日付への新規登録、既存イベントの置き換えにも対応します。"
                 )
                 ShiftHubAboutRow(
                     title: "複数選択",
                     detail: "複数の日付を選択し、保存済みのイベントをまとめて登録できます。"
                 )
                 ShiftHubAboutRow(
+                    title: "祝日表示",
+                    detail: "Googleカレンダーの「日本の祝日」を登録先と一緒に表示できます。祝日は表示専用で、イベント件数には含まれません。"
+                )
+                ShiftHubAboutRow(
+                    title: "イベント設定",
+                    detail: "イベントタイトルと開始・終了時刻を保存、編集、並べ替え、削除できます。"
+                )
+                ShiftHubAboutRow(
+                    title: "iCloud同期",
+                    detail: "設定と保存済みPDFをiCloudで同期できます。カレンダー上のイベントと認証情報は同期しません。"
+                )
+                ShiftHubAboutRow(
+                    title: "カレンダーキャッシュ",
+                    detail: "表示中の月を中心に前後12か月をキャッシュし、月移動時はキャッシュを先に表示します。表示範囲外の月は破棄し、手動更新、バックグラウンドからの復帰、iCloud同期完了、接続先設定の変更後に再取得します。"
+                )
+                ShiftHubAboutRow(
                     title: "言語切替",
                     detail: "設定から日本語と英語を切り替えられます。"
+                )
+            }
+
+            Section("対応形式と注意点") {
+                ShiftHubAboutRow(
+                    title: "PDF入力条件",
+                    detail: "PDFのみ対応しています。文字を選択・コピーできる文字データ層を持つ横向きの勤務表を使用してください。画像だけのスキャンPDFや縦向きPDFには対応していません。"
+                )
+                ShiftHubAboutRow(
+                    title: "年月の判定",
+                    detail: "PDFから年月を取得できない場合は、ファイル名を「2026-01.pdf」のようなYYYY-MM形式にしてください。"
+                )
+                ShiftHubAboutRow(
+                    title: "イベント名の照合",
+                    detail: "PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-16:40です。"
+                )
+                ShiftHubAboutRow(
+                    title: "休の登録",
+                    detail: "「休」は登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。"
+                )
+                ShiftHubAboutRow(
+                    title: "日付カードの表示",
+                    detail: "日付カードには時間順に最大3件を表示します。3件以上の場合、カード内の時間は省略され、日付メニューで全件を確認できます。"
+                )
+                ShiftHubAboutRow(
+                    title: "日をまたぐイベント",
+                    detail: "日付をまたぐイベントには対応していません。"
                 )
             }
 
@@ -7109,6 +7372,11 @@ private final class NotionPageWriter {
 
 @MainActor
 private final class CalendarEventManagerModel: ObservableObject {
+    private struct MonthCacheEntry {
+        let events: [CalendarEventRecord]
+        let calendarColor: CalendarDisplayColor?
+    }
+
     @Published private(set) var events: [CalendarEventRecord] = []
     @Published private(set) var loadedDays: Set<Int> = []
     @Published private(set) var calendarColor: CalendarDisplayColor? = nil
@@ -7117,6 +7385,7 @@ private final class CalendarEventManagerModel: ObservableObject {
     @Published var isDeleteConfirmationPresented = false
     @Published private(set) var pendingDeletion: CalendarEventRecord?
     @Published private(set) var message = ""
+    @Published private var cacheRevision = 0
 
     private var destination: CalendarDestination
     @Published private(set) var yearMonth: YearMonth
@@ -7131,6 +7400,15 @@ private final class CalendarEventManagerModel: ObservableObject {
     private var localeIdentifier = "ja"
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = 0
+    private var cacheGeneration = 0
+    private var monthCache: [YearMonth: MonthCacheEntry] = [:]
+    private var prefetchTasks: [YearMonth: Task<Void, Never>] = [:]
+    private var prefetchTokens: [YearMonth: UUID] = [:]
+    private var queuedPrefetchMonths = Set<YearMonth>()
+
+    // Keep the visible month plus one full year on each side in memory.
+    private static let cacheMonthRadius = 12
+    private static let maximumConcurrentPrefetches = 2
 
     init(
         destination: CalendarDestination,
@@ -7158,13 +7436,17 @@ private final class CalendarEventManagerModel: ObservableObject {
 
     func updateYearMonth(_ yearMonth: YearMonth) {
         self.yearMonth = yearMonth
-        events = []
-        loadedDays = []
-        message = ""
+        if let cachedMonth = monthCache[yearMonth] {
+            display(cachedMonth)
+        } else {
+            clearDisplayedMonth()
+        }
     }
 
     func setLocaleIdentifier(_ identifier: String) {
+        guard localeIdentifier != identifier else { return }
         localeIdentifier = identifier
+        invalidateMonthCache()
     }
 
     func updateConfiguration(
@@ -7199,8 +7481,26 @@ private final class CalendarEventManagerModel: ObservableObject {
         self.notionTagValue = notionTagValue
 
         if hasChanged {
+            invalidateMonthCache()
             load()
         }
+    }
+
+    func invalidateCachedMonths(_ yearMonths: Set<YearMonth>) {
+        for yearMonth in yearMonths {
+            removeCachedMonth(for: yearMonth)
+            cancelPrefetch(for: yearMonth)
+        }
+    }
+
+    func refreshAllCachedMonths() {
+        invalidateMonthCache()
+        load(forceRefresh: true)
+    }
+
+    func cachedEvents(for yearMonth: YearMonth) -> [CalendarEventRecord] {
+        _ = cacheRevision
+        return monthCache[yearMonth]?.events ?? []
     }
 
     var groupedDays: [Int] {
@@ -7224,16 +7524,31 @@ private final class CalendarEventManagerModel: ObservableObject {
             : "\(day)日（\(weekday)）"
     }
 
-    func load() {
+    func load(forceRefresh: Bool = false) {
         loadGeneration += 1
         let generation = loadGeneration
+        let targetMonth = yearMonth
+        let requestedCacheGeneration = cacheGeneration
         loadTask?.cancel()
 
+        updateCacheWindow(around: targetMonth)
+        if forceRefresh {
+            removeCachedMonth(for: targetMonth)
+            cancelPrefetch(for: targetMonth)
+        }
+
+        if let cachedMonth = monthCache[targetMonth] {
+            display(cachedMonth)
+            isLoading = false
+            loadTask = nil
+            schedulePrefetch(around: targetMonth)
+            return
+        }
+
+        cancelPrefetch(for: targetMonth)
+        clearDisplayedMonth()
         isLoading = true
-        calendarColor = nil
-        events = []
-        loadedDays = []
-        message = ""
+        schedulePrefetch(around: targetMonth)
 
         loadTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -7246,98 +7561,228 @@ private final class CalendarEventManagerModel: ObservableObject {
             }
 
             do {
-                let fetchedEvents: [CalendarEventRecord]
-                switch destination {
-                case .apple:
-                    let client = AppleCalendarEventClient(
-                        calendarIdentifier: appleCalendarIdentifier
-                    )
-                    calendarColor = try client.fetchCalendarColor()
-                    fetchedEvents = try client.fetch(yearMonth: yearMonth)
-                case .google:
-                    guard GoogleTokenStore.load() != nil else {
-                        throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
-                    }
+                let fetchedMonth = try await self.fetchMonth(targetMonth)
+                guard !Task.isCancelled,
+                      self.loadGeneration == generation,
+                      self.cacheGeneration == requestedCacheGeneration,
+                      self.yearMonth == targetMonth else { return }
 
-                    let client = GoogleCalendarAPIClient(
-                        clientID: GoogleOAuthConfiguration.clientID
-                    )
-                    var googleEvents = try await client.fetchEvents(
-                        yearMonth: yearMonth,
-                        calendarID: googleCalendarID
-                    )
-                    if googleShowJapaneseHolidays {
-                        googleEvents.append(contentsOf: try await client.fetchJapaneseHolidayEvents(yearMonth: yearMonth))
-                    }
-                    fetchedEvents = googleEvents
-                    if let fetchedColor = fetchedEvents.compactMap({ $0.calendarColor }).first {
-                        calendarColor = fetchedColor
-                    } else {
-                        calendarColor = try? await client.fetchCalendarColor(calendarID: googleCalendarID)
-                    }
-                case .notion:
-                    guard let token = KeychainStore.string(for: "notion-access-token"),
-                          !token.isEmpty,
-                          !notionDataSourceID.isEmpty else {
-                        throw CalendarEventManagementError.invalidSettings("NotionのアクセストークンとデータベースIDを設定してください。")
-                    }
-
-                    fetchedEvents = try await NotionCalendarEventClient(
-                        token: token,
-                        dataSourceID: notionDataSourceID,
-                        dateProperty: notionDateProperty,
-                        titleProperty: notionTitleProperty,
-                        tagProperty: notionTagProperty,
-                        tagValue: notionTagValue
-                    ).fetchEvents(yearMonth: yearMonth)
-                    calendarColor = nil
-                }
-
-                guard !Task.isCancelled, loadGeneration == generation else { return }
-
-                let displayLocale = Locale(identifier: localeIdentifier)
-                let displayEvents = fetchedEvents.map { event in
-                    CalendarEventRecord(
-                        id: event.id,
-                        day: event.day,
-                        title: event.title == "無題"
-                            ? ShiftHubLocalization.string("無題", locale: displayLocale)
-                            : event.title,
-                        detail: event.detail == "終日"
-                            ? ShiftHubLocalization.string("終日", locale: displayLocale)
-                            : event.detail,
-                        isAllDay: event.isAllDay,
-                        startDate: event.startDate,
-                        calendarColor: event.calendarColor,
-                        isReadOnly: event.isReadOnly
-                    )
-                }
-                let eventsByDay = Dictionary(grouping: displayEvents, by: { $0.day })
-                for day in eventsByDay.keys.sorted() {
-                    try await Task.sleep(nanoseconds: 45_000_000)
-                    guard !Task.isCancelled, loadGeneration == generation else { return }
-
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        self.events.append(contentsOf: eventsByDay[day] ?? [])
-                        self.loadedDays.insert(day)
-                    }
-                }
-                let locale = Locale(identifier: localeIdentifier)
-                message = fetchedEvents.isEmpty
-                    ? ShiftHubLocalization.string("この月に登録されたイベントはありません。", locale: locale)
-                    : ShiftHubLocalization.format(
-                        "%@件のイベントを取得しました。",
-                        locale: locale,
-                        arguments: String(fetchedEvents.count)
-                    )
+                self.store(fetchedMonth, for: targetMonth)
+                self.display(fetchedMonth)
+                self.schedulePrefetch(around: targetMonth)
             } catch is CancellationError {
                 return
             } catch {
-                guard loadGeneration == generation else { return }
-                events = []
-                message = ShiftHubLocalization.localizedErrorDescription(error, locale: Locale(identifier: localeIdentifier))
+                guard self.loadGeneration == generation,
+                      self.cacheGeneration == requestedCacheGeneration,
+                      self.yearMonth == targetMonth else { return }
+                self.clearDisplayedMonth()
+                self.message = ShiftHubLocalization.localizedErrorDescription(
+                    error,
+                    locale: Locale(identifier: self.localeIdentifier)
+                )
             }
         }
+    }
+
+    private func fetchMonth(_ yearMonth: YearMonth) async throws -> MonthCacheEntry {
+        let fetchedEvents: [CalendarEventRecord]
+        let fetchedCalendarColor: CalendarDisplayColor?
+
+        switch destination {
+        case .apple:
+            let client = AppleCalendarEventClient(calendarIdentifier: appleCalendarIdentifier)
+            fetchedCalendarColor = try client.fetchCalendarColor()
+            fetchedEvents = try client.fetch(yearMonth: yearMonth)
+        case .google:
+            guard GoogleTokenStore.load() != nil else {
+                throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
+            }
+
+            let client = GoogleCalendarAPIClient(clientID: GoogleOAuthConfiguration.clientID)
+            var googleEvents = try await client.fetchEvents(
+                yearMonth: yearMonth,
+                calendarID: googleCalendarID
+            )
+            if googleShowJapaneseHolidays {
+                googleEvents.append(contentsOf: try await client.fetchJapaneseHolidayEvents(yearMonth: yearMonth))
+            }
+            fetchedEvents = googleEvents
+            if let eventColor = fetchedEvents.compactMap({ $0.calendarColor }).first {
+                fetchedCalendarColor = eventColor
+            } else {
+                fetchedCalendarColor = try? await client.fetchCalendarColor(calendarID: googleCalendarID)
+            }
+        case .notion:
+            guard let token = KeychainStore.string(for: "notion-access-token"),
+                  !token.isEmpty,
+                  !notionDataSourceID.isEmpty else {
+                throw CalendarEventManagementError.invalidSettings("NotionのアクセストークンとデータベースIDを設定してください。")
+            }
+
+            fetchedEvents = try await NotionCalendarEventClient(
+                token: token,
+                dataSourceID: notionDataSourceID,
+                dateProperty: notionDateProperty,
+                titleProperty: notionTitleProperty,
+                tagProperty: notionTagProperty,
+                tagValue: notionTagValue
+            ).fetchEvents(yearMonth: yearMonth)
+            fetchedCalendarColor = nil
+        }
+
+        let displayLocale = Locale(identifier: localeIdentifier)
+        return MonthCacheEntry(
+            events: fetchedEvents.map { event in
+                CalendarEventRecord(
+                    id: event.id,
+                    day: event.day,
+                    title: event.title == "無題"
+                        ? ShiftHubLocalization.string("無題", locale: displayLocale)
+                        : event.title,
+                    detail: event.detail == "終日"
+                        ? ShiftHubLocalization.string("終日", locale: displayLocale)
+                        : event.detail,
+                    isAllDay: event.isAllDay,
+                    startDate: event.startDate,
+                    calendarColor: event.calendarColor,
+                    isReadOnly: event.isReadOnly
+                )
+            },
+            calendarColor: fetchedCalendarColor
+        )
+    }
+
+    private func display(_ cachedMonth: MonthCacheEntry) {
+        calendarColor = cachedMonth.calendarColor
+        events = cachedMonth.events
+        loadedDays = Set(cachedMonth.events.map(\.day))
+        message = message(for: cachedMonth.events)
+    }
+
+    private func clearDisplayedMonth() {
+        calendarColor = nil
+        events = []
+        loadedDays = []
+        message = ""
+    }
+
+    private func message(for events: [CalendarEventRecord]) -> String {
+        let locale = Locale(identifier: localeIdentifier)
+        let registeredEventCount = events.lazy.filter { !$0.isReadOnly }.count
+        return registeredEventCount == 0
+            ? ShiftHubLocalization.string("この月に登録されたイベントはありません。", locale: locale)
+            : ShiftHubLocalization.format(
+                "%@件のイベントを取得しました。",
+                locale: locale,
+                arguments: String(registeredEventCount)
+            )
+    }
+
+    private func cacheWindow(around yearMonth: YearMonth) -> Set<YearMonth> {
+        Set((-Self.cacheMonthRadius...Self.cacheMonthRadius).map { yearMonth.addingMonths($0) })
+    }
+
+    private func updateCacheWindow(around yearMonth: YearMonth) {
+        let allowedMonths = cacheWindow(around: yearMonth)
+        let previousCacheCount = monthCache.count
+        monthCache = monthCache.filter { allowedMonths.contains($0.key) }
+        if monthCache.count != previousCacheCount {
+            cacheRevision &+= 1
+        }
+        queuedPrefetchMonths.formIntersection(allowedMonths)
+
+        let obsoleteMonths = prefetchTasks.keys.filter { !allowedMonths.contains($0) }
+        for month in obsoleteMonths {
+            cancelPrefetch(for: month)
+        }
+    }
+
+    private func schedulePrefetch(around yearMonth: YearMonth) {
+        updateCacheWindow(around: yearMonth)
+        let allowedMonths = cacheWindow(around: yearMonth)
+        queuedPrefetchMonths.formUnion(
+            allowedMonths.filter {
+                $0 != yearMonth && monthCache[$0] == nil && prefetchTasks[$0] == nil
+            }
+        )
+        startQueuedPrefetches(around: yearMonth)
+    }
+
+    private func startQueuedPrefetches(around yearMonth: YearMonth) {
+        while prefetchTasks.count < Self.maximumConcurrentPrefetches,
+              let targetMonth = queuedPrefetchMonths.min(by: {
+                  monthDistance($0, from: yearMonth) < monthDistance($1, from: yearMonth)
+              }) {
+            queuedPrefetchMonths.remove(targetMonth)
+            let token = UUID()
+            let requestedCacheGeneration = cacheGeneration
+            prefetchTokens[targetMonth] = token
+
+            let task = Task { @MainActor [weak self] in
+                guard let self else { return }
+
+                defer {
+                    self.finishPrefetch(for: targetMonth, token: token)
+                }
+
+                do {
+                    let fetchedMonth = try await self.fetchMonth(targetMonth)
+                    guard !Task.isCancelled,
+                          self.cacheGeneration == requestedCacheGeneration,
+                          self.prefetchTokens[targetMonth] == token,
+                          self.cacheWindow(around: self.yearMonth).contains(targetMonth) else { return }
+                    self.store(fetchedMonth, for: targetMonth)
+                } catch {
+                    return
+                }
+            }
+            prefetchTasks[targetMonth] = task
+        }
+    }
+
+    private func finishPrefetch(for yearMonth: YearMonth, token: UUID) {
+        guard prefetchTokens[yearMonth] == token else { return }
+        prefetchTasks.removeValue(forKey: yearMonth)
+        prefetchTokens.removeValue(forKey: yearMonth)
+        startQueuedPrefetches(around: self.yearMonth)
+    }
+
+    private func cancelPrefetch(for yearMonth: YearMonth) {
+        queuedPrefetchMonths.remove(yearMonth)
+        prefetchTasks[yearMonth]?.cancel()
+        prefetchTasks.removeValue(forKey: yearMonth)
+        prefetchTokens.removeValue(forKey: yearMonth)
+    }
+
+    private func invalidateMonthCache() {
+        cacheGeneration += 1
+        if !monthCache.isEmpty {
+            monthCache.removeAll()
+            cacheRevision &+= 1
+        }
+        queuedPrefetchMonths.removeAll()
+        prefetchTasks.values.forEach { $0.cancel() }
+        prefetchTasks.removeAll()
+        prefetchTokens.removeAll()
+    }
+
+    private func monthDistance(_ yearMonth: YearMonth, from reference: YearMonth) -> Int {
+        abs((yearMonth.year - reference.year) * 12 + yearMonth.month - reference.month)
+    }
+
+    private func updateCachedDisplayedMonth() {
+        store(MonthCacheEntry(events: events, calendarColor: calendarColor), for: yearMonth)
+    }
+
+    private func store(_ cachedMonth: MonthCacheEntry, for yearMonth: YearMonth) {
+        monthCache[yearMonth] = cachedMonth
+        cacheRevision &+= 1
+    }
+
+    private func removeCachedMonth(for yearMonth: YearMonth) {
+        guard monthCache.removeValue(forKey: yearMonth) != nil else { return }
+        cacheRevision &+= 1
     }
 
     func requestDelete(_ event: CalendarEventRecord) {
@@ -7391,6 +7836,7 @@ private final class CalendarEventManagerModel: ObservableObject {
                 }
 
                 events.removeAll { $0.id == target.id }
+                updateCachedDisplayedMonth()
                 message = ShiftHubLocalization.string(
                     "イベントを削除しました。",
                     locale: Locale(identifier: localeIdentifier)
@@ -9336,7 +9782,7 @@ struct ShiftDefinition: Identifiable, Codable, Equatable {
     }
 }
 
-struct YearMonth: Equatable {
+struct YearMonth: Hashable {
     let year: Int
     let month: Int
 
