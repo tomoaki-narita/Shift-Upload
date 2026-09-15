@@ -60,6 +60,13 @@
 "終日イベントとして登録します。" = "This will be registered as an all-day event.";
 "登録時間: %@" = "Registered time: %@";
 "登録" = "Register";
+"イベントを登録" = "Register event";
+"Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。保存済みイベントの一覧から登録できるほか、トップ画面ではタイトルと開始・終了日時を指定したイベントを登録できます。PDFスキャンと複数選択は同日登録に対応します。" = "Choose Apple Calendar, Google Calendar, or a Notion database as the destination. You can register from the saved event list, or specify a title and start and end date and time on the home screen. PDF scanning and multiple selection support same-day registration.";
+"タイトルと日時を指定して登録します。" = "Register an event with a title and date and time.";
+"イベントタイトルを入力してください。" = "Enter an event title.";
+"終了日時は開始日時以降にしてください。" = "The end date and time must be after the start date and time.";
+"開始日時" = "Start date and time";
+"終了日時" = "End date and time";
 
 /* Event management */
 "取得" = "Fetch";
@@ -109,6 +116,9 @@
 "設定と保存済みPDFをiCloudで同期できます。カレンダー上のイベントと認証情報は同期しません。" = "Sync settings and saved PDFs with iCloud. Calendar events and credentials are not synced.";
 "カレンダーキャッシュ" = "Calendar cache";
 "表示中の月を中心に前後12か月をキャッシュし、月移動時はキャッシュを先に表示します。表示範囲外の月は破棄し、手動更新、バックグラウンドからの復帰、iCloud同期完了、接続先設定の変更後に再取得します。" = "The displayed month and the 12 months before and after it are cached, and cached data is shown first when you move between months. Months outside this range are discarded; data is fetched again after a manual refresh, returning from the background, iCloud sync completion, or a destination setting change.";
+"表示中の月を中心に前後12か月をキャッシュし、月移動時はキャッシュを先に表示します。表示範囲外の月は破棄し、手動更新、iCloud同期完了、接続先設定の変更後に再取得します。Mac版ではアプリの再アクティブ化だけでは再取得しません。" = "The displayed month and the 12 months before and after it are cached, and cached data is shown first when you move between months. Months outside this range are discarded; data is fetched again after a manual refresh, iCloud sync completion, or a destination setting change. On macOS, simply reactivating the app does not fetch data again.";
+"トップ画面から開始日時と終了日時を指定して登録できます。日付をまたぐイベントは開始日から終了日まで帯で表示し、週や月の境界では帯を分割します。日付メニューでは開始日・終了日を含む範囲を表示します。PDFスキャンと複数選択からは登録できません。" = "From the home screen, you can register an event with a start and end date and time. Events that span dates are shown as a band from the start date through the end date and split at week or month boundaries. The date menu shows the full start-to-end range. They cannot be registered from PDF scanning or multiple selection.";
+"トップ画面から開始日時と終了日時を指定して登録" = "Register by specifying the start and end date and time on the home screen";
 "言語切替" = "Language";
 "設定から日本語と英語を切り替えられます。" = "Switch between Japanese and English in Settings.";
 "対応形式と注意点" = "Format and usage notes";
@@ -230,6 +240,7 @@
 "今すぐ同期" = "Sync now";
 "イベント名" = "Event name";
 "イベントを選択" = "Choose event";
+"イベント一覧から選択" = "Choose from event list";
 "変更を適用" = "Apply changes";
 "複数選択" = "Select multiple";
 "複数の日付を選択し、保存済みのイベントをまとめて登録できます。" = "Select multiple dates and register a saved event for them at once.";
@@ -253,6 +264,7 @@
 "イベントの日付を作成できませんでした。" = "Could not create the event date.";
 "イベントの登録" = "Register event";
 "削除してイベントの登録" = "Delete and register event";
+"削除してイベント一覧から選択" = "Delete and choose from event list";
 "先にGoogleへログインしてください。" = "Sign in to Google first.";
 "Googleログイン画面を開けませんでした。" = "Could not open the Google sign-in page.";
 "Googleログインがキャンセルされました。" = "Google sign-in was canceled.";
@@ -295,6 +307,7 @@
 "%@日のイベント名を変更しました。カレンダーへ登録すると反映されます。" = "The event name for day %@ was changed. Register it in the calendar to apply the change.";
 "%@日のイベントを変更しました。カレンダーへ登録すると反映されます。" = "The event for day %@ was changed. Register it in the calendar to apply the change.";
 "%@件のイベントをイベント一覧に保存しました。時間はイベント設定から変更できます。" = "Saved %@ events to the event list. You can change their times in Event Settings.";
+"+%@件" = "+%@ more";
 "選択したイベントをイベント一覧に保存しませんでした。" = "The selected events were not saved to the event list.";
 "文字を認識できませんでした。画像が暗い、傾いている、または解像度が低い可能性があります。" = "No text could be recognized. The image may be dark, tilted, or low-resolution.";
 "%@件のイベントを取得しました。" = "Fetched %@ events.";

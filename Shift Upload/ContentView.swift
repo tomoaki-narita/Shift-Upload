@@ -414,6 +414,15 @@ struct ContentView: View {
                         onComplete: completion.call
                     )
                 },
+                onRegisterDateTimeEvent: { title, startDate, endDate, isAllDay, completion in
+                    registerDateTimeEvent(
+                        title: title,
+                        startDate: startDate,
+                        endDate: endDate,
+                        isAllDay: isAllDay,
+                        onComplete: completion.call
+                    )
+                },
                 onRegisterShifts: { selections, title, completion in
                     registerMultipleShifts(
                         selections: selections,
@@ -1227,7 +1236,7 @@ struct ContentView: View {
                     Button {
                         presentExtractedShiftSelection(for: day)
                     } label: {
-                        Label("イベントを選択", systemImage: "list.bullet")
+                        Label("イベント一覧から選択", systemImage: "list.bullet")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
@@ -1329,7 +1338,7 @@ struct ContentView: View {
                     selectedExtractedDirectDayAction = nil
                     presentExtractedShiftSelection(for: day)
                 } label: {
-                    Label("イベントを選択", systemImage: "list.bullet")
+                    Label("イベント一覧から選択", systemImage: "list.bullet")
                         .frame(maxWidth: .infinity, minHeight: buttonHeight, maxHeight: buttonHeight, alignment: .leading)
                 }
 
@@ -1392,7 +1401,7 @@ struct ContentView: View {
                     isExtractedShiftActionPresented = false
                     presentExtractedShiftSelection(for: day)
                 } label: {
-                    Label("イベントを選択", systemImage: "list.bullet")
+                    Label("イベント一覧から選択", systemImage: "list.bullet")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -1946,6 +1955,120 @@ struct ContentView: View {
                 includeRest: includeRest,
                 onComplete: onComplete
             )
+        }
+    }
+
+    private func registerDateTimeEvent(
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool,
+        onComplete: (() -> Void)? = nil
+    ) {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            statusMessage = localizedMessage("イベントタイトルを入力してください。")
+            return
+        }
+
+        let calendar = Calendar.current
+        let normalizedStartDate = isAllDay ? calendar.startOfDay(for: startDate) : startDate
+        let normalizedEndDate = isAllDay ? calendar.startOfDay(for: endDate) : endDate
+        guard normalizedEndDate >= normalizedStartDate else {
+            statusMessage = localizedMessage("終了日時は開始日時以降にしてください。")
+            return
+        }
+
+        isRegisteringEvents = true
+        let destination = CalendarDestination(rawValue: calendarDestination) ?? .apple
+
+        switch destination {
+        case .apple:
+            statusMessage = localizedMessage("Appleカレンダーへ登録中です。")
+            do {
+                try AppleCalendarEventWriter().registerDateTimeEvent(
+                    title: trimmedTitle,
+                    startDate: normalizedStartDate,
+                    endDate: normalizedEndDate,
+                    isAllDay: isAllDay,
+                    calendarIdentifier: appleCalendarIdentifier
+                )
+                statusMessage = localizedMessage("Appleカレンダーへイベントを登録しました。")
+                onComplete?()
+            } catch {
+                statusMessage = localizedMessage("Appleカレンダーへの登録に失敗しました: %@", arguments: localizedError(error))
+            }
+            isRegisteringEvents = false
+
+        case .google:
+            guard GoogleTokenStore.load() != nil else {
+                statusMessage = localizedMessage("Google設定でログインとカレンダー選択を完了してください。")
+                isRegisteringEvents = false
+                return
+            }
+
+            guard !googleCalendarID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                statusMessage = localizedMessage("Google設定で登録先カレンダーを選択してください。")
+                isRegisteringEvents = false
+                return
+            }
+
+            statusMessage = localizedMessage("Googleカレンダーへ登録中です。")
+            let calendarID = googleCalendarID
+            Task { @MainActor in
+                do {
+                    try await GoogleCalendarAPIClient(clientID: GoogleOAuthConfiguration.clientID).createEvent(
+                        calendarID: calendarID,
+                        title: trimmedTitle,
+                        startDate: normalizedStartDate,
+                        endDate: normalizedEndDate,
+                        isAllDay: isAllDay
+                    )
+                    statusMessage = localizedMessage("Googleカレンダーへイベントを登録しました。")
+                    onComplete?()
+                } catch {
+                    statusMessage = localizedMessage("Googleカレンダーへの登録に失敗しました: %@", arguments: localizedError(error))
+                }
+                isRegisteringEvents = false
+            }
+
+        case .notion:
+            guard let token = KeychainStore.string(for: "notion-access-token"),
+                  !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !notionDataSourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                statusMessage = localizedMessage("NotionのアクセストークンとデータベースIDを設定してください。")
+                isRegisteringEvents = false
+                return
+            }
+
+            statusMessage = localizedMessage("Notionへ登録中です。")
+            let writer = NotionPageWriter()
+            let dataSourceID = notionDataSourceID
+            let titleProperty = notionTitleProperty
+            let dateProperty = notionDateProperty
+            let tagProperty = notionTagProperty
+            let tagValue = notionTagValue
+            Task { @MainActor in
+                do {
+                    try await writer.registerDateTimeEvent(
+                        title: trimmedTitle,
+                        startDate: normalizedStartDate,
+                        endDate: normalizedEndDate,
+                        isAllDay: isAllDay,
+                        token: token,
+                        dataSourceID: dataSourceID,
+                        titleProperty: titleProperty,
+                        dateProperty: dateProperty,
+                        tagProperty: tagProperty,
+                        tagValue: tagValue
+                    )
+                    statusMessage = localizedMessage("Notionへイベントを登録しました。")
+                    onComplete?()
+                } catch {
+                    statusMessage = localizedMessage("Notionへの登録に失敗しました: %@", arguments: localizedError(error))
+                }
+                isRegisteringEvents = false
+            }
         }
     }
 
@@ -3272,6 +3395,129 @@ private struct SingleShiftRegistrationView: View {
     }
 }
 
+private struct DateTimeEventRegistrationView: View {
+    let initialStartDate: Date
+    let onRegister: (String, Date, Date, Bool) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
+    @State private var title = ""
+    @State private var startDate: Date
+    @State private var endDate: Date
+    @State private var isAllDay = false
+
+    init(
+        initialStartDate: Date,
+        onRegister: @escaping (String, Date, Date, Bool) -> Void
+    ) {
+        self.initialStartDate = initialStartDate
+        self.onRegister = onRegister
+        _startDate = State(initialValue: initialStartDate)
+        _endDate = State(initialValue: Calendar.current.date(byAdding: .hour, value: 1, to: initialStartDate) ?? initialStartDate)
+    }
+
+    private var canRegister: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && endDate >= startDate
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("イベントを登録")
+                        .font(.title.bold())
+
+                    Text("タイトルと日時を指定して登録します。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button("キャンセル") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+
+                Button("登録") {
+                    let calendar = Calendar.current
+                    let normalizedStartDate = isAllDay ? calendar.startOfDay(for: startDate) : startDate
+                    let normalizedEndDate = isAllDay ? calendar.startOfDay(for: endDate) : endDate
+                    onRegister(
+                        title.trimmingCharacters(in: .whitespacesAndNewlines),
+                        normalizedStartDate,
+                        normalizedEndDate,
+                        isAllDay
+                    )
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canRegister)
+            }
+            .padding(24)
+
+            Divider()
+
+            Form {
+                Section("イベント") {
+                    TextField("タイトル", text: $title)
+                }
+
+                Section("日時") {
+                    Toggle("終日", isOn: $isAllDay)
+
+                    DatePicker(
+                        "開始日時",
+                        selection: $startDate,
+                        displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
+                    )
+
+                    DatePicker(
+                        "終了日時",
+                        selection: $endDate,
+                        displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
+                    )
+
+                    if endDate < startDate {
+                        Text("終了日時は開始日時以降にしてください。")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .padding(24)
+        }
+#if os(iOS)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+#else
+        .frame(width: 560, height: 420)
+#endif
+        .environment(\.locale, locale)
+        .onChange(of: startDate) {
+            if endDate < startDate {
+                endDate = Calendar.current.date(byAdding: .hour, value: 1, to: startDate) ?? startDate
+            }
+        }
+        .onChange(of: endDate) {
+            if endDate < startDate {
+                endDate = startDate
+            }
+        }
+        .onChange(of: isAllDay) {
+            let calendar = Calendar.current
+            if isAllDay {
+                startDate = calendar.startOfDay(for: startDate)
+                endDate = calendar.startOfDay(for: endDate)
+                if endDate < startDate {
+                    endDate = startDate
+                }
+            }
+        }
+    }
+}
+
 private struct CalendarDisplayColor: Hashable {
     let red: Double
     let green: Double
@@ -3318,6 +3564,7 @@ private struct CalendarEventRecord: Identifiable, Hashable {
     let detail: String
     let isAllDay: Bool
     let startDate: Date?
+    let endDate: Date?
     let calendarColor: CalendarDisplayColor?
     let isReadOnly: Bool
 
@@ -3328,6 +3575,7 @@ private struct CalendarEventRecord: Identifiable, Hashable {
         detail: String,
         isAllDay: Bool,
         startDate: Date? = nil,
+        endDate: Date? = nil,
         calendarColor: CalendarDisplayColor?,
         isReadOnly: Bool = false
     ) {
@@ -3337,6 +3585,7 @@ private struct CalendarEventRecord: Identifiable, Hashable {
         self.detail = detail
         self.isAllDay = isAllDay
         self.startDate = startDate
+        self.endDate = endDate
         self.calendarColor = calendarColor
         self.isReadOnly = isReadOnly
     }
@@ -3351,8 +3600,154 @@ private struct CalendarEventRecord: Identifiable, Hashable {
         return ["休", "休み", "休日", "off"].contains(normalizedTitle)
     }
 
+    var spansMultipleDays: Bool {
+        guard let startDate, let endDate else { return false }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar.startOfDay(for: endDate) > calendar.startOfDay(for: startDate)
+    }
+
+    var menuDetail: String {
+        guard spansMultipleDays,
+              let startDate,
+              let endDate else {
+            return detail.isEmpty ? "終日" : detail
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = isAllDay ? "MM-dd" : "MM-dd H:mm"
+        return "\(formatter.string(from: startDate)) - \(formatter.string(from: endDate))"
+    }
+
+    func starts(on day: Int, in yearMonth: YearMonth) -> Bool {
+        guard let startDate else { return self.day == day }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = calendar.dateComponents([.year, .month, .day], from: startDate)
+        return components.year == yearMonth.year
+            && components.month == yearMonth.month
+            && components.day == day
+    }
+
     var confirmationText: String {
-        detail.isEmpty ? "\(day)日の「\(title)」" : "\(day)日の「\(title)」\n\(detail)"
+        menuDetail.isEmpty ? "\(day)日の「\(title)」" : "\(day)日の「\(title)」\n\(menuDetail)"
+    }
+}
+
+private struct CalendarEventDisplaySegment: Identifiable, Hashable {
+    let event: CalendarEventRecord
+    let startDay: Int
+    let endDay: Int
+
+    var id: String {
+        "\(event.id)-\(startDay)-\(endDay)"
+    }
+
+    var spanDays: Int {
+        endDay - startDay + 1
+    }
+
+    func contains(day: Int) -> Bool {
+        (startDay...endDay).contains(day)
+    }
+
+}
+
+private struct CalendarBandEventSelection: Identifiable {
+    let event: CalendarEventRecord
+    let day: Int
+
+    var id: String {
+        "\(event.id)-\(day)"
+    }
+}
+
+private struct CalendarEventBandLayout: Identifiable, Hashable {
+    let event: CalendarEventRecord
+    let startDay: Int
+    let endDay: Int
+    let lane: Int
+
+    var id: String {
+        "\(event.id)-\(startDay)-\(endDay)"
+    }
+
+    var spanDays: Int {
+        endDay - startDay + 1
+    }
+
+    func contains(day: Int) -> Bool {
+        (startDay...endDay).contains(day)
+    }
+}
+
+private struct CalendarEventBandMetrics {
+    let top: CGFloat
+    let contentSpacing: CGFloat
+    let gap: CGFloat
+    let height: CGFloat
+    let laneHeight: CGFloat
+}
+
+private struct CalendarEventBandShape: Shape {
+    let squareLeading: Bool
+    let squareTrailing: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(6, min(rect.width, rect.height) / 2)
+        let topLeading = squareLeading ? 0 : radius
+        let bottomLeading = squareLeading ? 0 : radius
+        let topTrailing = squareTrailing ? 0 : radius
+        let bottomTrailing = squareTrailing ? 0 : radius
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + topLeading, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - topTrailing, y: rect.minY))
+        if topTrailing > 0 {
+            path.addArc(
+                center: CGPoint(x: rect.maxX - topTrailing, y: rect.minY + topTrailing),
+                radius: topTrailing,
+                startAngle: .degrees(-90),
+                endAngle: .degrees(0),
+                clockwise: false
+            )
+        }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomTrailing))
+        if bottomTrailing > 0 {
+            path.addArc(
+                center: CGPoint(x: rect.maxX - bottomTrailing, y: rect.maxY - bottomTrailing),
+                radius: bottomTrailing,
+                startAngle: .degrees(0),
+                endAngle: .degrees(90),
+                clockwise: false
+            )
+        }
+        path.addLine(to: CGPoint(x: rect.minX + bottomLeading, y: rect.maxY))
+        if bottomLeading > 0 {
+            path.addArc(
+                center: CGPoint(x: rect.minX + bottomLeading, y: rect.maxY - bottomLeading),
+                radius: bottomLeading,
+                startAngle: .degrees(90),
+                endAngle: .degrees(180),
+                clockwise: false
+            )
+        }
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeading))
+        if topLeading > 0 {
+            path.addArc(
+                center: CGPoint(x: rect.minX + topLeading, y: rect.minY + topLeading),
+                radius: topLeading,
+                startAngle: .degrees(180),
+                endAngle: .degrees(270),
+                clockwise: false
+            )
+        }
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -3895,6 +4290,7 @@ private struct CalendarEventManagerView: View {
     let notionDatabaseName: String
     let definitions: [ShiftDefinition]
     let onRegisterShift: (YearMonth, Int, String, RegistrationCompletion) -> Void
+    let onRegisterDateTimeEvent: (String, Date, Date, Bool, RegistrationCompletion) -> Void
     let onRegisterShifts: ([CalendarDaySelection], String, RegistrationCompletion) -> Void
     let onCalendarDestinationChange: (CalendarDestination) -> Void
     let onOpenShiftUpload: () -> Void
@@ -3913,21 +4309,26 @@ private struct CalendarEventManagerView: View {
     @State private var selectedYear: Int
     @State private var selectedMonth: Int
     @State private var isShiftSelectionPresented = false
+    @State private var isDateTimeEventRegistrationPresented = false
+    @State private var dateTimeEventRegistrationStartDate = Date()
     @State private var pendingShiftRegistration: PendingShiftRegistration?
     @State private var shiftTitleAfterDelete: String?
     @State private var selectedDayForActions: Int?
     @State private var isDaySelectionMode = false
     @State private var selectedCalendarDays: Set<CalendarDaySelection> = []
-#if os(iOS)
     @State private var selectedEventForActions: CalendarEventRecord?
+    @State private var selectedBandEventForActions: CalendarBandEventSelection?
+#if os(iOS)
     @State private var pendingInlineDeletion: CalendarEventRecord?
 #endif
     @State private var isYearMonthPickerPresented = false
     @State private var isCalendarDestinationMenuPresented = false
     @State private var monthPageID: Int?
+    @State private var didLoadInitialMonth = false
     @State private var didEnterBackground = false
 #if os(macOS)
     @State private var isCalendarLiveResizing = false
+    @State private var isDayActionsPopoverPresented = false
 #endif
     private let monthPageAnchor: YearMonth
     private static let monthPageRadius = 120
@@ -3947,6 +4348,7 @@ private struct CalendarEventManagerView: View {
         notionTagValue: String,
         definitions: [ShiftDefinition],
         onRegisterShift: @escaping (YearMonth, Int, String, RegistrationCompletion) -> Void,
+        onRegisterDateTimeEvent: @escaping (String, Date, Date, Bool, RegistrationCompletion) -> Void,
         onRegisterShifts: @escaping ([CalendarDaySelection], String, RegistrationCompletion) -> Void,
         onCalendarDestinationChange: @escaping (CalendarDestination) -> Void,
         onOpenShiftUpload: @escaping () -> Void,
@@ -3970,6 +4372,7 @@ private struct CalendarEventManagerView: View {
         self.notionDatabaseName = notionDatabaseName
         self.definitions = definitions
         self.onRegisterShift = onRegisterShift
+        self.onRegisterDateTimeEvent = onRegisterDateTimeEvent
         self.onRegisterShifts = onRegisterShifts
         self.onCalendarDestinationChange = onCalendarDestinationChange
         self.onOpenShiftUpload = onOpenShiftUpload
@@ -4323,10 +4726,13 @@ private struct CalendarEventManagerView: View {
             }
         }
 #endif
-        .task {
+        .onAppear {
+            guard !didLoadInitialMonth else { return }
+            didLoadInitialMonth = true
             model.setLocaleIdentifier(locale.identifier)
             model.load()
         }
+#if os(iOS)
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
@@ -4338,6 +4744,7 @@ private struct CalendarEventManagerView: View {
                 break
             }
         }
+#endif
         .onChange(of: isSynchronizing) { wasSynchronizing, isSynchronizing in
             guard wasSynchronizing, !isSynchronizing, isCloudSyncEnabled else { return }
             model.refreshAllCachedMonths()
@@ -4384,7 +4791,13 @@ private struct CalendarEventManagerView: View {
             model.updateYearMonth(target)
             selectedYear = target.year
             selectedMonth = target.month
-            model.load()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard !Task.isCancelled,
+                      monthPageID == pageID,
+                      model.yearMonth == target else { return }
+                model.load()
+            }
         }
 #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willStartLiveResizeNotification)) { _ in
@@ -4436,6 +4849,20 @@ private struct CalendarEventManagerView: View {
                 } else {
                     completeShiftSelection(title)
                 }
+            }
+        }
+        .sheet(isPresented: $isDateTimeEventRegistrationPresented) {
+            DateTimeEventRegistrationView(initialStartDate: dateTimeEventRegistrationStartDate) { title, startDate, endDate, isAllDay in
+                isDateTimeEventRegistrationPresented = false
+                onRegisterDateTimeEvent(
+                    title,
+                    startDate,
+                    endDate,
+                    isAllDay,
+                    RegistrationCompletion {
+                        model.refreshAllCachedMonths()
+                    }
+                )
             }
         }
 #if os(iOS)
@@ -4585,7 +5012,7 @@ private struct CalendarEventManagerView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(ShiftHubLocalization.string("イベントを選択", locale: locale))
+            .accessibilityLabel(ShiftHubLocalization.string("イベント一覧から選択", locale: locale))
             .disabled(selectedCalendarDays.isEmpty)
         }
 #if os(iOS)
@@ -4676,11 +5103,11 @@ private struct CalendarEventManagerView: View {
         guard let event = model.pendingDeletion else { return "" }
         guard ShiftHubLocalization.isEnglish(locale) else { return event.confirmationText }
 
-        let key = event.detail.isEmpty ? "%@日の「%@」" : "%@日の「%@」\n%@"
+        let key = event.menuDetail.isEmpty ? "%@日の「%@」" : "%@日の「%@」\n%@"
         return ShiftHubLocalization.format(
             key,
             locale: locale,
-            arguments: String(event.day), event.title, event.detail
+            arguments: String(event.day), event.title, event.menuDetail
         )
     }
 
@@ -4800,6 +5227,236 @@ private struct CalendarEventManagerView: View {
         return (0...Self.monthPageRadius * 2).contains(pageID) ? pageID : nil
     }
 
+    private func eventDisplaySegments(
+        for yearMonth: YearMonth,
+        events: [CalendarEventRecord]
+    ) -> [CalendarEventDisplaySegment] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+
+        let result = events.flatMap { (event: CalendarEventRecord) -> [CalendarEventDisplaySegment] in
+            guard event.spansMultipleDays,
+                  let startDate = event.startDate,
+                  let endDate = event.endDate,
+                  let monthStart = calendar.date(from: DateComponents(
+                      year: yearMonth.year,
+                      month: yearMonth.month,
+                      day: 1
+                  )),
+                  let nextMonthStart = calendar.date(
+                      byAdding: .month,
+                      value: 1,
+                      to: monthStart
+                  ) else {
+                return []
+            }
+
+            guard startDate < nextMonthStart, endDate > monthStart else {
+                return []
+            }
+
+            let startDay = startDate < monthStart
+                ? 1
+                : calendar.component(.day, from: startDate)
+            let endDay: Int
+            if endDate >= nextMonthStart {
+                endDay = yearMonth.numberOfDays
+            } else {
+                endDay = calendar.component(.day, from: endDate)
+            }
+
+            guard (1...yearMonth.numberOfDays).contains(startDay),
+                  (1...yearMonth.numberOfDays).contains(endDay),
+                  endDay >= startDay else {
+                return []
+            }
+
+            var segments: [CalendarEventDisplaySegment] = []
+            var segmentStartDay = startDay
+            while segmentStartDay <= endDay {
+                let weekdayColumn = (
+                    yearMonth.leadingBlankCount + segmentStartDay - 1
+                ) % 7
+                let segmentEndDay = min(
+                    endDay,
+                    segmentStartDay + (6 - weekdayColumn)
+                )
+                segments.append(
+                    CalendarEventDisplaySegment(
+                        event: event,
+                        startDay: segmentStartDay,
+                        endDay: segmentEndDay
+                    )
+                )
+                segmentStartDay = segmentEndDay + 1
+            }
+            return segments
+        }
+        return result
+    }
+
+    private func singleDayEventBandSegments(
+        for yearMonth: YearMonth,
+        events: [CalendarEventRecord],
+        segments: [CalendarEventDisplaySegment]
+    ) -> [CalendarEventDisplaySegment] {
+        var result: [CalendarEventDisplaySegment] = []
+
+        for day in 1...yearMonth.numberOfDays {
+            let dayEvents = events.filter { $0.starts(on: day, in: yearMonth) }
+            let segmentsForDay = segments.filter { $0.contains(day: day) }
+            let segmentStartEvents = segmentsForDay
+                .filter { $0.startDay == day }
+                .map(\.event)
+            let displayEvents = Array(
+                Dictionary(
+                    (dayEvents + segmentStartEvents).map { ($0.id, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                .values
+            )
+            .filter { event in
+                !segmentsForDay.contains {
+                    $0.event.id == event.id && $0.startDay == day && $0.spanDays > 1
+                }
+            }
+            .sorted(by: calendarEventComesBefore)
+            .prefix(3)
+
+            for event in displayEvents {
+                result.append(CalendarEventDisplaySegment(
+                    event: event,
+                    startDay: day,
+                    endDay: day
+                ))
+            }
+        }
+
+        return result
+    }
+
+    private func eventBandLayouts(
+        for yearMonth: YearMonth,
+        events: [CalendarEventRecord],
+        segments: [CalendarEventDisplaySegment]
+    ) -> [CalendarEventBandLayout] {
+        let candidates = Array(
+            Dictionary(
+                (segments.filter { $0.spanDays > 1 }
+                    + singleDayEventBandSegments(
+                        for: yearMonth,
+                        events: events,
+                        segments: segments
+                    )).map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            ).values
+        )
+        .sorted {
+            if $0.startDay != $1.startDay {
+                return $0.startDay < $1.startDay
+            }
+            if $0.endDay != $1.endDay {
+                // Keep a longer band above an event that starts on the same day.
+                return $0.endDay > $1.endDay
+            }
+            if calendarEventComesBefore($0.event, $1.event) {
+                return true
+            }
+            if calendarEventComesBefore($1.event, $0.event) {
+                return false
+            }
+            return $0.event.id < $1.event.id
+        }
+
+        var occupiedRanges: [Int: [[ClosedRange<Int>]]] = [:]
+        var layouts: [CalendarEventBandLayout] = []
+        for segment in candidates {
+            let startSlot = yearMonth.leadingBlankCount + segment.startDay - 1
+            let row = startSlot / 7
+            let range = segment.startDay...segment.endDay
+            var rowLanes = occupiedRanges[row, default: []]
+            var lane = 0
+            while lane < rowLanes.count,
+                  rowLanes[lane].contains(where: { $0.overlaps(range) }) {
+                lane += 1
+            }
+            if lane == rowLanes.count {
+                rowLanes.append([])
+            }
+            rowLanes[lane].append(range)
+            occupiedRanges[row] = rowLanes
+            layouts.append(CalendarEventBandLayout(
+                event: segment.event,
+                startDay: segment.startDay,
+                endDay: segment.endDay,
+                lane: lane
+            ))
+        }
+
+        // The card has room for three equal event lanes. Hidden events are
+        // indicated in the date header and remain available from the day menu.
+        return layouts
+    }
+
+    private func calendarEventBandMetrics(cardHeight: CGFloat) -> CalendarEventBandMetrics {
+#if os(iOS)
+        let dateHeaderHeight: CGFloat = 14
+        let contentSpacing: CGFloat = 5
+        let gap: CGFloat = 2
+#else
+        let dateHeaderHeight: CGFloat = 18
+        let contentSpacing: CGFloat = 7
+        let gap: CGFloat = 4
+#endif
+        let availableHeight = max(
+            0,
+            cardHeight - 12 - dateHeaderHeight - contentSpacing
+        )
+        let height = max(0, (availableHeight - gap * 2) / 3)
+        return CalendarEventBandMetrics(
+            top: 6 + dateHeaderHeight + contentSpacing,
+            contentSpacing: contentSpacing,
+            gap: gap,
+            height: height,
+            laneHeight: height + gap
+        )
+    }
+
+    private func eventBandCornerStyle(
+        for layout: CalendarEventBandLayout,
+        yearMonth: YearMonth,
+        segments: [CalendarEventDisplaySegment]
+    ) -> (squareLeading: Bool, squareTrailing: Bool) {
+        let hasPreviousSegment = segments.contains {
+            $0.event.id == layout.event.id && $0.endDay == layout.startDay - 1
+        }
+        let hasNextSegment = segments.contains {
+            $0.event.id == layout.event.id && $0.startDay == layout.endDay + 1
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let monthStart = calendar.date(from: DateComponents(
+            year: yearMonth.year,
+            month: yearMonth.month,
+            day: 1
+        ))
+        let nextMonthStart = monthStart.flatMap {
+            calendar.date(byAdding: .month, value: 1, to: $0)
+        }
+        let continuesFromPreviousMonth = monthStart.map { monthStart in
+            layout.event.startDate.map { $0 < monthStart } ?? false
+        } ?? false
+        let continuesIntoNextMonth = nextMonthStart.map { nextMonthStart in
+            layout.event.endDate.map { $0 >= nextMonthStart } ?? false
+        } ?? false
+
+        return (
+            squareLeading: hasPreviousSegment || continuesFromPreviousMonth,
+            squareTrailing: hasNextSegment || continuesIntoNextMonth
+        )
+    }
+
     private var eventCalendarColumns: [GridItem] {
 #if os(iOS)
         return Array(repeating: GridItem(.flexible(minimum: 38), spacing: 4), count: 7)
@@ -4809,18 +5466,29 @@ private struct CalendarEventManagerView: View {
     }
 
     private var eventCalendarView: some View {
-        GeometryReader { geometry in
+        return GeometryReader { geometry in
+            let currentPageID = monthPageID ?? pageID(for: model.yearMonth) ?? Self.monthPageRadius
+
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 0) {
                     ForEach(0...(Self.monthPageRadius * 2), id: \.self) { pageID in
-                        let pageMonth = monthForPageID(pageID)
-                        let pageEvents = model.cachedEvents(for: pageMonth)
+                        Group {
+                            if abs(pageID - currentPageID) <= 2 {
+                                let pageMonth = monthForPageID(pageID)
+                                let pageEvents = pageMonth == model.yearMonth
+                                    ? model.events
+                                    : model.cachedEvents(for: pageMonth)
 
-                        eventCalendarPage(
-                            for: pageMonth,
-                            events: pageEvents,
-                            availableHeight: geometry.size.height
-                        )
+                                eventCalendarPage(
+                                    for: pageMonth,
+                                    events: pageEvents,
+                                    availableWidth: geometry.size.width,
+                                    availableHeight: geometry.size.height
+                                )
+                            } else {
+                                Color.clear
+                            }
+                        }
                         .containerRelativeFrame(.horizontal)
                         .frame(height: geometry.size.height)
                         .id(pageID)
@@ -4841,19 +5509,36 @@ private struct CalendarEventManagerView: View {
 #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+#if os(iOS)
+        .sheet(item: $selectedBandEventForActions) { selection in
+            CalHubDateActionSheetContainer {
+                eventActionsPopover(for: selection.event, day: selection.day)
+            }
+                .presentationDragIndicator(.visible)
+        }
+#endif
     }
 
     private func eventCalendarPage(
         for yearMonth: YearMonth,
         events: [CalendarEventRecord],
+        availableWidth: CGFloat,
         availableHeight: CGFloat
     ) -> some View {
         let leadingBlankCount = yearMonth.leadingBlankCount
         let totalSlots = leadingBlankCount + yearMonth.numberOfDays
         let slots = Swift.Array<Int>(0..<totalSlots)
         let isCurrentMonth = yearMonth == model.yearMonth
+        let displaySegments = eventDisplaySegments(for: yearMonth, events: events)
+        let bandLayouts = eventBandLayouts(
+            for: yearMonth,
+            events: events,
+            segments: displaySegments
+        )
 #if os(iOS)
         let gridSpacing: CGFloat = 5
+        let columnSpacing: CGFloat = 4
+        let horizontalInsets: CGFloat = 24
         let rowCount = 6
         let verticalInsets: CGFloat = 8
         let fittedCardHeight = (
@@ -4865,33 +5550,132 @@ private struct CalendarEventManagerView: View {
 #else
         let cardHeight: CGFloat = 112
         let gridSpacing: CGFloat = 8
+        let columnSpacing: CGFloat = 8
+        let horizontalInsets: CGFloat = 48
 #endif
-
+        let bandMetrics = calendarEventBandMetrics(cardHeight: cardHeight)
+        let renderEventBandsInOverlay = isCurrentMonth && !model.isDeleting
+        let columnWidth = max(
+            0,
+            (availableWidth - horizontalInsets - CGFloat(6) * columnSpacing) / 7
+        )
         return ScrollView {
-            LazyVGrid(columns: eventCalendarColumns, spacing: gridSpacing) {
-                ForEach(slots, id: \.self) { slot in
-                    if slot < leadingBlankCount {
-                        Color.clear
-                            .frame(maxWidth: .infinity)
-                            .frame(height: cardHeight)
-                    } else {
-                        eventDayCell(
-                            day: slot - leadingBlankCount + 1,
-                            yearMonth: yearMonth,
-                            events: events,
-                            isInteractive: isCurrentMonth,
-                            isSelectionMode: isDaySelectionMode,
-                            isSelected: selectedCalendarDays.contains(
-                                CalendarDaySelection(
-                                    year: yearMonth.year,
-                                    month: yearMonth.month,
-                                    day: slot - leadingBlankCount + 1
-                                )
-                            ),
-                            cardHeight: cardHeight
-                        )
+            ZStack(alignment: .topLeading) {
+                LazyVGrid(columns: eventCalendarColumns, spacing: gridSpacing) {
+                    ForEach(slots, id: \.self) { slot in
+                        if slot < leadingBlankCount {
+                            Color.clear
+                                .frame(maxWidth: .infinity)
+                                .frame(height: cardHeight)
+                        } else {
+                            eventDayCell(
+                                day: slot - leadingBlankCount + 1,
+                                yearMonth: yearMonth,
+                                events: events,
+                                segments: displaySegments,
+                                isInteractive: isCurrentMonth,
+                                isSelectionMode: isDaySelectionMode,
+                                isSelected: selectedCalendarDays.contains(
+                                    CalendarDaySelection(
+                                        year: yearMonth.year,
+                                        month: yearMonth.month,
+                                        day: slot - leadingBlankCount + 1
+                                    )
+                                ),
+                                cardHeight: cardHeight,
+                                bandMetrics: bandMetrics,
+                                bandLayouts: bandLayouts,
+                                hideEventContent: renderEventBandsInOverlay
+                            )
+                        }
                     }
                 }
+
+                if renderEventBandsInOverlay {
+                    ForEach(bandLayouts.filter { $0.lane < 3 }) { layout in
+                        let startSlot = leadingBlankCount + layout.startDay - 1
+                        let row = startSlot / 7
+                        let column = startSlot % 7
+                        let bandWidth = max(0, columnWidth * CGFloat(layout.spanDays)
+                            + columnSpacing * CGFloat(layout.spanDays - 1)
+                            - 12)
+                        let eventColor = layout.event.isRestEvent
+                            ? Color.red
+                            : layout.event.calendarColor?.color ?? Color.accentColor
+                        let cornerStyle = eventBandCornerStyle(
+                            for: layout,
+                            yearMonth: yearMonth,
+                            segments: displaySegments
+                        )
+
+                        ZStack(alignment: .leading) {
+                            HStack(spacing: 0) {
+                                Text(layout.event.title)
+#if os(iOS)
+                                    .font(.system(size: 8, weight: .medium))
+                                    .lineLimit(1)
+//                                    .minimumScaleFactor(0.5)
+#else
+                                    .font(.caption.weight(.medium))
+#endif
+                                    .padding(.horizontal, 6)
+
+                                Spacer(minLength: 0)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .allowsHitTesting(false)
+
+                            Button {
+                                isCalendarDestinationMenuPresented = false
+                                isYearMonthPickerPresented = false
+                                selectedDayForActions = nil
+                                selectedBandEventForActions = CalendarBandEventSelection(
+                                    event: layout.event,
+                                    day: layout.startDay
+                                )
+                            } label: {
+                                Rectangle()
+                                    .fill(.clear)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .contentShape(Rectangle())
+                                    .accessibilityLabel(layout.event.title)
+                            }
+                            .buttonStyle(.plain)
+#if os(macOS)
+                            .popover(
+                                isPresented: bandEventPopoverBinding(
+                                    for: layout.event,
+                                    day: layout.startDay
+                                )
+                            ) {
+                                bandEventActionsPopover(
+                                    for: layout.event,
+                                    day: layout.startDay
+                                )
+                            }
+#endif
+                        }
+                        .frame(width: bandWidth, height: bandMetrics.height)
+                        .background {
+                            CalendarEventBandShape(
+                                squareLeading: cornerStyle.squareLeading,
+                                squareTrailing: cornerStyle.squareTrailing
+                            )
+                                .fill(eventColor.opacity(isDaySelectionMode ? 0.25 : 0.6))
+                        }
+                        .position(
+                            x: CGFloat(column) * (columnWidth + columnSpacing)
+                                + 6 + bandWidth / 2,
+                            y: CGFloat(row) * (cardHeight + gridSpacing)
+                                + bandMetrics.top
+                                + CGFloat(layout.lane) * bandMetrics.laneHeight
+                                + bandMetrics.height / 2
+                        )
+                        .zIndex(2)
+                        .allowsHitTesting(!isDaySelectionMode)
+                    }
+                }
+
             }
 #if os(iOS)
             .padding(.horizontal, 12)
@@ -4924,18 +5708,6 @@ private struct CalendarEventManagerView: View {
         .background(.background)
     }
 
-    private func roundedEventAccent(color: Color, width: CGFloat) -> some View {
-        GeometryReader { proxy in
-            let radius = width / 2
-            Path { path in
-                path.move(to: CGPoint(x: radius, y: radius))
-                path.addLine(to: CGPoint(x: radius, y: max(radius, proxy.size.height - radius)))
-            }
-            .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
-        }
-        .frame(width: width)
-    }
-
     private func roundedTodayUnderline() -> some View {
         GeometryReader { proxy in
             Path { path in
@@ -4952,31 +5724,51 @@ private struct CalendarEventManagerView: View {
         day: Int,
         yearMonth: YearMonth,
         events: [CalendarEventRecord],
+        segments: [CalendarEventDisplaySegment],
         isInteractive: Bool,
         isSelectionMode: Bool,
         isSelected: Bool,
-        cardHeight: CGFloat
+        cardHeight: CGFloat,
+        bandMetrics: CalendarEventBandMetrics,
+        bandLayouts: [CalendarEventBandLayout],
+        hideEventContent: Bool
     ) -> some View {
-        let dayEvents = events.filter { $0.day == day }
-        let displayEvents = Array(dayEvents.sorted(by: calendarEventComesBefore).prefix(3))
-        let shouldShowEventDetail = displayEvents.count <= 2
+        let dayEvents = events.filter { $0.starts(on: day, in: yearMonth) }
+        let segmentsForDay = segments.filter { $0.contains(day: day) }
+        let segmentStartEvents = segmentsForDay
+            .filter { $0.startDay == day }
+            .map(\.event)
+        let allDisplayEvents = Array(
+            Dictionary(
+                (dayEvents + segmentStartEvents).map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            .values
+        )
+        .filter { event in
+            !segmentsForDay.contains {
+                $0.event.id == event.id && $0.startDay == day && $0.spanDays > 1
+            }
+        }
+            .sorted(by: calendarEventComesBefore)
+            .prefix(3)
+        let displayEvents = hideEventContent ? [] : allDisplayEvents
+        let overflowCount = bandLayouts.filter {
+            $0.lane >= 3 && $0.contains(day: day)
+        }.count
+        let weekdayColumn = (yearMonth.leadingBlankCount + day - 1) % 7
+        let connectsToPreviousCard = weekdayColumn > 0 && segmentsForDay.contains {
+            $0.startDay < day
+        }
         let selection = CalendarDaySelection(year: yearMonth.year, month: yearMonth.month, day: day)
         let isToday = Calendar.current.date(
             from: DateComponents(year: yearMonth.year, month: yearMonth.month, day: day)
         ).map(Calendar.current.isDateInToday) ?? false
 #if os(iOS)
-        let contentSpacing: CGFloat = 5
-        let eventSpacing: CGFloat = 2
-#else
-        let contentSpacing: CGFloat = 7
-        let eventSpacing: CGFloat = 4
-#endif
-#if os(iOS)
         let dateHeaderHeight: CGFloat = 14
 #else
         let dateHeaderHeight: CGFloat = 18
 #endif
-
         return Button {
             guard isInteractive else { return }
 
@@ -4994,15 +5786,21 @@ private struct CalendarEventManagerView: View {
             Task { @MainActor in
                 await Task.yield()
                 selectedDayForActions = day
+#if os(macOS)
+                isDayActionsPopoverPresented = true
+#endif
             }
         } label: {
             ZStack(alignment: .topLeading) {
-                VStack(alignment: .leading, spacing: contentSpacing) {
+                VStack(alignment: .leading, spacing: bandMetrics.contentSpacing) {
                     Color.clear
                         .frame(height: dateHeaderHeight)
 
                     ForEach(displayEvents) { event in
-                        HStack(alignment: .top, spacing: eventSpacing) {
+                        let eventColor = event.isRestEvent
+                            ? Color.red
+                            : event.calendarColor?.color ?? Color.accentColor
+                        HStack(alignment: .top, spacing: bandMetrics.gap) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(event.title)
 #if os(iOS)
@@ -5014,20 +5812,6 @@ private struct CalendarEventManagerView: View {
                                     .lineLimit(1)
 #endif
 
-                                if shouldShowEventDetail {
-                                    Text(event.detail.isEmpty ? "終日" : event.detail)
-#if os(iOS)
-                                        .font(.system(size: 7))
-#else
-                                        .font(.caption2)
-#endif
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-#if os(iOS)
-                                        .minimumScaleFactor(0.35)
-                                        .allowsTightening(true)
-#endif
-                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -5036,49 +5820,70 @@ private struct CalendarEventManagerView: View {
 #else
                         .padding(.leading, 6)
 #endif
-                        .overlay(alignment: .leading) {
-                            Group {
-#if os(iOS)
-                                roundedEventAccent(
-                                    color: event.isRestEvent ? Color.red : event.calendarColor?.color ?? Color.accentColor,
-                                    width: 2
-                                )
-#else
-                                roundedEventAccent(
-                                    color: event.isRestEvent ? Color.red : event.calendarColor?.color ?? Color.accentColor,
-                                    width: 3
-                                )
-#endif
-                            }
-                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                    }
+                        .padding(.vertical, min(3, bandMetrics.height / 6))
+                        .frame(height: bandMetrics.height, alignment: .leading)
+                        .background(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(eventColor.opacity(isDaySelectionMode ? 0.35 : 0.6))
+                                .allowsHitTesting(false)
+                        }
                     }
 
-                    if dayEvents.isEmpty {
+                    if displayEvents.isEmpty {
                         Spacer(minLength: 0)
                     }
                 }
-                Text("\(day)")
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text("\(day)")
 #if os(iOS)
-                    .font(.caption.weight(.semibold))
+                        .font(.caption.weight(.semibold))
 #else
-                    .font(.body.weight(.semibold))
+                        .font(.body.weight(.semibold))
 #endif
-                    .overlay(alignment: .bottom) {
-                        if isToday {
-                            roundedTodayUnderline()
+                        .overlay(alignment: .bottom) {
+                            if isToday {
+                                roundedTodayUnderline()
+                            }
+                        }
+                    Spacer(minLength: 0)
+
+                    if hideEventContent && overflowCount > 0 {
+                        Text(
+                            ShiftHubLocalization.format(
+                                "+%@件",
+                                locale: locale,
+                                arguments: String(overflowCount)
+                            )
+                        )
+#if os(iOS)
+                            .font(.system(size: 8, weight: .semibold))
+#else
+                            .font(.caption2.weight(.semibold))
+#endif
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                         }
                     }
-            }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             .padding(6)
 #if os(iOS)
             .frame(height: cardHeight, alignment: .top)
             .frame(maxWidth: .infinity, alignment: .topLeading)
 #else
             .frame(height: cardHeight, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
 #endif
-            .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+            .background {
+                GeometryReader { proxy in
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.background.secondary.opacity(0.45))
+                        .allowsHitTesting(false)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(
@@ -5101,6 +5906,7 @@ private struct CalendarEventManagerView: View {
                 isSelectionMode: isSelectionMode
             )
         )
+        .zIndex(connectsToPreviousCard ? 0 : 1)
         .disabled(model.isDeleting || !isInteractive)
 #if os(iOS)
         .sheet(
@@ -5113,27 +5919,49 @@ private struct CalendarEventManagerView: View {
                 }
             )
         ) {
-            dayActionsPopover(for: day)
+            dayActionsPopover(
+                for: day,
+                additionalEvents: segmentsForDay.map(\.event)
+            )
                 .presentationDragIndicator(.visible)
         }
 #else
         .popover(
             isPresented: Binding(
-                get: { isInteractive && !isSelectionMode && selectedDayForActions == day },
+                get: {
+                    isInteractive
+                        && !isSelectionMode
+                        && isDayActionsPopoverPresented
+                        && selectedDayForActions == day
+                        && selectedBandEventForActions == nil
+                },
                 set: { isPresented in
                     if isInteractive && !isPresented && selectedDayForActions == day {
+                        isDayActionsPopoverPresented = false
                         selectedDayForActions = nil
                     }
                 }
             )
         ) {
-            dayActionsPopover(for: day)
+            dayActionsPopover(
+                for: day,
+                additionalEvents: segmentsForDay.map(\.event)
+            )
         }
 #endif
     }
 
-    private func dayActionsPopover(for day: Int) -> some View {
-        let dayEvents = model.events(for: day)
+    private func dayActionsPopover(
+        for day: Int,
+        additionalEvents: [CalendarEventRecord] = []
+    ) -> some View {
+        let dayEvents = Array(
+            Dictionary(
+                (model.events(for: day) + additionalEvents).map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            .values
+        )
         let actionableEvents = dayEvents.filter { !$0.isReadOnly }
         let displayOnlyEvents = dayEvents.filter(\.isReadOnly)
 
@@ -5165,6 +5993,8 @@ private struct CalendarEventManagerView: View {
                         Divider()
                         VStack(alignment: .leading, spacing: 8) {
                             eventListRowContent(for: event)
+                            dateTimeEventRegistrationButton(forDay: day)
+                            eventRegistrationButton(forDay: day)
                             eventActions(for: event)
                         }
                         .padding(.top, 12)
@@ -5181,8 +6011,21 @@ private struct CalendarEventManagerView: View {
             }
 #endif
 
+#if os(iOS)
             eventRegistrationButton(forDay: day)
                 .padding(.top, 12)
+
+            dateTimeEventRegistrationButton(forDay: day)
+                .padding(.top, 8)
+#else
+            if actionableEvents.count != 1 {
+                dateTimeEventRegistrationButton(forDay: day)
+                    .padding(.top, 12)
+
+                eventRegistrationButton(forDay: day)
+                    .padding(.top, 8)
+            }
+#endif
             }
         }
     }
@@ -5191,14 +6034,33 @@ private struct CalendarEventManagerView: View {
         Button {
             presentShiftSelection(forDay: day, deleteExisting: false)
         } label: {
-            Label("イベントを登録", systemImage: "calendar.badge.plus")
+            Label("イベント一覧から選択", systemImage: "list.bullet")
+#if os(iOS)
                 .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .leading)
+#else
+                .frame(maxWidth: .infinity, alignment: .leading)
+#endif
         }
 #if os(iOS)
         .buttonStyle(.bordered)
         .controlSize(.regular)
+#endif
+    }
+
+    private func dateTimeEventRegistrationButton(forDay day: Int) -> some View {
+        Button {
+            presentDateTimeEventRegistration(forDay: day)
+        } label: {
+            Label("イベントを登録", systemImage: "calendar.badge.plus")
+#if os(iOS)
+                .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .leading)
 #else
-        .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+#endif
+        }
+#if os(iOS)
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
 #endif
     }
 
@@ -5208,7 +6070,7 @@ private struct CalendarEventManagerView: View {
                 .font(.callout.weight(.medium))
                 .lineLimit(2)
 
-            Text(event.detail.isEmpty ? "終日" : event.detail)
+            Text(event.menuDetail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -5242,52 +6104,52 @@ private struct CalendarEventManagerView: View {
             ForEach(events) { event in
                 Divider()
 #if os(macOS)
-                Menu {
-                    eventActions(for: event)
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(event.title)
-                            .font(.callout.weight(.medium))
-                            .lineLimit(1)
+                HStack(spacing: 8) {
+                    eventListRowContent(for: event)
+                        .frame(width: 180, alignment: .leading)
 
-                        Text(event.detail.isEmpty ? "終日" : event.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                    Button(role: .destructive) {
+                        selectedEventForActions = nil
+                        selectedDayForActions = nil
+                        selectedBandEventForActions = nil
+                        isDayActionsPopoverPresented = false
+                        shiftTitleAfterDelete = nil
+                        model.requestDelete(event)
+                    } label: {
+                        Image(systemName: "trash")
+                            .frame(width: 24, height: 24)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .disabled(event.isReadOnly)
+                    .help("削除")
+                    .accessibilityLabel("削除")
                 }
-                .menuStyle(.borderlessButton)
-                .frame(maxWidth: .infinity, alignment: .leading)
-#else
-                Button {
-                    selectedEventForActions = event
-                } label: {
-                    HStack(spacing: 0) {
-                        eventListRowContent(for: event)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .popover(
-                    isPresented: Binding(
-                        get: { selectedEventForActions?.id == event.id },
-                        set: { isPresented in
-                            if !isPresented && selectedEventForActions?.id == event.id {
-                                selectedEventForActions = nil
-                            }
-                        }
-                    )
-                ) {
-                    eventActionsPopover(for: event, day: day)
-                        .presentationCompactAdaptation(.popover)
+#else
+                HStack(spacing: 8) {
+                    eventListRowContent(for: event)
+
+                    Button(role: .destructive) {
+                        selectedEventForActions = nil
+                        selectedDayForActions = nil
+                        selectedBandEventForActions = nil
+                        pendingInlineDeletion = nil
+                        model.requestDelete(event)
+                    } label: {
+                        Image(systemName: "trash")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .disabled(event.isReadOnly)
+                    .accessibilityLabel("削除")
                 }
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
 #endif
             }
         }
@@ -5305,8 +6167,8 @@ private struct CalendarEventManagerView: View {
                 .foregroundStyle(.primary)
                 .padding(.top, 10)
 
-            if !event.detail.isEmpty {
-                Text(event.detail)
+            if !event.menuDetail.isEmpty {
+                Text(event.menuDetail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.top, 2)
@@ -5324,6 +6186,7 @@ private struct CalendarEventManagerView: View {
                         Button(role: .destructive) {
                             pendingInlineDeletion = nil
                             selectedEventForActions = nil
+                            selectedBandEventForActions = nil
                             selectedDayForActions = nil
                             model.deleteImmediately(event)
                         } label: {
@@ -5350,15 +6213,56 @@ private struct CalendarEventManagerView: View {
     }
 #endif
 
+#if os(macOS)
+    private func bandEventPopoverBinding(
+        for event: CalendarEventRecord,
+        day: Int
+    ) -> Binding<Bool> {
+        Binding(
+            get: {
+                selectedBandEventForActions?.event.id == event.id
+                    && selectedBandEventForActions?.day == day
+            },
+            set: { isPresented in
+                guard !isPresented,
+                      selectedBandEventForActions?.event.id == event.id,
+                      selectedBandEventForActions?.day == day else {
+                    return
+                }
+                selectedBandEventForActions = nil
+            }
+        )
+    }
+
+    private func bandEventActionsPopover(for event: CalendarEventRecord, day: Int) -> some View {
+        CalHubDateActionSheetContainer {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(model.dayHeader(for: day, locale: locale))
+                    .font(.headline)
+                    .padding(.bottom, 10)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    eventListRowContent(for: event)
+                    eventActions(for: event)
+                }
+                .padding(.top, 12)
+            }
+        }
+    }
+#endif
+
     @ViewBuilder
     private func eventActions(for event: CalendarEventRecord) -> some View {
 #if os(iOS)
         VStack(spacing: 8) {
             Button {
                 selectedEventForActions = nil
+                selectedBandEventForActions = nil
                 presentShiftSelection(for: event, deleteExisting: true)
             } label: {
-                Label("削除してイベントの登録", systemImage: "arrow.triangle.2.circlepath")
+                Label("削除してイベント一覧から選択", systemImage: "arrow.triangle.2.circlepath")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(event.isReadOnly)
@@ -5376,15 +6280,19 @@ private struct CalendarEventManagerView: View {
 #else
         VStack(alignment: .leading, spacing: 8) {
             Button {
+                selectedEventForActions = nil
+                selectedBandEventForActions = nil
                 presentShiftSelection(for: event, deleteExisting: true)
             } label: {
-                Label("削除してイベントの登録", systemImage: "arrow.triangle.2.circlepath")
+                Label("削除してイベント一覧から選択", systemImage: "arrow.triangle.2.circlepath")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(event.isReadOnly)
 
             Button(role: .destructive) {
+                selectedEventForActions = nil
                 selectedDayForActions = nil
+                selectedBandEventForActions = nil
                 shiftTitleAfterDelete = nil
                 model.requestDelete(event)
             } label: {
@@ -5399,12 +6307,35 @@ private struct CalendarEventManagerView: View {
 
     private func presentShiftSelection(for event: CalendarEventRecord, deleteExisting: Bool) {
         selectedDayForActions = nil
+        selectedBandEventForActions = nil
         pendingShiftRegistration = PendingShiftRegistration(
             day: event.day,
             event: event,
             deleteExisting: deleteExisting
         )
         isShiftSelectionPresented = true
+    }
+
+    private func presentDateTimeEventRegistration(forDay day: Int) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        guard let startOfDay = calendar.date(from: DateComponents(
+            calendar: calendar,
+            timeZone: calendar.timeZone,
+            year: model.yearMonth.year,
+            month: model.yearMonth.month,
+            day: day
+        )),
+        let initialStartDate = calendar.date(byAdding: .hour, value: 9, to: startOfDay) else {
+            return
+        }
+
+        selectedDayForActions = nil
+        dateTimeEventRegistrationStartDate = initialStartDate
+        Task { @MainActor in
+            await Task.yield()
+            isDateTimeEventRegistrationPresented = true
+        }
     }
 
     private func leaveDaySelectionModeAndOpen(_ action: () -> Void) {
@@ -5820,7 +6751,7 @@ private struct ShiftHubMacSettingsView: View {
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("カレンダー登録"),
-                    detail: localized("Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。勤務イベントは保存済みの開始・終了時刻で登録できます。")
+                    detail: localized("Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。保存済みイベントの一覧から登録できるほか、トップ画面ではタイトルと開始・終了日時を指定したイベントを登録できます。PDFスキャンと複数選択は同日登録に対応します。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
@@ -5850,7 +6781,7 @@ private struct ShiftHubMacSettingsView: View {
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("カレンダーキャッシュ"),
-                    detail: localized("表示中の月を中心に前後12か月をキャッシュし、月移動時はキャッシュを先に表示します。表示範囲外の月は破棄し、手動更新、バックグラウンドからの復帰、iCloud同期完了、接続先設定の変更後に再取得します。")
+                    detail: localized("表示中の月を中心に前後12か月をキャッシュし、月移動時はキャッシュを先に表示します。表示範囲外の月は破棄し、手動更新、iCloud同期完了、接続先設定の変更後に再取得します。Mac版ではアプリの再アクティブ化だけでは再取得しません。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
@@ -5890,7 +6821,7 @@ private struct ShiftHubMacSettingsView: View {
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("日をまたぐイベント"),
-                    detail: localized("日付をまたぐイベントには対応していません。")
+                    detail: localized("トップ画面から開始日時と終了日時を指定して登録できます。日付をまたぐイベントは開始日から終了日まで帯で表示し、週や月の境界では帯を分割します。日付メニューでは開始日・終了日を含む範囲を表示します。PDFスキャンと複数選択からは登録できません。")
                 )
             }
 
@@ -6212,7 +7143,7 @@ private struct ShiftHubAboutView: View {
                 )
                 ShiftHubAboutRow(
                     title: "カレンダー登録",
-                    detail: "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。勤務イベントは保存済みの開始・終了時刻で登録できます。"
+                    detail: "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。保存済みイベントの一覧から登録できるほか、トップ画面ではタイトルと開始・終了日時を指定したイベントを登録できます。PDFスキャンと複数選択は同日登録に対応します。"
                 )
                 ShiftHubAboutRow(
                     title: "イベント管理",
@@ -6267,7 +7198,7 @@ private struct ShiftHubAboutView: View {
                 )
                 ShiftHubAboutRow(
                     title: "日をまたぐイベント",
-                    detail: "日付をまたぐイベントには対応していません。"
+                    detail: "トップ画面から開始日時と終了日時を指定して登録できます。日付をまたぐイベントは開始日から終了日まで帯で表示し、週や月の境界では帯を分割します。日付メニューでは開始日・終了日を含む範囲を表示します。PDFスキャンと複数選択からは登録できません。"
                 )
             }
 
@@ -6823,17 +7754,17 @@ struct CalendarSettingsView: View {
                             ruleRow("休", "時間を指定しない終日イベントとして登録")
                             ruleRow("イベント", "開始・終了時刻を指定して登録")
                             ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
-                            ruleRow("日をまたぐイベント", "現時点では未対応")
+                            ruleRow("日をまたぐイベント", "トップ画面から開始日時と終了日時を指定して登録")
                         case .notion:
                             ruleRow("休", "00:00〜23:59の時間付きデータとして登録")
                             ruleRow("イベント", "日付プロパティに開始・終了時刻を登録")
                             ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
-                            ruleRow("日をまたぐイベント", "現時点では未対応")
+                            ruleRow("日をまたぐイベント", "トップ画面から開始日時と終了日時を指定して登録")
                         case .google:
                             ruleRow("休", "時間を指定しない終日イベントとして登録")
                             ruleRow("イベント", "開始・終了時刻を指定して登録")
                             ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
-                            ruleRow("日をまたぐイベント", "現時点では未対応")
+                            ruleRow("日をまたぐイベント", "トップ画面から開始日時と終了日時を指定して登録")
                         }
                     }
                 }
@@ -7316,6 +8247,75 @@ private final class NotionPageWriter {
         )
     }
 
+    func registerDateTimeEvent(
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool,
+        token: String,
+        dataSourceID: String,
+        titleProperty: String,
+        dateProperty: String,
+        tagProperty: String,
+        tagValue: String
+    ) async throws {
+        guard !dataSourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !titleProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !dateProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !tagValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw NotionAPIError.invalidSettings
+        }
+
+        var dateValue: [String: Any]
+        if isAllDay {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "yyyy-MM-dd"
+
+            let calendar = Calendar.current
+            let normalizedStartDate = calendar.startOfDay(for: startDate)
+            let normalizedEndDate = calendar.startOfDay(for: endDate)
+            dateValue = ["start": formatter.string(from: normalizedStartDate)]
+            if normalizedEndDate > normalizedStartDate {
+                dateValue["end"] = formatter.string(from: normalizedEndDate)
+            }
+        } else {
+            guard endDate >= startDate else {
+                throw NotionAPIError.invalidDate("終了日時")
+            }
+
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+            formatter.timeZone = .current
+            dateValue = [
+                "start": formatter.string(from: startDate),
+                "end": formatter.string(from: endDate)
+            ]
+        }
+
+        let properties: [String: Any] = [
+            titleProperty: [
+                "title": [[
+                    "type": "text",
+                    "text": ["content": title]
+                ]]
+            ],
+            dateProperty: ["date": dateValue],
+            tagProperty: [
+                "multi_select": [["name": tagValue]]
+            ]
+        ]
+
+        try await sendCreatePageRequest(
+            parent: ["database_id": dataSourceID],
+            properties: properties,
+            token: token
+        )
+    }
+
     private func sendCreatePageRequest(
         parent: [String: Any],
         properties: [String: Any],
@@ -7385,7 +8385,6 @@ private final class CalendarEventManagerModel: ObservableObject {
     @Published var isDeleteConfirmationPresented = false
     @Published private(set) var pendingDeletion: CalendarEventRecord?
     @Published private(set) var message = ""
-    @Published private var cacheRevision = 0
 
     private var destination: CalendarDestination
     @Published private(set) var yearMonth: YearMonth
@@ -7399,6 +8398,7 @@ private final class CalendarEventManagerModel: ObservableObject {
     private var notionTagValue: String
     private var localeIdentifier = "ja"
     private var loadTask: Task<Void, Never>?
+    private var prefetchKickoffTask: Task<Void, Never>?
     private var loadGeneration = 0
     private var cacheGeneration = 0
     private var monthCache: [YearMonth: MonthCacheEntry] = [:]
@@ -7408,7 +8408,8 @@ private final class CalendarEventManagerModel: ObservableObject {
 
     // Keep the visible month plus one full year on each side in memory.
     private static let cacheMonthRadius = 12
-    private static let maximumConcurrentPrefetches = 2
+    private static let maximumConcurrentPrefetches = 1
+    private static let prefetchThrottleNanoseconds: UInt64 = 400_000_000
 
     init(
         destination: CalendarDestination,
@@ -7439,7 +8440,19 @@ private final class CalendarEventManagerModel: ObservableObject {
         if let cachedMonth = monthCache[yearMonth] {
             display(cachedMonth)
         } else {
-            clearDisplayedMonth()
+            let carryOverEvents = Array(
+                Dictionary(
+                    (monthCache[yearMonth.addingMonths(-1)]?.events ?? [])
+                        .filter(\.spansMultipleDays)
+                        .map { ($0.id, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                .values
+            )
+            calendarColor = nil
+            events = carryOverEvents
+            loadedDays = Set(carryOverEvents.map(\.day))
+            message = ""
         }
     }
 
@@ -7499,8 +8512,17 @@ private final class CalendarEventManagerModel: ObservableObject {
     }
 
     func cachedEvents(for yearMonth: YearMonth) -> [CalendarEventRecord] {
-        _ = cacheRevision
-        return monthCache[yearMonth]?.events ?? []
+        var cachedEvents = monthCache[yearMonth]?.events ?? []
+        cachedEvents.append(contentsOf: (monthCache[yearMonth.addingMonths(-1)]?.events ?? [])
+            .filter(\.spansMultipleDays))
+
+        return Array(
+            Dictionary(
+                cachedEvents.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            .values
+        )
     }
 
     var groupedDays: [Int] {
@@ -7509,7 +8531,7 @@ private final class CalendarEventManagerModel: ObservableObject {
 
     func events(for day: Int) -> [CalendarEventRecord] {
         events
-            .filter { $0.day == day }
+            .filter { $0.starts(on: day, in: yearMonth) }
             .sorted(by: calendarEventComesBefore)
     }
 
@@ -7525,11 +8547,15 @@ private final class CalendarEventManagerModel: ObservableObject {
     }
 
     func load(forceRefresh: Bool = false) {
+        guard forceRefresh || loadTask == nil else { return }
+
         loadGeneration += 1
         let generation = loadGeneration
         let targetMonth = yearMonth
         let requestedCacheGeneration = cacheGeneration
         loadTask?.cancel()
+        prefetchKickoffTask?.cancel()
+        prefetchKickoffTask = nil
 
         updateCacheWindow(around: targetMonth)
         if forceRefresh {
@@ -7541,14 +8567,13 @@ private final class CalendarEventManagerModel: ObservableObject {
             display(cachedMonth)
             isLoading = false
             loadTask = nil
-            schedulePrefetch(around: targetMonth)
+            schedulePrefetchAfterDisplay(around: targetMonth, generation: generation)
             return
         }
 
         cancelPrefetch(for: targetMonth)
         clearDisplayedMonth()
         isLoading = true
-        schedulePrefetch(around: targetMonth)
 
         loadTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -7568,8 +8593,7 @@ private final class CalendarEventManagerModel: ObservableObject {
                       self.yearMonth == targetMonth else { return }
 
                 self.store(fetchedMonth, for: targetMonth)
-                self.display(fetchedMonth)
-                self.schedulePrefetch(around: targetMonth)
+                self.schedulePrefetchAfterDisplay(around: targetMonth, generation: generation)
             } catch is CancellationError {
                 return
             } catch {
@@ -7645,6 +8669,7 @@ private final class CalendarEventManagerModel: ObservableObject {
                         : event.detail,
                     isAllDay: event.isAllDay,
                     startDate: event.startDate,
+                    endDate: event.endDate,
                     calendarColor: event.calendarColor,
                     isReadOnly: event.isReadOnly
                 )
@@ -7655,8 +8680,18 @@ private final class CalendarEventManagerModel: ObservableObject {
 
     private func display(_ cachedMonth: MonthCacheEntry) {
         calendarColor = cachedMonth.calendarColor
-        events = cachedMonth.events
-        loadedDays = Set(cachedMonth.events.map(\.day))
+        var displayedEvents = cachedMonth.events
+        displayedEvents.append(contentsOf: (monthCache[yearMonth.addingMonths(-1)]?.events ?? [])
+            .filter(\.spansMultipleDays))
+        displayedEvents = Array(
+            Dictionary(
+                displayedEvents.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            .values
+        )
+        events = displayedEvents
+        loadedDays = Set(displayedEvents.map(\.day))
         message = message(for: cachedMonth.events)
     }
 
@@ -7685,11 +8720,7 @@ private final class CalendarEventManagerModel: ObservableObject {
 
     private func updateCacheWindow(around yearMonth: YearMonth) {
         let allowedMonths = cacheWindow(around: yearMonth)
-        let previousCacheCount = monthCache.count
         monthCache = monthCache.filter { allowedMonths.contains($0.key) }
-        if monthCache.count != previousCacheCount {
-            cacheRevision &+= 1
-        }
         queuedPrefetchMonths.formIntersection(allowedMonths)
 
         let obsoleteMonths = prefetchTasks.keys.filter { !allowedMonths.contains($0) }
@@ -7701,8 +8732,11 @@ private final class CalendarEventManagerModel: ObservableObject {
     private func schedulePrefetch(around yearMonth: YearMonth) {
         updateCacheWindow(around: yearMonth)
         let allowedMonths = cacheWindow(around: yearMonth)
+        let nearbyMonths = allowedMonths.filter {
+            monthDistance($0, from: yearMonth) <= 1
+        }
         queuedPrefetchMonths.formUnion(
-            allowedMonths.filter {
+            nearbyMonths.filter {
                 $0 != yearMonth && monthCache[$0] == nil && prefetchTasks[$0] == nil
             }
         )
@@ -7727,6 +8761,8 @@ private final class CalendarEventManagerModel: ObservableObject {
                 }
 
                 do {
+                    try await Task.sleep(nanoseconds: Self.prefetchThrottleNanoseconds)
+                    guard !Task.isCancelled else { return }
                     let fetchedMonth = try await self.fetchMonth(targetMonth)
                     guard !Task.isCancelled,
                           self.cacheGeneration == requestedCacheGeneration,
@@ -7738,6 +8774,29 @@ private final class CalendarEventManagerModel: ObservableObject {
                 }
             }
             prefetchTasks[targetMonth] = task
+        }
+    }
+
+    private func schedulePrefetchAfterDisplay(around yearMonth: YearMonth, generation: Int) {
+        prefetchKickoffTask?.cancel()
+        let requestedCacheGeneration = cacheGeneration
+
+        // Let the visible month settle before starting the one-at-a-time neighbor fetch.
+        prefetchKickoffTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 200_000_000)
+            } catch {
+                return
+            }
+
+            guard let self,
+                  !Task.isCancelled,
+                  self.loadGeneration == generation,
+                  self.cacheGeneration == requestedCacheGeneration,
+                  self.yearMonth == yearMonth else { return }
+
+            self.prefetchKickoffTask = nil
+            self.schedulePrefetch(around: yearMonth)
         }
     }
 
@@ -7757,11 +8816,10 @@ private final class CalendarEventManagerModel: ObservableObject {
 
     private func invalidateMonthCache() {
         cacheGeneration += 1
-        if !monthCache.isEmpty {
-            monthCache.removeAll()
-            cacheRevision &+= 1
-        }
+        monthCache.removeAll()
         queuedPrefetchMonths.removeAll()
+        prefetchKickoffTask?.cancel()
+        prefetchKickoffTask = nil
         prefetchTasks.values.forEach { $0.cancel() }
         prefetchTasks.removeAll()
         prefetchTokens.removeAll()
@@ -7777,12 +8835,13 @@ private final class CalendarEventManagerModel: ObservableObject {
 
     private func store(_ cachedMonth: MonthCacheEntry, for yearMonth: YearMonth) {
         monthCache[yearMonth] = cachedMonth
-        cacheRevision &+= 1
+        if yearMonth == self.yearMonth {
+            display(cachedMonth)
+        }
     }
 
     private func removeCachedMonth(for yearMonth: YearMonth) {
         guard monthCache.removeValue(forKey: yearMonth) != nil else { return }
-        cacheRevision &+= 1
     }
 
     func requestDelete(_ event: CalendarEventRecord) {
@@ -7925,6 +8984,7 @@ private final class AppleCalendarEventClient {
                 detail: event.isAllDay ? "終日" : timeRangeText(start: event.startDate, end: event.endDate),
                 isAllDay: event.isAllDay,
                 startDate: event.startDate,
+                endDate: event.isAllDay ? nil : event.endDate,
                 calendarColor: calendarColor
             )
         }
@@ -7989,8 +9049,36 @@ private struct NotionCalendarEventClient {
         var cursor: String?
         var records: [CalendarEventRecord] = []
         var seenPageIDs = Set<String>()
+        var requestedCursors = Set<String>()
+        var pageCount = 0
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        guard let monthStart = calendar.date(from: DateComponents(
+            year: yearMonth.year,
+            month: yearMonth.month,
+            day: 1
+        )),
+        let queryStart = calendar.date(
+            byAdding: .month,
+            value: -1,
+            to: monthStart
+        ),
+        let nextMonthStart = calendar.date(
+            byAdding: .month,
+            value: 1,
+            to: monthStart
+        ) else {
+            throw CalendarEventManagementError.invalidResponse
+        }
 
         repeat {
+            if let cursor, !requestedCursors.insert(cursor).inserted {
+                break
+            }
+            pageCount += 1
+            guard pageCount <= 100 else { break }
+
             var body: [String: Any] = [
                 "page_size": 100,
                 "filter": [
@@ -7998,7 +9086,7 @@ private struct NotionCalendarEventClient {
                         [
                             "property": dateProperty,
                             "date": [
-                                "on_or_after": dateText(yearMonth: yearMonth, day: 1),
+                                "on_or_after": dateText(from: queryStart),
                                 "before": dateText(yearMonth: yearMonth.nextMonth, day: 1)
                             ]
                         ],
@@ -8034,27 +9122,44 @@ private struct NotionCalendarEventClient {
                       let dateData = properties[dateProperty] as? [String: Any],
                       let dateValue = dateData["date"] as? [String: Any],
                       let start = dateValue["start"] as? String,
-                      let day = dayInSelectedMonth(from: start, yearMonth: yearMonth),
                       hasConfiguredTag(in: properties[tagProperty]) else {
                     continue
                 }
 
                 let title = title(from: properties[titleProperty])
+                let isAllDay = !start.contains("T")
+                let startDate = isAllDay ? dateOnlyDate(from: start) : parseISO8601Date(start)
+                guard let startDate else { continue }
                 let detail: String
+                let endDate: Date?
                 if start.contains("T"),
                    let end = dateValue["end"] as? String,
                    end.contains("T") {
                     detail = timeRangeText(start: start, end: end)
+                    endDate = parseISO8601Date(end)
                 } else {
-                    detail = start.contains("T") ? timeText(from: start) : "終日"
+                    detail = isAllDay ? "終日" : timeText(from: start)
+                    endDate = isAllDay
+                        ? (dateValue["end"] as? String).flatMap { dateOnlyDate(from: $0) }
+                        : nil
                 }
+
+                let startsInMonth = startDate >= monthStart && startDate < nextMonthStart
+                let continuesIntoMonth = startDate < monthStart
+                    && (endDate.map { $0 > monthStart } ?? false)
+                guard startsInMonth || continuesIntoMonth else { continue }
+
+                let day = startsInMonth
+                    ? (dayInSelectedMonth(from: start, yearMonth: yearMonth) ?? 1)
+                    : 1
                 records.append(CalendarEventRecord(
                     id: identifier,
                     day: day,
                     title: title.isEmpty ? "無題" : title,
                     detail: detail,
-                    isAllDay: !start.contains("T"),
-                    startDate: parseISO8601Date(start),
+                    isAllDay: isAllDay,
+                    startDate: startDate,
+                    endDate: endDate,
                     calendarColor: nil
                 ))
             }
@@ -8189,6 +9294,15 @@ private struct NotionCalendarEventClient {
         return formatter.date(from: value)
     }
 
+    private func dateOnlyDate(from value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: String(value.prefix(10)))
+    }
+
     private func hasConfiguredTag(in property: Any?) -> Bool {
         let expected = tagValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !expected.isEmpty,
@@ -8227,6 +9341,15 @@ private struct NotionCalendarEventClient {
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private func dateText(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
@@ -8808,6 +9931,59 @@ private struct GoogleCalendarAPIClient {
     func createEvent(
         calendarID: String,
         title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool
+    ) async throws {
+        guard endDate >= startDate else {
+            throw GoogleCalendarError.invalidDate
+        }
+
+        let start: [String: Any]
+        let end: [String: Any]
+        if isAllDay {
+            let calendar = Calendar.current
+            let normalizedStartDate = calendar.startOfDay(for: startDate)
+            let normalizedEndDate = calendar.startOfDay(for: endDate)
+            guard let endExclusive = calendar.date(byAdding: .day, value: 1, to: normalizedEndDate) else {
+                throw GoogleCalendarError.invalidDate
+            }
+
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "yyyy-MM-dd"
+            start = ["date": formatter.string(from: normalizedStartDate)]
+            end = ["date": formatter.string(from: endExclusive)]
+        } else {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+            formatter.timeZone = .current
+            start = [
+                "dateTime": formatter.string(from: startDate),
+                "timeZone": TimeZone.current.identifier
+            ]
+            end = [
+                "dateTime": formatter.string(from: endDate),
+                "timeZone": TimeZone.current.identifier
+            ]
+        }
+
+        let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
+        let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events")!
+        let body: [String: Any] = [
+            "summary": title,
+            "start": start,
+            "end": end
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        _ = try await sendRequest(url: url, method: "POST", body: bodyData)
+    }
+
+    func createEvent(
+        calendarID: String,
+        title: String,
         yearMonth: YearMonth,
         day: Int,
         startMinutes: Int?,
@@ -8900,14 +10076,20 @@ private struct GoogleCalendarAPIClient {
                 ? (item["summary"] as? String ?? "")
                 : "無題"
             if let dateText = start["date"] as? String,
-               let day = Int(dateText.split(separator: "-").last ?? "") {
+               let day = Int(dateText.split(separator: "-").last ?? ""),
+               let startDate = dateOnlyDate(from: dateText) {
+                let endDate = ((item["end"] as? [String: Any])?["date"] as? String)
+                    .flatMap { dateOnlyDate(from: $0) }
                 return CalendarEventRecord(
                     id: identifier,
                     day: day,
                     title: title,
                     detail: "終日",
                     isAllDay: true,
-                    startDate: dateOnlyDate(from: dateText),
+                    startDate: startDate,
+                    endDate: endDate.map { date in
+                        Calendar.current.date(byAdding: .day, value: -1, to: date)
+                    } ?? nil,
                     calendarColor: calendarColor ?? nil,
                     isReadOnly: isReadOnly
                 )
@@ -8928,6 +10110,7 @@ private struct GoogleCalendarAPIClient {
                 detail: timeRangeText(start: dateTime, end: endDate),
                 isAllDay: false,
                 startDate: dateTime,
+                endDate: endDate,
                 calendarColor: calendarColor ?? nil,
                 isReadOnly: isReadOnly
             )
@@ -9407,6 +10590,55 @@ private final class AppleCalendarEventWriter {
         }
 
         return AppleCalendarRegistrationResult(savedCount: savedCount, skippedTitles: skippedTitles)
+    }
+
+    func registerDateTimeEvent(
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool,
+        calendarIdentifier: String
+    ) throws {
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
+            throw AppleCalendarRegistrationError.accessDenied
+        }
+
+        let calendar: EKCalendar?
+        if calendarIdentifier.isEmpty {
+            calendar = eventStore.defaultCalendarForNewEvents
+        } else {
+            calendar = eventStore.calendar(withIdentifier: calendarIdentifier)
+        }
+
+        guard let calendar, calendar.allowsContentModifications else {
+            throw AppleCalendarRegistrationError.calendarNotFound
+        }
+
+        guard endDate >= startDate else {
+            throw AppleCalendarRegistrationError.invalidDate("終了日時")
+        }
+
+        let event = EKEvent(eventStore: eventStore)
+        event.title = title
+        event.calendar = calendar
+        event.isAllDay = isAllDay
+
+        if isAllDay {
+            let calendar = Calendar.current
+            let normalizedStartDate = calendar.startOfDay(for: startDate)
+            let normalizedEndDate = calendar.startOfDay(for: endDate)
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: normalizedEndDate),
+                  let inclusiveEndDate = calendar.date(byAdding: .second, value: -1, to: nextDay) else {
+                throw AppleCalendarRegistrationError.invalidDate("終了日時")
+            }
+            event.startDate = normalizedStartDate
+            event.endDate = inclusiveEndDate
+        } else {
+            event.startDate = startDate
+            event.endDate = endDate
+        }
+
+        try eventStore.save(event, span: .thisEvent, commit: true)
     }
 
     private func saveAllDayEvent(title: String, yearMonth: YearMonth, dayText: String, calendar: EKCalendar) throws {
