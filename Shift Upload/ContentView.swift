@@ -7032,10 +7032,11 @@ private struct ShiftHubMacSettingsView: View {
         VStack(alignment: .leading, spacing: 18) {
             ShiftHubMacSettingsSectionCard {
                 HStack(spacing: 14) {
-                    Image(systemName: "calendar.badge.clock")
-                        .font(.system(size: 34))
-                        .foregroundStyle(.tint)
-                        .frame(width: 50, height: 50)
+                    Image("CalHubIcon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Cal Hub")
@@ -7435,10 +7436,11 @@ private struct ShiftHubAboutView: View {
         List {
             Section {
                 HStack(spacing: 14) {
-                    Image(systemName: "calendar.badge.clock")
-                        .font(.system(size: 42))
-                        .foregroundStyle(.tint)
+                    Image("CalHubIcon")
+                        .resizable()
+                        .scaledToFit()
                         .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Cal Hub")
