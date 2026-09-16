@@ -732,14 +732,15 @@ struct ContentView: View {
 
     private var registrationDestinationMenu: some View {
 #if os(iOS)
-        CalendarDestinationSelector(
-            selection: CalendarDestination(rawValue: calendarDestination),
-            showsCalendarIcon: false,
-            isPresented: $isRegistrationDestinationMenuPresented,
-            rendersOverlay: false,
-            onOpen: {},
-            onSelect: { destination in
-                calendarDestination = destination.rawValue
+                CalendarDestinationSelector(
+                    selection: CalendarDestination(rawValue: calendarDestination),
+                    showsCalendarIcon: false,
+                    isPresented: $isRegistrationDestinationMenuPresented,
+                    rendersOverlay: false,
+                    buttonHeight: 34,
+                    onOpen: {},
+                    onSelect: { destination in
+                        calendarDestination = destination.rawValue
             }
         )
         .anchorPreference(key: CalendarOverlayAnchorKey.self, value: .bounds) {
@@ -761,7 +762,7 @@ struct ContentView: View {
                     .font(.caption.weight(.semibold))
             }
         }
-        .buttonStyle(ToolbarSelectorButtonStyleD())
+        .buttonStyle(ToolbarSelectorButtonStyleD(buttonHeight: 34))
         .accessibilityLabel("カレンダーを変更")
 #endif
     }
@@ -3693,7 +3694,7 @@ private struct CalendarDisplayColor: Hashable {
         Color(red: red, green: green, blue: blue, opacity: alpha)
     }
 
-    init?(hex: String) {
+    nonisolated init?(hex: String) {
         let normalized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
         guard normalized.count == 6,
@@ -3707,7 +3708,7 @@ private struct CalendarDisplayColor: Hashable {
         alpha = 1
     }
 
-    init?(cgColor: CGColor) {
+    nonisolated init?(cgColor: CGColor) {
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let converted = cgColor.converted(to: colorSpace, intent: .defaultIntent, options: nil),
               let components = converted.components,
@@ -3733,7 +3734,7 @@ private struct CalendarEventRecord: Identifiable, Hashable {
     let calendarColor: CalendarDisplayColor?
     let isReadOnly: Bool
 
-    init(
+    nonisolated init(
         id: String,
         day: Int,
         title: String,
@@ -4121,9 +4122,11 @@ private final class DateTimeEventRegistrationCompletion {
 private struct ToolbarSelectorButtonStyleD: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     let fillsAvailableWidth: Bool
+    let buttonHeight: CGFloat
 
-    init(fillsAvailableWidth: Bool = false) {
+    init(fillsAvailableWidth: Bool = false, buttonHeight: CGFloat = 40) {
         self.fillsAvailableWidth = fillsAvailableWidth
+        self.buttonHeight = buttonHeight
     }
 
     func makeBody(configuration: Configuration) -> some View {
@@ -4136,8 +4139,8 @@ private struct ToolbarSelectorButtonStyleD: ButtonStyle {
             .frame(
                 minWidth: 36,
                 maxWidth: fillsAvailableWidth ? .infinity : nil,
-                minHeight: 40,
-                maxHeight: 40
+                minHeight: buttonHeight,
+                maxHeight: buttonHeight
             )
             .background(.white.opacity(configuration.isPressed ? 0.16 : 0.07), in: shape)
             .overlay {
@@ -4418,8 +4421,27 @@ private struct CalendarDestinationSelector: View {
     let showsCalendarIcon: Bool
     @Binding var isPresented: Bool
     let rendersOverlay: Bool
+    let buttonHeight: CGFloat
     let onOpen: () -> Void
     let onSelect: (CalendarDestination) -> Void
+
+    init(
+        selection: CalendarDestination?,
+        showsCalendarIcon: Bool,
+        isPresented: Binding<Bool>,
+        rendersOverlay: Bool,
+        buttonHeight: CGFloat = 40,
+        onOpen: @escaping () -> Void,
+        onSelect: @escaping (CalendarDestination) -> Void
+    ) {
+        self.selection = selection
+        self.showsCalendarIcon = showsCalendarIcon
+        self._isPresented = isPresented
+        self.rendersOverlay = rendersOverlay
+        self.buttonHeight = buttonHeight
+        self.onOpen = onOpen
+        self.onSelect = onSelect
+    }
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -4447,7 +4469,7 @@ private struct CalendarDestinationSelector: View {
                     .font(.caption.weight(.semibold))
             }
         }
-        .buttonStyle(ToolbarSelectorButtonStyleD())
+        .buttonStyle(ToolbarSelectorButtonStyleD(buttonHeight: buttonHeight))
         .overlay(alignment: .topTrailing) {
             if rendersOverlay && isPresented {
                 CalendarDestinationPopup(
@@ -4512,7 +4534,10 @@ private struct CalendarEventManagerView: View {
     @State private var isYearMonthPickerPresented = false
     @State private var isCalendarDestinationMenuPresented = false
     @State private var monthPageID: Int?
-    @State private var eventCalendarOpacity = 1.0
+    @State private var pendingMonthPageID: Int?
+    @State private var isMonthScrollActive = false
+    @State private var eventBandRevealThroughDay = Int.max
+    @State private var eventBandRevealGeneration = 0
     @State private var didLoadInitialMonth = false
     @State private var didEnterBackground = false
 #if os(macOS)
@@ -4574,6 +4599,8 @@ private struct CalendarEventManagerView: View {
         _selectedYear = State(initialValue: initial.year)
         _selectedMonth = State(initialValue: initial.month)
         _monthPageID = State(initialValue: Self.monthPageRadius)
+        _pendingMonthPageID = State(initialValue: nil)
+        _isMonthScrollActive = State(initialValue: false)
         let showJapaneseHolidays = UserDefaults.standard.bool(forKey: "googleShowJapaneseHolidays")
         _model = StateObject(wrappedValue: CalendarEventManagerModel(
             destination: destination,
@@ -4735,7 +4762,6 @@ private struct CalendarEventManagerView: View {
 #endif
 
                 eventCalendarView
-                    .opacity(model.events.isEmpty ? 1 : eventCalendarOpacity)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -4928,12 +4954,14 @@ private struct CalendarEventManagerView: View {
         }
         .onChange(of: model.events) { _, events in
             guard !events.isEmpty else {
-                eventCalendarOpacity = 0
+                showAllEventBandsImmediately()
                 return
             }
 
-            withAnimation(.easeOut(duration: 0.45)) {
-                eventCalendarOpacity = 1
+            if model.shouldAnimateEventBandReveal {
+                beginEventBandReveal()
+            } else {
+                showAllEventBandsImmediately()
             }
         }
 #if os(iOS)
@@ -4969,6 +4997,11 @@ private struct CalendarEventManagerView: View {
         .onChange(of: model.yearMonth) {
             selectedYear = model.yearMonth.year
             selectedMonth = model.yearMonth.month
+            if model.shouldAnimateEventBandReveal {
+                beginEventBandReveal()
+            } else {
+                showAllEventBandsImmediately()
+            }
         }
         .onChange(of: selectedYear) {
             reloadSelectedMonth()
@@ -4989,19 +5022,9 @@ private struct CalendarEventManagerView: View {
             }
 #endif
 
-            let target = monthForPageID(pageID)
-            guard target != model.yearMonth else { return }
-
-            model.updateYearMonth(target)
-            selectedYear = target.year
-            selectedMonth = target.month
-
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                guard !Task.isCancelled,
-                      monthPageID == pageID,
-                      model.yearMonth == target else { return }
-                model.load()
+            pendingMonthPageID = pageID
+            if !isMonthScrollActive {
+                commitPendingMonthPage()
             }
         }
 #if os(macOS)
@@ -5429,6 +5452,7 @@ private struct CalendarEventManagerView: View {
 
     private func reloadSelectedMonth() {
         guard selectedYearMonth != model.yearMonth else { return }
+        pendingMonthPageID = nil
         if let pageID = pageID(for: selectedYearMonth) {
             var transaction = Transaction()
             transaction.animation = nil
@@ -5438,6 +5462,62 @@ private struct CalendarEventManagerView: View {
         }
         model.updateYearMonth(selectedYearMonth)
         model.load()
+    }
+
+    private func commitPendingMonthPage() {
+        guard let pageID = pendingMonthPageID,
+              (0...Self.monthPageRadius * 2).contains(pageID) else { return }
+        pendingMonthPageID = nil
+
+        let target = monthForPageID(pageID)
+        guard target != model.yearMonth else { return }
+
+        model.updateYearMonth(target)
+        selectedYear = target.year
+        selectedMonth = target.month
+        model.load()
+    }
+
+    private func beginEventBandReveal() {
+        eventBandRevealGeneration += 1
+        let generation = eventBandRevealGeneration
+        let dayCount = model.yearMonth.numberOfDays
+
+        guard !model.events.isEmpty else {
+            eventBandRevealThroughDay = dayCount
+            return
+        }
+
+        eventBandRevealThroughDay = 0
+        Task { @MainActor in
+            for day in 1...dayCount {
+                guard generation == eventBandRevealGeneration else { return }
+                guard !isMonthScrollActive else {
+                    eventBandRevealThroughDay = dayCount
+                    return
+                }
+
+                withAnimation(.easeOut(duration: 0.08)) {
+                    eventBandRevealThroughDay = day
+                }
+
+                do {
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func showAllEventBandsImmediately() {
+        eventBandRevealGeneration += 1
+        eventBandRevealThroughDay = model.yearMonth.numberOfDays
+    }
+
+    private func eventBandRevealOpacity(for yearMonth: YearMonth, day: Int) -> Double {
+        guard yearMonth == model.yearMonth, !model.events.isEmpty else { return 1 }
+        return day <= eventBandRevealThroughDay ? 1 : 0
     }
 
     private func monthForPageID(_ pageID: Int) -> YearMonth {
@@ -5723,6 +5803,16 @@ private struct CalendarEventManagerView: View {
             .scrollIndicators(.hidden)
             .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
             .scrollPosition(id: $monthPageID)
+            .onScrollPhaseChange { _, phase in
+                isMonthScrollActive = phase != .idle
+                if phase != .idle {
+                    eventBandRevealGeneration += 1
+                    eventBandRevealThroughDay = model.yearMonth.numberOfDays
+                }
+                if phase == .idle {
+                    commitPendingMonthPage()
+                }
+            }
 #if os(macOS)
             .transaction { transaction in
                 if isCalendarLiveResizing {
@@ -5778,7 +5868,9 @@ private struct CalendarEventManagerView: View {
         let horizontalInsets: CGFloat = 48
 #endif
         let bandMetrics = calendarEventBandMetrics(cardHeight: cardHeight)
-        let renderEventBandsInOverlay = isCurrentMonth && !model.isDeleting
+        // Keep adjacent pages on the same band renderer while they are being
+        // swiped into view; only the current page remains interactive.
+        let renderEventBandsInOverlay = true
         let columnWidth = max(
             0,
             (availableWidth - horizontalInsets - CGFloat(6) * columnSpacing) / 7
@@ -5900,8 +5992,12 @@ private struct CalendarEventManagerView: View {
                                 + CGFloat(layout.lane) * bandMetrics.laneHeight
                                 + bandMetrics.height / 2
                         )
+                        .opacity(eventBandRevealOpacity(
+                            for: yearMonth,
+                            day: layout.startDay
+                        ))
                         .zIndex(2)
-                        .allowsHitTesting(!isDaySelectionMode)
+                        .allowsHitTesting(isCurrentMonth && !isDaySelectionMode && !model.isDeleting)
                     }
                 }
 
@@ -7991,7 +8087,6 @@ struct ShiftDefinitionSettingsView: View {
 struct CalendarSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
-
     @AppStorage("calendarDestination") private var calendarDestination = CalendarDestination.apple.rawValue
     @AppStorage("appleCalendarIdentifier") private var appleCalendarIdentifier = ""
     @AppStorage("appleCalendarName") private var appleCalendarName = ""
@@ -8385,20 +8480,22 @@ struct CalendarSettingsView: View {
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 10, content: content)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
                 .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func ruleRow(_ name: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(name)
                 .font(.body.weight(.semibold))
-                .frame(width: 90, alignment: .leading)
 
             Text(detail)
                 .foregroundStyle(.secondary)
         }
+        .padding(.bottom, 8)
     }
 
     private func updateAppleCalendarName() {
@@ -8921,6 +9018,7 @@ private final class CalendarEventManagerModel: ObservableObject {
     @Published var isDeleteConfirmationPresented = false
     @Published private(set) var pendingDeletion: CalendarEventRecord?
     @Published private(set) var message = ""
+    @Published private(set) var shouldAnimateEventBandReveal = false
 
     private var destination: CalendarDestination
     @Published private(set) var yearMonth: YearMonth
@@ -8942,10 +9040,10 @@ private final class CalendarEventManagerModel: ObservableObject {
     private var prefetchTokens: [YearMonth: UUID] = [:]
     private var queuedPrefetchMonths = Set<YearMonth>()
 
-    // Keep the visible month plus one full year on each side in memory.
+    // Retain a bounded cache around the visible month; only adjacent months are prefetched.
     private static let cacheMonthRadius = 12
-    private static let maximumConcurrentPrefetches = 1
-    private static let prefetchThrottleNanoseconds: UInt64 = 400_000_000
+    private static let maximumConcurrentPrefetches = 2
+    private static let prefetchThrottleNanoseconds: UInt64 = 100_000_000
 
     init(
         destination: CalendarDestination,
@@ -8974,8 +9072,10 @@ private final class CalendarEventManagerModel: ObservableObject {
     func updateYearMonth(_ yearMonth: YearMonth) {
         self.yearMonth = yearMonth
         if let cachedMonth = monthCache[yearMonth] {
+            shouldAnimateEventBandReveal = false
             display(cachedMonth)
         } else {
+            shouldAnimateEventBandReveal = false
             let carryOverEvents = Array(
                 Dictionary(
                     (monthCache[yearMonth.addingMonths(-1)]?.events ?? [])
@@ -9104,6 +9204,7 @@ private final class CalendarEventManagerModel: ObservableObject {
         )
 
         // Keep the current screen and its cache in sync without invalidating or re-fetching other months.
+        shouldAnimateEventBandReveal = false
         events.removeAll { $0.id == id }
         events.append(event)
         events.sort(by: calendarEventComesBefore)
@@ -9142,6 +9243,7 @@ private final class CalendarEventManagerModel: ObservableObject {
         loadGeneration += 1
         let generation = loadGeneration
         let targetMonth = yearMonth
+        let hadDisplayedMonth = !events.isEmpty || !loadedDays.isEmpty
         let requestedCacheGeneration = cacheGeneration
         loadTask?.cancel()
         prefetchKickoffTask?.cancel()
@@ -9154,6 +9256,7 @@ private final class CalendarEventManagerModel: ObservableObject {
         }
 
         if let cachedMonth = monthCache[targetMonth] {
+            shouldAnimateEventBandReveal = false
             display(cachedMonth)
             isLoading = false
             loadTask = nil
@@ -9162,7 +9265,12 @@ private final class CalendarEventManagerModel: ObservableObject {
         }
 
         cancelPrefetch(for: targetMonth)
-        clearDisplayedMonth()
+        if !forceRefresh || !hadDisplayedMonth {
+            clearDisplayedMonth()
+        }
+        if forceRefresh {
+            message = ""
+        }
         isLoading = true
 
         loadTask = Task { @MainActor [weak self] in
@@ -9182,6 +9290,7 @@ private final class CalendarEventManagerModel: ObservableObject {
                       self.cacheGeneration == requestedCacheGeneration,
                       self.yearMonth == targetMonth else { return }
 
+                self.shouldAnimateEventBandReveal = true
                 self.store(fetchedMonth, for: targetMonth)
                 self.schedulePrefetchAfterDisplay(around: targetMonth, generation: generation)
             } catch is CancellationError {
@@ -9190,7 +9299,9 @@ private final class CalendarEventManagerModel: ObservableObject {
                 guard self.loadGeneration == generation,
                       self.cacheGeneration == requestedCacheGeneration,
                       self.yearMonth == targetMonth else { return }
-                self.clearDisplayedMonth()
+                if !hadDisplayedMonth {
+                    self.clearDisplayedMonth()
+                }
                 self.message = ShiftHubLocalization.localizedErrorDescription(
                     error,
                     locale: Locale(identifier: self.localeIdentifier)
@@ -9205,9 +9316,16 @@ private final class CalendarEventManagerModel: ObservableObject {
 
         switch destination {
         case .apple:
-            let client = AppleCalendarEventClient(calendarIdentifier: appleCalendarIdentifier)
-            fetchedCalendarColor = try client.fetchCalendarColor()
-            fetchedEvents = try client.fetch(yearMonth: yearMonth)
+            let calendarIdentifier = appleCalendarIdentifier
+            let result = try await Task.detached(priority: .utility) {
+                let client = AppleCalendarEventClient(calendarIdentifier: calendarIdentifier)
+                return (
+                    calendarColor: try client.fetchCalendarColor(),
+                    events: try client.fetch(yearMonth: yearMonth)
+                )
+            }.value
+            fetchedCalendarColor = result.calendarColor
+            fetchedEvents = result.events
         case .google:
             guard GoogleTokenStore.load() != nil else {
                 throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
@@ -9379,7 +9497,7 @@ private final class CalendarEventManagerModel: ObservableObject {
         prefetchKickoffTask?.cancel()
         let requestedCacheGeneration = cacheGeneration
 
-        // Let the visible month settle before starting the one-at-a-time neighbor fetch.
+        // Let the visible month settle before starting the adjacent-month prefetches.
         prefetchKickoffTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(nanoseconds: 200_000_000)
@@ -9492,6 +9610,7 @@ private final class CalendarEventManagerModel: ObservableObject {
                     ).deletePage(identifier: target.id)
                 }
 
+                shouldAnimateEventBandReveal = false
                 events.removeAll { $0.id == target.id }
                 updateCachedDisplayedMonth()
                 message = ShiftHubLocalization.string(
@@ -9539,8 +9658,7 @@ private enum CalendarEventManagementError: LocalizedError {
     }
 }
 
-@MainActor
-private final class AppleCalendarEventClient {
+nonisolated private final class AppleCalendarEventClient {
     private let eventStore = EKEventStore()
     private let calendarIdentifier: String
 
