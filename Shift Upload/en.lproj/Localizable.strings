@@ -61,12 +61,18 @@
 "登録時間: %@" = "Registered time: %@";
 "登録" = "Register";
 "イベントを登録" = "Register event";
+"イベントタイトル" = "Event title";
+"日時" = "Date and time";
 "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。保存済みイベントの一覧から登録できるほか、トップ画面ではタイトルと開始・終了日時を指定したイベントを登録できます。PDFスキャンと複数選択は同日登録に対応します。" = "Choose Apple Calendar, Google Calendar, or a Notion database as the destination. You can register from the saved event list, or specify a title and start and end date and time on the home screen. PDF scanning and multiple selection support same-day registration.";
 "タイトルと日時を指定して登録します。" = "Register an event with a title and date and time.";
 "イベントタイトルを入力してください。" = "Enter an event title.";
+"保存できません" = "Cannot save";
 "終了日時は開始日時以降にしてください。" = "The end date and time must be after the start date and time.";
+"終了時刻は開始時刻以降にしてください。" = "The end time must be at or after the start time.";
 "開始日時" = "Start date and time";
 "終了日時" = "End date and time";
+"開始" = "Start";
+"終了" = "End";
 
 /* Event management */
 "取得" = "Fetch";

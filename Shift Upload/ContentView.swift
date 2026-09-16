@@ -348,7 +348,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $isExtractedShiftSelectionPresented) {
-            ShiftSelectionView(definitions: shiftDefinitions) { title in
+            ShiftSelectionView(definitions: shiftDefinitions, locale: locale) { title in
                 completeExtractedShiftSelection(title)
             }
         }
@@ -1963,7 +1963,7 @@ struct ContentView: View {
         startDate: Date,
         endDate: Date,
         isAllDay: Bool,
-        onComplete: (() -> Void)? = nil
+        onComplete: ((String) -> Void)? = nil
     ) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else {
@@ -1986,7 +1986,7 @@ struct ContentView: View {
         case .apple:
             statusMessage = localizedMessage("Appleカレンダーへ登録中です。")
             do {
-                try AppleCalendarEventWriter().registerDateTimeEvent(
+                let eventID = try AppleCalendarEventWriter().registerDateTimeEvent(
                     title: trimmedTitle,
                     startDate: normalizedStartDate,
                     endDate: normalizedEndDate,
@@ -1994,7 +1994,7 @@ struct ContentView: View {
                     calendarIdentifier: appleCalendarIdentifier
                 )
                 statusMessage = localizedMessage("Appleカレンダーへイベントを登録しました。")
-                onComplete?()
+                onComplete?(eventID)
             } catch {
                 statusMessage = localizedMessage("Appleカレンダーへの登録に失敗しました: %@", arguments: localizedError(error))
             }
@@ -2017,7 +2017,7 @@ struct ContentView: View {
             let calendarID = googleCalendarID
             Task { @MainActor in
                 do {
-                    try await GoogleCalendarAPIClient(clientID: GoogleOAuthConfiguration.clientID).createEvent(
+                    let eventID = try await GoogleCalendarAPIClient(clientID: GoogleOAuthConfiguration.clientID).createEvent(
                         calendarID: calendarID,
                         title: trimmedTitle,
                         startDate: normalizedStartDate,
@@ -2025,7 +2025,7 @@ struct ContentView: View {
                         isAllDay: isAllDay
                     )
                     statusMessage = localizedMessage("Googleカレンダーへイベントを登録しました。")
-                    onComplete?()
+                    onComplete?(eventID)
                 } catch {
                     statusMessage = localizedMessage("Googleカレンダーへの登録に失敗しました: %@", arguments: localizedError(error))
                 }
@@ -2050,7 +2050,7 @@ struct ContentView: View {
             let tagValue = notionTagValue
             Task { @MainActor in
                 do {
-                    try await writer.registerDateTimeEvent(
+                    let eventID = try await writer.registerDateTimeEvent(
                         title: trimmedTitle,
                         startDate: normalizedStartDate,
                         endDate: normalizedEndDate,
@@ -2063,7 +2063,7 @@ struct ContentView: View {
                         tagValue: tagValue
                     )
                     statusMessage = localizedMessage("Notionへイベントを登録しました。")
-                    onComplete?()
+                    onComplete?(eventID)
                 } catch {
                     statusMessage = localizedMessage("Notionへの登録に失敗しました: %@", arguments: localizedError(error))
                 }
@@ -3397,102 +3397,267 @@ private struct SingleShiftRegistrationView: View {
 
 private struct DateTimeEventRegistrationView: View {
     let initialStartDate: Date
+    let locale: Locale
     let onRegister: (String, Date, Date, Bool) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.locale) private var locale
+#if os(iOS)
+    @Environment(\.colorScheme) private var colorScheme
+#endif
     @State private var title = ""
     @State private var startDate: Date
     @State private var endDate: Date
     @State private var isAllDay = false
+    @State private var isInvalidDateAlertPresented = false
 
     init(
         initialStartDate: Date,
+        locale: Locale,
         onRegister: @escaping (String, Date, Date, Bool) -> Void
     ) {
         self.initialStartDate = initialStartDate
+        self.locale = locale
         self.onRegister = onRegister
         _startDate = State(initialValue: initialStartDate)
         _endDate = State(initialValue: Calendar.current.date(byAdding: .hour, value: 1, to: initialStartDate) ?? initialStartDate)
     }
 
-    private var canRegister: Bool {
+    private var canRegisterTitleOnly: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && endDate >= startDate
     }
+
+    private func registerEvent() {
+        guard endDate >= startDate else {
+            isInvalidDateAlertPresented = true
+            return
+        }
+
+        let calendar = Calendar.current
+        let normalizedStartDate = isAllDay ? calendar.startOfDay(for: startDate) : startDate
+        let normalizedEndDate = isAllDay ? calendar.startOfDay(for: endDate) : endDate
+        onRegister(
+            title.trimmingCharacters(in: .whitespacesAndNewlines),
+            normalizedStartDate,
+            normalizedEndDate,
+            isAllDay
+        )
+        dismiss()
+    }
+
+    private func localized(_ key: String) -> String {
+        ShiftHubLocalization.string(key, locale: locale)
+    }
+
+    private var timePickerLocale: Locale {
+        locale.identifier.hasPrefix("ja")
+            ? Locale(identifier: "ja_JP")
+            : Locale(identifier: "en_GB")
+    }
+
+#if os(iOS)
+    private var registrationScreenBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .secondarySystemBackground)
+            : Color(uiColor: .systemGroupedBackground)
+    }
+
+    private var registrationSectionBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .tertiarySystemBackground)
+            : Color(uiColor: .secondarySystemGroupedBackground)
+    }
+#endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("イベントを登録")
+                    Text(localized("イベントを登録"))
                         .font(.title.bold())
 
-                    Text("タイトルと日時を指定して登録します。")
+                    Text(localized("タイトルと日時を指定して登録します。"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                Button("キャンセル") {
+                Button(localized("キャンセル")) {
                     dismiss()
                 }
                 .buttonStyle(.bordered)
 
-                Button("登録") {
-                    let calendar = Calendar.current
-                    let normalizedStartDate = isAllDay ? calendar.startOfDay(for: startDate) : startDate
-                    let normalizedEndDate = isAllDay ? calendar.startOfDay(for: endDate) : endDate
-                    onRegister(
-                        title.trimmingCharacters(in: .whitespacesAndNewlines),
-                        normalizedStartDate,
-                        normalizedEndDate,
-                        isAllDay
-                    )
-                    dismiss()
+#if os(macOS)
+                Button(localized("登録")) {
+                    registerEvent()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!canRegister)
+                .disabled(!canRegisterTitleOnly)
+#endif
             }
             .padding(24)
 
             Divider()
 
-            Form {
-                Section("イベント") {
-                    TextField("タイトル", text: $title)
-                }
+#if os(macOS)
+            VStack(alignment: .leading, spacing: 12) {
+                Text(localized("イベントタイトル"))
+                    .font(.headline)
 
-                Section("日時") {
-                    Toggle("終日", isOn: $isAllDay)
+                TextField(localized("タイトル"), text: $title, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                    }
 
+                Text(localized("日時"))
+                    .font(.headline)
+                    .padding(.top, 8)
+
+                Toggle(localized("終日"), isOn: $isAllDay)
+
+                HStack(alignment: .center, spacing: 8) {
                     DatePicker(
-                        "開始日時",
+                        localized("開始"),
                         selection: $startDate,
                         displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
                     )
-
+                    .environment(\.locale, timePickerLocale)
+                    Text("-")
+                        .foregroundStyle(.secondary)
                     DatePicker(
-                        "終了日時",
+                        localized("終了"),
                         selection: $endDate,
                         displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
                     )
+                    .environment(\.locale, timePickerLocale)
+                }
 
-                    if endDate < startDate {
-                        Text("終了日時は開始日時以降にしてください。")
-                            .font(.callout)
-                            .foregroundStyle(.red)
+                if endDate < startDate {
+                    Text(localized("終了日時は開始日時以降にしてください。"))
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(24)
+#else
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localized("イベントタイトル"))
+                            .font(.headline)
+
+                        TextField(localized("タイトル"), text: $title, axis: .vertical)
+                            .lineLimit(1...5)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                Color(uiColor: .tertiarySystemFill),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            )
                     }
+                    .padding(16)
+                    .background(
+                        registrationSectionBackground,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localized("日時"))
+                            .font(.headline)
+
+                        Toggle(localized("終日"), isOn: $isAllDay)
+
+                        Divider()
+
+                        DatePicker(
+                            localized("開始"),
+                            selection: $startDate,
+                            displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
+                        )
+                        .environment(\.locale, timePickerLocale)
+
+                        DatePicker(
+                            localized("終了"),
+                            selection: $endDate,
+                            displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
+                        )
+                        .environment(\.locale, timePickerLocale)
+
+                        if endDate < startDate {
+                            Text(localized("終了日時は開始日時以降にしてください。"))
+                                .font(.callout)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        registrationSectionBackground,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+
+                Section {
+                    VStack {
+                        Button {
+                            registerEvent()
+                        } label: {
+                            Text(localized("登録"))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(maxWidth: .infinity, minHeight: 24)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canRegisterTitleOnly)
+                    }
+                    .padding(16)
+                    .background(
+                        registrationSectionBackground,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
             .padding(24)
+#endif
+
+        }
+        .alert(
+            Text(localized("保存できません")),
+            isPresented: $isInvalidDateAlertPresented
+        ) {
+            Button(localized("OK"), role: .cancel) {}
+        } message: {
+            Text(localized("終了日時は開始日時以降にしてください。"))
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 #else
         .frame(width: 560, height: 420)
+#endif
+#if os(iOS)
+        .background(
+            registrationScreenBackground,
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
 #endif
         .environment(\.locale, locale)
         .onChange(of: startDate) {
@@ -3608,11 +3773,14 @@ private struct CalendarEventRecord: Identifiable, Hashable {
         return calendar.startOfDay(for: endDate) > calendar.startOfDay(for: startDate)
     }
 
-    var menuDetail: String {
+    func menuDetail(locale: Locale) -> String {
         guard spansMultipleDays,
               let startDate,
               let endDate else {
-            return detail.isEmpty ? "終日" : detail
+            if detail.isEmpty || detail == "終日" || detail == "All day" {
+                return ShiftHubLocalization.string("終日", locale: locale)
+            }
+            return detail
         }
 
         let formatter = DateFormatter()
@@ -3634,7 +3802,8 @@ private struct CalendarEventRecord: Identifiable, Hashable {
     }
 
     var confirmationText: String {
-        menuDetail.isEmpty ? "\(day)日の「\(title)」" : "\(day)日の「\(title)」\n\(menuDetail)"
+        let displayedDetail = menuDetail(locale: Locale(identifier: "ja"))
+        return displayedDetail.isEmpty ? "\(day)日の「\(title)」" : "\(day)日の「\(title)」\n\(displayedDetail)"
     }
 }
 
@@ -3788,6 +3957,7 @@ private struct CalendarDaySelection: Hashable {
 private struct ShiftSelectionView: View {
     let definitions: [ShiftDefinition]
     let tint: Color
+    let locale: Locale
     let onSelect: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -3795,28 +3965,34 @@ private struct ShiftSelectionView: View {
     init(
         definitions: [ShiftDefinition],
         tint: Color = .accentColor,
+        locale: Locale,
         onSelect: @escaping (String) -> Void
     ) {
         self.definitions = definitions
         self.tint = tint
+        self.locale = locale
         self.onSelect = onSelect
+    }
+
+    private func localized(_ key: String) -> String {
+        ShiftHubLocalization.string(key, locale: locale)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("イベントを選択")
+                    Text(localized("イベントを選択"))
                         .font(.title2.bold())
 
-                    Text("登録するイベントをイベント設定から選択します。")
+                    Text(localized("登録するイベントをイベント設定から選択します。"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                Button("キャンセル") {
+                Button(localized("キャンセル")) {
                     dismiss()
                 }
                 .buttonStyle(.bordered)
@@ -3829,7 +4005,7 @@ private struct ShiftSelectionView: View {
                 LazyVStack(spacing: 8) {
                     shiftSelectionRow(
                         title: "休",
-                        detail: "終日",
+                        detail: localized("終日"),
                         symbol: "moon.zzz.fill",
                         tint: .red
                     )
@@ -3927,6 +4103,18 @@ private final class RegistrationCompletion {
 
     func call() {
         action()
+    }
+}
+
+private final class DateTimeEventRegistrationCompletion {
+    private let action: (String) -> Void
+
+    init(action: @escaping (String) -> Void) {
+        self.action = action
+    }
+
+    func call(eventID: String) {
+        action(eventID)
     }
 }
 
@@ -4290,7 +4478,7 @@ private struct CalendarEventManagerView: View {
     let notionDatabaseName: String
     let definitions: [ShiftDefinition]
     let onRegisterShift: (YearMonth, Int, String, RegistrationCompletion) -> Void
-    let onRegisterDateTimeEvent: (String, Date, Date, Bool, RegistrationCompletion) -> Void
+    let onRegisterDateTimeEvent: (String, Date, Date, Bool, DateTimeEventRegistrationCompletion) -> Void
     let onRegisterShifts: ([CalendarDaySelection], String, RegistrationCompletion) -> Void
     let onCalendarDestinationChange: (CalendarDestination) -> Void
     let onOpenShiftUpload: () -> Void
@@ -4324,6 +4512,7 @@ private struct CalendarEventManagerView: View {
     @State private var isYearMonthPickerPresented = false
     @State private var isCalendarDestinationMenuPresented = false
     @State private var monthPageID: Int?
+    @State private var eventCalendarOpacity = 1.0
     @State private var didLoadInitialMonth = false
     @State private var didEnterBackground = false
 #if os(macOS)
@@ -4348,7 +4537,7 @@ private struct CalendarEventManagerView: View {
         notionTagValue: String,
         definitions: [ShiftDefinition],
         onRegisterShift: @escaping (YearMonth, Int, String, RegistrationCompletion) -> Void,
-        onRegisterDateTimeEvent: @escaping (String, Date, Date, Bool, RegistrationCompletion) -> Void,
+        onRegisterDateTimeEvent: @escaping (String, Date, Date, Bool, DateTimeEventRegistrationCompletion) -> Void,
         onRegisterShifts: @escaping ([CalendarDaySelection], String, RegistrationCompletion) -> Void,
         onCalendarDestinationChange: @escaping (CalendarDestination) -> Void,
         onOpenShiftUpload: @escaping () -> Void,
@@ -4402,6 +4591,10 @@ private struct CalendarEventManagerView: View {
 
     private var selectedYearMonth: YearMonth {
         YearMonth(year: selectedYear, month: selectedMonth)
+    }
+
+    private func localized(_ key: String) -> String {
+        ShiftHubLocalization.string(key, locale: locale)
     }
 
     private var calendarEventManagerConfigurationKey: String {
@@ -4542,6 +4735,7 @@ private struct CalendarEventManagerView: View {
 #endif
 
                 eventCalendarView
+                    .opacity(model.events.isEmpty ? 1 : eventCalendarOpacity)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -4732,6 +4926,16 @@ private struct CalendarEventManagerView: View {
             model.setLocaleIdentifier(locale.identifier)
             model.load()
         }
+        .onChange(of: model.events) { _, events in
+            guard !events.isEmpty else {
+                eventCalendarOpacity = 0
+                return
+            }
+
+            withAnimation(.easeOut(duration: 0.45)) {
+                eventCalendarOpacity = 1
+            }
+        }
 #if os(iOS)
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -4791,6 +4995,7 @@ private struct CalendarEventManagerView: View {
             model.updateYearMonth(target)
             selectedYear = target.year
             selectedMonth = target.month
+
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 120_000_000)
                 guard !Task.isCancelled,
@@ -4815,11 +5020,15 @@ private struct CalendarEventManagerView: View {
         }
 #endif
         .alert(
-            shiftTitleAfterDelete == nil ? "イベントを削除しますか？" : "削除してイベントを登録しますか？",
+            shiftTitleAfterDelete == nil
+                ? localized("イベントを削除しますか？")
+                : localized("削除してイベントを登録しますか？"),
             isPresented: $model.isDeleteConfirmationPresented
         ) {
             Button(
-                shiftTitleAfterDelete == nil ? "削除" : "削除して登録",
+                shiftTitleAfterDelete == nil
+                    ? localized("削除")
+                    : localized("削除して登録"),
                 role: .destructive
             ) {
                 let selectedTitle = shiftTitleAfterDelete
@@ -4836,14 +5045,18 @@ private struct CalendarEventManagerView: View {
                     }
                 }
             }
-            Button("キャンセル", role: .cancel) {
+            Button(localized("キャンセル"), role: .cancel) {
                 shiftTitleAfterDelete = nil
             }
         } message: {
             Text(pendingDeletionConfirmationText)
         }
         .sheet(isPresented: $isShiftSelectionPresented) {
-            ShiftSelectionView(definitions: definitions, tint: managerAccentColor) { title in
+            ShiftSelectionView(
+                definitions: definitions,
+                tint: managerAccentColor,
+                locale: locale
+            ) { title in
                 if isDaySelectionMode {
                     completeMultipleShiftSelection(title)
                 } else {
@@ -4852,18 +5065,28 @@ private struct CalendarEventManagerView: View {
             }
         }
         .sheet(isPresented: $isDateTimeEventRegistrationPresented) {
-            DateTimeEventRegistrationView(initialStartDate: dateTimeEventRegistrationStartDate) { title, startDate, endDate, isAllDay in
+            DateTimeEventRegistrationView(
+                initialStartDate: dateTimeEventRegistrationStartDate,
+                locale: locale
+            ) { title, startDate, endDate, isAllDay in
                 isDateTimeEventRegistrationPresented = false
                 onRegisterDateTimeEvent(
                     title,
                     startDate,
                     endDate,
                     isAllDay,
-                    RegistrationCompletion {
-                        model.refreshAllCachedMonths()
+                    DateTimeEventRegistrationCompletion { eventID in
+                        model.applyRegisteredDateTimeEvent(
+                            id: eventID,
+                            title: title,
+                            startDate: startDate,
+                            endDate: endDate,
+                            isAllDay: isAllDay
+                        )
                     }
                 )
             }
+            .environment(\.locale, locale)
         }
 #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
@@ -5103,11 +5326,12 @@ private struct CalendarEventManagerView: View {
         guard let event = model.pendingDeletion else { return "" }
         guard ShiftHubLocalization.isEnglish(locale) else { return event.confirmationText }
 
-        let key = event.menuDetail.isEmpty ? "%@日の「%@」" : "%@日の「%@」\n%@"
+        let menuDetail = event.menuDetail(locale: locale)
+        let key = menuDetail.isEmpty ? "%@日の「%@」" : "%@日の「%@」\n%@"
         return ShiftHubLocalization.format(
             key,
             locale: locale,
-            arguments: String(event.day), event.title, event.menuDetail
+            arguments: String(event.day), event.title, menuDetail
         )
     }
 
@@ -5596,9 +5820,14 @@ private struct CalendarEventManagerView: View {
                         let startSlot = leadingBlankCount + layout.startDay - 1
                         let row = startSlot / 7
                         let column = startSlot % 7
+                        #if os(iOS)
+                        let bandInset: CGFloat = 3
+                        #else
+                        let bandInset: CGFloat = 6
+                        #endif
                         let bandWidth = max(0, columnWidth * CGFloat(layout.spanDays)
                             + columnSpacing * CGFloat(layout.spanDays - 1)
-                            - 12)
+                            - bandInset * 2)
                         let eventColor = layout.event.isRestEvent
                             ? Color.red
                             : layout.event.calendarColor?.color ?? Color.accentColor
@@ -5614,7 +5843,7 @@ private struct CalendarEventManagerView: View {
 #if os(iOS)
                                     .font(.system(size: 8, weight: .medium))
                                     .lineLimit(1)
-//                                    .minimumScaleFactor(0.5)
+                                    .minimumScaleFactor(0.75)
 #else
                                     .font(.caption.weight(.medium))
 #endif
@@ -5661,11 +5890,11 @@ private struct CalendarEventManagerView: View {
                                 squareLeading: cornerStyle.squareLeading,
                                 squareTrailing: cornerStyle.squareTrailing
                             )
-                                .fill(eventColor.opacity(isDaySelectionMode ? 0.25 : 0.6))
+                                .fill(eventColor.opacity(isDaySelectionMode ? 0.08 : 0.18))
                         }
                         .position(
                             x: CGFloat(column) * (columnWidth + columnSpacing)
-                                + 6 + bandWidth / 2,
+                                + bandInset + bandWidth / 2,
                             y: CGFloat(row) * (cardHeight + gridSpacing)
                                 + bandMetrics.top
                                 + CGFloat(layout.lane) * bandMetrics.laneHeight
@@ -5824,7 +6053,7 @@ private struct CalendarEventManagerView: View {
                         .frame(height: bandMetrics.height, alignment: .leading)
                         .background(alignment: .leading) {
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(eventColor.opacity(isDaySelectionMode ? 0.35 : 0.6))
+                                .fill(eventColor.opacity(isDaySelectionMode ? 0.08 : 0.18))
                                 .allowsHitTesting(false)
                         }
                     }
@@ -5978,7 +6207,7 @@ private struct CalendarEventManagerView: View {
 
 #if os(iOS)
             if !actionableEvents.isEmpty {
-                Text("イベントを選択")
+                Text(localized("イベントを選択"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.top, 12)
@@ -6000,7 +6229,7 @@ private struct CalendarEventManagerView: View {
                         .padding(.top, 12)
                     }
                 } else {
-                    Text("イベントを選択")
+                    Text(localized("イベントを選択"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .padding(.top, 12)
@@ -6034,7 +6263,7 @@ private struct CalendarEventManagerView: View {
         Button {
             presentShiftSelection(forDay: day, deleteExisting: false)
         } label: {
-            Label("イベント一覧から選択", systemImage: "list.bullet")
+            Label(localized("イベント一覧から選択"), systemImage: "list.bullet")
 #if os(iOS)
                 .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .leading)
 #else
@@ -6051,7 +6280,7 @@ private struct CalendarEventManagerView: View {
         Button {
             presentDateTimeEventRegistration(forDay: day)
         } label: {
-            Label("イベントを登録", systemImage: "calendar.badge.plus")
+            Label(localized("イベントを登録"), systemImage: "calendar.badge.plus")
 #if os(iOS)
                 .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .leading)
 #else
@@ -6070,7 +6299,7 @@ private struct CalendarEventManagerView: View {
                 .font(.callout.weight(.medium))
                 .lineLimit(2)
 
-            Text(event.menuDetail)
+            Text(event.menuDetail(locale: locale))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -6122,8 +6351,8 @@ private struct CalendarEventManagerView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.red)
                     .disabled(event.isReadOnly)
-                    .help("削除")
-                    .accessibilityLabel("削除")
+                    .help(localized("削除"))
+                    .accessibilityLabel(localized("削除"))
                 }
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -6145,7 +6374,7 @@ private struct CalendarEventManagerView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.red)
                     .disabled(event.isReadOnly)
-                    .accessibilityLabel("削除")
+                    .accessibilityLabel(localized("削除"))
                 }
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -6167,8 +6396,9 @@ private struct CalendarEventManagerView: View {
                 .foregroundStyle(.primary)
                 .padding(.top, 10)
 
-            if !event.menuDetail.isEmpty {
-                Text(event.menuDetail)
+            let menuDetail = event.menuDetail(locale: locale)
+            if !menuDetail.isEmpty {
+                Text(menuDetail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.top, 2)
@@ -6179,7 +6409,7 @@ private struct CalendarEventManagerView: View {
 
             if pendingInlineDeletion?.id == event.id {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("イベントを削除しますか？")
+                    Text(localized("イベントを削除しますか？"))
                         .font(.subheadline.weight(.medium))
 
                     HStack(spacing: 8) {
@@ -6190,14 +6420,14 @@ private struct CalendarEventManagerView: View {
                             selectedDayForActions = nil
                             model.deleteImmediately(event)
                         } label: {
-                            Label("削除", systemImage: "trash")
+                            Label(localized("削除"), systemImage: "trash")
                                 .frame(maxWidth: .infinity)
                         }
 
                         Button {
                             pendingInlineDeletion = nil
                         } label: {
-                            Text("キャンセル")
+                            Text(localized("キャンセル"))
                                 .frame(maxWidth: .infinity)
                         }
                     }
@@ -6262,7 +6492,7 @@ private struct CalendarEventManagerView: View {
                 selectedBandEventForActions = nil
                 presentShiftSelection(for: event, deleteExisting: true)
             } label: {
-                Label("削除してイベント一覧から選択", systemImage: "arrow.triangle.2.circlepath")
+                Label(localized("削除してイベント一覧から選択"), systemImage: "arrow.triangle.2.circlepath")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(event.isReadOnly)
@@ -6270,7 +6500,7 @@ private struct CalendarEventManagerView: View {
             Button(role: .destructive) {
                 pendingInlineDeletion = event
             } label: {
-                Label("削除", systemImage: "trash")
+                Label(localized("削除"), systemImage: "trash")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(event.isReadOnly)
@@ -6284,7 +6514,7 @@ private struct CalendarEventManagerView: View {
                 selectedBandEventForActions = nil
                 presentShiftSelection(for: event, deleteExisting: true)
             } label: {
-                Label("削除してイベント一覧から選択", systemImage: "arrow.triangle.2.circlepath")
+                Label(localized("削除してイベント一覧から選択"), systemImage: "arrow.triangle.2.circlepath")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(event.isReadOnly)
@@ -6296,7 +6526,7 @@ private struct CalendarEventManagerView: View {
                 shiftTitleAfterDelete = nil
                 model.requestDelete(event)
             } label: {
-                Label("削除", systemImage: "trash")
+                Label(localized("削除"), systemImage: "trash")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .foregroundStyle(.red)
@@ -7350,9 +7580,288 @@ private extension UIImage {
 }
 #endif
 
+private struct ShiftDefinitionRegistrationView: View {
+    let locale: Locale
+    let onSave: (String, Int, Int) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+#if os(iOS)
+    @Environment(\.colorScheme) private var colorScheme
+#endif
+    @State private var title = ""
+    @State private var startDate: Date
+    @State private var endDate: Date
+    @State private var isInvalidTimeAlertPresented = false
+
+    init(locale: Locale, onSave: @escaping (String, Int, Int) -> Void) {
+        self.locale = locale
+        self.onSave = onSave
+        _startDate = State(initialValue: Self.date(from: 510))
+        _endDate = State(initialValue: Self.date(from: 1000))
+    }
+
+    private func localized(_ key: String) -> String {
+        ShiftHubLocalization.string(key, locale: locale)
+    }
+
+    private var timePickerLocale: Locale {
+        locale.identifier.hasPrefix("ja")
+            ? Locale(identifier: "ja_JP")
+            : Locale(identifier: "en_GB")
+    }
+
+    private var canSave: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+#if os(iOS)
+    private var registrationScreenBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .secondarySystemBackground)
+            : Color(uiColor: .systemGroupedBackground)
+    }
+
+    private var registrationSectionBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .tertiarySystemBackground)
+            : Color(uiColor: .secondarySystemGroupedBackground)
+    }
+#endif
+
+    private func saveDefinition() {
+        let startMinutes = Self.minutes(from: startDate)
+        let endMinutes = Self.minutes(from: endDate)
+        guard endMinutes >= startMinutes else {
+            isInvalidTimeAlertPresented = true
+            return
+        }
+
+        onSave(
+            title.trimmingCharacters(in: .whitespacesAndNewlines),
+            startMinutes,
+            endMinutes
+        )
+        dismiss()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(localized("イベントを登録"))
+                        .font(.title.bold())
+
+                    Text(localized("イベントタイトルと時間を保存します。"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button(localized("キャンセル")) {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+
+#if os(macOS)
+                Button(localized("保存")) {
+                    saveDefinition()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canSave)
+#endif
+            }
+            .padding(24)
+
+            Divider()
+
+#if os(macOS)
+            VStack(alignment: .leading, spacing: 12) {
+                Text(localized("イベントタイトル"))
+                    .font(.headline)
+
+                TextField(localized("タイトル"), text: $title, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                    }
+
+                Text(localized("日時"))
+                    .font(.headline)
+                    .padding(.top, 8)
+
+                HStack(spacing: 8) {
+                    DatePicker(
+                        localized("開始"),
+                        selection: $startDate,
+                        displayedComponents: .hourAndMinute
+                    )
+                    .environment(\.locale, timePickerLocale)
+
+                    Text("-")
+                        .foregroundStyle(.secondary)
+
+                    DatePicker(
+                        localized("終了"),
+                        selection: $endDate,
+                        displayedComponents: .hourAndMinute
+                    )
+                    .environment(\.locale, timePickerLocale)
+                }
+            }
+            .padding(24)
+#else
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localized("イベントタイトル"))
+                            .font(.headline)
+
+                        TextField(localized("タイトル"), text: $title, axis: .vertical)
+                            .lineLimit(1...5)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                Color(uiColor: .tertiarySystemFill),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            )
+
+                    }
+                    .padding(16)
+                    .background(
+                        registrationSectionBackground,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localized("日時"))
+                            .font(.headline)
+
+                        HStack {
+                            Text(localized("開始"))
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $startDate,
+                                displayedComponents: .hourAndMinute
+                            )
+                            .labelsHidden()
+                            .environment(\.locale, timePickerLocale)
+                        }
+
+                        Divider()
+
+                        HStack {
+                            Text(localized("終了"))
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $endDate,
+                                displayedComponents: .hourAndMinute
+                            )
+                            .labelsHidden()
+                            .environment(\.locale, timePickerLocale)
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        registrationSectionBackground,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+
+                Section {
+                    VStack {
+                        Button {
+                            saveDefinition()
+                        } label: {
+                            Text(localized("保存"))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(maxWidth: .infinity, minHeight: 24)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSave)
+                    }
+                    .padding(16)
+                    .background(
+                        registrationSectionBackground,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .padding(24)
+#endif
+        }
+#if os(iOS)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+#else
+        .frame(width: 520, height: 360)
+#endif
+#if os(iOS)
+        .background(
+            registrationScreenBackground,
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
+#endif
+        .environment(\.locale, locale)
+        .alert(
+            Text(localized("保存できません")),
+            isPresented: $isInvalidTimeAlertPresented
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(localized("終了時刻は開始時刻以降にしてください。"))
+        }
+    }
+
+    private static func date(from minutes: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar.date(
+            from: DateComponents(
+                year: 2000,
+                month: 1,
+                day: 1,
+                hour: minutes / 60,
+                minute: minutes % 60
+            )
+        ) ?? Date(timeIntervalSinceReferenceDate: 0)
+    }
+
+    private static func minutes(from date: Date) -> Int {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+}
+
 struct ShiftDefinitionSettingsView: View {
     @Binding var definitions: [ShiftDefinition]
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
+    @State private var isRegistrationPresented = false
+    @State private var isInvalidTimeAlertPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -7371,7 +7880,11 @@ struct ShiftDefinitionSettingsView: View {
 
 #if os(macOS)
                 Button("完了") {
-                    dismiss()
+                    if definitions.contains(where: { $0.endMinutes < $0.startMinutes }) {
+                        isInvalidTimeAlertPresented = true
+                    } else {
+                        dismiss()
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
 #endif
@@ -7429,7 +7942,7 @@ struct ShiftDefinitionSettingsView: View {
 
             HStack {
                 Button {
-                    definitions.append(ShiftDefinition(title: "", startMinutes: 510, endMinutes: 1000))
+                    isRegistrationPresented = true
                 } label: {
                     Label("追加", systemImage: "plus")
                 }
@@ -7452,6 +7965,22 @@ struct ShiftDefinitionSettingsView: View {
 #else
         .frame(minWidth: 680, minHeight: 460)
 #endif
+        .sheet(isPresented: $isRegistrationPresented) {
+            ShiftDefinitionRegistrationView(locale: locale) { title, startMinutes, endMinutes in
+                definitions.append(
+                    ShiftDefinition(
+                        title: title,
+                        startMinutes: startMinutes,
+                        endMinutes: endMinutes
+                    )
+                )
+            }
+        }
+        .alert("保存できません", isPresented: $isInvalidTimeAlertPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("終了時刻は開始時刻以降にしてください。")
+        }
     }
 
     private func moveDefinitions(from source: IndexSet, to destination: Int) {
@@ -8240,7 +8769,7 @@ private final class NotionPageWriter {
             ]
         ]
 
-        try await sendCreatePageRequest(
+        _ = try await sendCreatePageRequest(
             parent: ["database_id": dataSourceID],
             properties: properties,
             token: token
@@ -8258,7 +8787,7 @@ private final class NotionPageWriter {
         dateProperty: String,
         tagProperty: String,
         tagValue: String
-    ) async throws {
+    ) async throws -> String {
         guard !dataSourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !titleProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !dateProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -8309,7 +8838,7 @@ private final class NotionPageWriter {
             ]
         ]
 
-        try await sendCreatePageRequest(
+        return try await sendCreatePageRequest(
             parent: ["database_id": dataSourceID],
             properties: properties,
             token: token
@@ -8320,7 +8849,7 @@ private final class NotionPageWriter {
         parent: [String: Any],
         properties: [String: Any],
         token: String
-    ) async throws {
+    ) async throws -> String {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -8341,6 +8870,13 @@ private final class NotionPageWriter {
             let message = responseObject?["message"] as? String ?? "不明なエラー"
             throw NotionAPIError.requestFailed(statusCode: httpResponse.statusCode, message: message)
         }
+
+        guard let responseObject = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let identifier = responseObject["id"] as? String else {
+            throw NotionAPIError.invalidResponse
+        }
+
+        return identifier
     }
 
     private func date(yearMonth: YearMonth, day: Int, minutes: Int) -> Date? {
@@ -8535,6 +9071,60 @@ private final class CalendarEventManagerModel: ObservableObject {
             .sorted(by: calendarEventComesBefore)
     }
 
+    func applyRegisteredDateTimeEvent(
+        id: String,
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool
+    ) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let startComponents = calendar.dateComponents([.year, .month, .day], from: startDate)
+        guard let eventYear = startComponents.year,
+              let eventMonth = startComponents.month,
+              let day = startComponents.day,
+              eventYear == yearMonth.year,
+              eventMonth == yearMonth.month else {
+            return
+        }
+
+        let displayLocale = Locale(identifier: localeIdentifier)
+        let event = CalendarEventRecord(
+            id: id,
+            day: day,
+            title: title,
+            detail: isAllDay
+                ? ShiftHubLocalization.string("終日", locale: displayLocale)
+                : registeredTimeRangeText(start: startDate, end: endDate),
+            isAllDay: isAllDay,
+            startDate: startDate,
+            endDate: endDate,
+            calendarColor: calendarColor
+        )
+
+        // Keep the current screen and its cache in sync without invalidating or re-fetching other months.
+        events.removeAll { $0.id == id }
+        events.append(event)
+        events.sort(by: calendarEventComesBefore)
+        loadedDays = Set(events.map(\.day))
+
+        if let cachedMonth = monthCache[yearMonth] {
+            var updatedEvents = cachedMonth.events.filter { $0.id != id }
+            updatedEvents.append(event)
+            updatedEvents.sort(by: calendarEventComesBefore)
+            store(
+                MonthCacheEntry(
+                    events: updatedEvents,
+                    calendarColor: cachedMonth.calendarColor
+                ),
+                for: yearMonth
+            )
+        } else {
+            message = message(for: events)
+        }
+    }
+
     func dayHeader(for day: Int, locale: Locale) -> String {
         let weekdays = locale.identifier.hasPrefix("en")
             ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -8712,6 +9302,14 @@ private final class CalendarEventManagerModel: ObservableObject {
                 locale: locale,
                 arguments: String(registeredEventCount)
             )
+    }
+
+    private func registeredTimeRangeText(start: Date, end: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: localeIdentifier)
+        formatter.timeZone = .current
+        formatter.dateFormat = localeIdentifier.hasPrefix("en") ? "h:mm a" : "H:mm"
+        return "\(formatter.string(from: start))-\(formatter.string(from: end))"
     }
 
     private func cacheWindow(around yearMonth: YearMonth) -> Set<YearMonth> {
@@ -9934,7 +10532,7 @@ private struct GoogleCalendarAPIClient {
         startDate: Date,
         endDate: Date,
         isAllDay: Bool
-    ) async throws {
+    ) async throws -> String {
         guard endDate >= startDate else {
             throw GoogleCalendarError.invalidDate
         }
@@ -9978,7 +10576,13 @@ private struct GoogleCalendarAPIClient {
             "end": end
         ]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        _ = try await sendRequest(url: url, method: "POST", body: bodyData)
+        let responseData = try await sendRequest(url: url, method: "POST", body: bodyData)
+        guard let responseObject = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+              let identifier = responseObject["id"] as? String else {
+            throw GoogleCalendarError.invalidResponse
+        }
+
+        return identifier
     }
 
     func createEvent(
@@ -10598,7 +11202,7 @@ private final class AppleCalendarEventWriter {
         endDate: Date,
         isAllDay: Bool,
         calendarIdentifier: String
-    ) throws {
+    ) throws -> String {
         guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
             throw AppleCalendarRegistrationError.accessDenied
         }
@@ -10639,6 +11243,11 @@ private final class AppleCalendarEventWriter {
         }
 
         try eventStore.save(event, span: .thisEvent, commit: true)
+        guard let identifier = event.eventIdentifier else {
+            throw AppleCalendarRegistrationError.invalidResponse
+        }
+
+        return identifier
     }
 
     private func saveAllDayEvent(title: String, yearMonth: YearMonth, dayText: String, calendar: EKCalendar) throws {
@@ -10712,6 +11321,7 @@ private enum AppleCalendarRegistrationError: LocalizedError {
     case calendarNotFound
     case missingYearMonth
     case invalidDate(String)
+    case invalidResponse
 
     var errorDescription: String? {
         switch self {
@@ -10723,6 +11333,8 @@ private enum AppleCalendarRegistrationError: LocalizedError {
             return "勤務表の年月を取得できませんでした。"
         case .invalidDate(let day):
             return "日付を作成できませんでした: \(day)"
+        case .invalidResponse:
+            return "Appleカレンダーから無効な応答が返されました。"
         }
     }
 }
@@ -10820,15 +11432,14 @@ struct ShiftDefinitionRowView: View {
             TextField("タイトル", text: $definition.title)
                 .textFieldStyle(.roundedBorder)
                 .font(.callout)
+
+            Text(definition.timeRangeText)
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(1)
-
-            compactTimePickerView("Start", selection: dateBinding(for: \.startMinutes))
-
-            Image(systemName: "minus")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-
-            compactTimePickerView("End", selection: dateBinding(for: \.endMinutes))
+                .frame(width: 92, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -10839,17 +11450,6 @@ struct ShiftDefinitionRowView: View {
         )
     }
 
-    private func compactTimePickerView(_ title: String, selection: Binding<Date>) -> some View {
-        DatePicker(title, selection: selection, displayedComponents: .hourAndMinute)
-            .labelsHidden()
-            .datePickerStyle(.compact)
-        .controlSize(.small)
-        .font(.caption)
-        .frame(width: 76, height: 32)
-        .scaleEffect(0.78)
-        .environment(\.locale, Locale(identifier: "en_GB"))
-        .accessibilityLabel(title)
-    }
 #else
     private var macOSRow: some View {
         HStack(spacing: 10) {
@@ -10859,15 +11459,13 @@ struct ShiftDefinitionRowView: View {
 
             TextField("タイトル", text: $definition.title)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 180)
-
-            timePickerView("Start", selection: dateBinding(for: \.startMinutes))
-
-            timePickerView("End", selection: dateBinding(for: \.endMinutes))
+                .frame(maxWidth: .infinity)
 
             Text(definition.timeRangeText)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .frame(width: 90, alignment: .leading)
 
             Button(role: .destructive, action: deleteAction) {
@@ -10879,58 +11477,10 @@ struct ShiftDefinitionRowView: View {
             .help("削除")
         }
         .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
     }
 #endif
-
-#if os(macOS)
-    private func timePickerView(_ title: String, selection: Binding<Date>) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 34, alignment: .trailing)
-
-            DatePicker("", selection: selection, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .environment(\.locale, Locale(identifier: "en_GB"))
-                .frame(width: 78)
-        }
-        .frame(width: 118, alignment: .leading)
-    }
-#endif
-
-    private func dateBinding(for keyPath: WritableKeyPath<ShiftDefinition, Int>) -> Binding<Date> {
-        Binding {
-            Self.date(from: definition[keyPath: keyPath])
-        } set: { newDate in
-            definition[keyPath: keyPath] = Self.minutes(from: newDate)
-        }
-    }
-
-    private static func date(from minutes: Int) -> Date {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .current
-
-        let clampedMinutes = min(max(minutes, 0), 1_439)
-        return calendar.date(
-            from: DateComponents(
-                year: 2000,
-                month: 1,
-                day: 1,
-                hour: clampedMinutes / 60,
-                minute: clampedMinutes % 60
-            )
-        ) ?? Date(timeIntervalSinceReferenceDate: 0)
-    }
-
-    private static func minutes(from date: Date) -> Int {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .current
-
-        let components = calendar.dateComponents([.hour, .minute], from: date)
-        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
-    }
 }
 
 struct ShiftDefinition: Identifiable, Codable, Equatable {
