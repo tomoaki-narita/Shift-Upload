@@ -28,11 +28,14 @@
 "表示形式" = "View mode";
 "横並び" = "Timeline";
 "カレンダー" = "Calendar";
+"リスト" = "List";
 "保存された名前を含む行だけを抽出します。" = "Only the row containing the saved name will be extracted.";
 "OCR結果に名前が含まれているか確認してください。" = "Check that the name appears in the OCR result.";
 "PDFの文字データに名前が含まれているか確認してください。" = "Check that the name appears in the PDF text.";
 "名前を入力してください" = "Enter a name";
 "該当する行が見つかりません" = "No matching row found";
+"表示するイベントがありません" = "No events to display";
+"読み込まれたイベントがありません。" = "No events were loaded.";
 "勤務表" = "Schedule";
 "PDFスキャン" = "PDF Scan";
 "文字データを持つPDFの勤務表を選択" = "Choose a text-based PDF schedule";
@@ -61,10 +64,13 @@
 "登録時間: %@" = "Registered time: %@";
 "登録" = "Register";
 "イベントを登録" = "Register event";
+"イベントを編集" = "Edit event";
 "イベントタイトル" = "Event title";
 "日時" = "Date and time";
+"開始時間と終了時間" = "Start and end time";
 "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。保存済みイベントの一覧から登録できるほか、トップ画面ではタイトルと開始・終了日時を指定したイベントを登録できます。PDFスキャンと複数選択は同日登録に対応します。" = "Choose Apple Calendar, Google Calendar, or a Notion database as the destination. You can register from the saved event list, or specify a title and start and end date and time on the home screen. PDF scanning and multiple selection support same-day registration.";
 "タイトルと日時を指定して登録します。" = "Register an event with a title and date and time.";
+"イベントタイトルと時間を編集します。" = "Edit the event title and time.";
 "イベントタイトルを入力してください。" = "Enter an event title.";
 "保存できません" = "Cannot save";
 "終了日時は開始日時以降にしてください。" = "The end date and time must be after the start date and time.";
@@ -73,6 +79,7 @@
 "終了日時" = "End date and time";
 "開始" = "Start";
 "終了" = "End";
+"編集" = "Edit";
 
 /* Event management */
 "取得" = "Fetch";
@@ -110,7 +117,7 @@
 "このアプリについて" = "About this app";
 "イベント設定に保存したイベントを、Appleカレンダー、Googleカレンダー、Notionデータベースへ登録・変更・削除できるアプリです。勤務表のPDFを読み込み、日付ごとのイベントを抽出して登録できます。" = "Save event definitions in the app, then register, replace, or delete events in Apple Calendar, Google Calendar, or a Notion database. You can also import a schedule PDF, extract events by date, and register them.";
 "主な機能" = "Key Features";
-"文字データを持つ横向きPDFから、保存した名前に一致する行を抽出します。抽出結果はカレンダー表示と横並び表示を切り替えられ、日付ごとのイベント名を編集・削除できます。" = "Extract the row matching the saved name from a landscape PDF with an extractable text layer. Switch between calendar and horizontal views, and edit or delete event names by date.";
+"文字データを持つ横向きPDFから、保存した名前に一致する行を抽出します。抽出結果はカレンダー表示、横並び表示、リスト表示を切り替えられ、日付ごとのイベント名を編集・削除できます。" = "Extract the row matching the saved name from a landscape PDF with an extractable text layer. Switch between calendar, horizontal, and list views, and edit or delete event names by date.";
 "保存済みPDF" = "Saved PDFs";
 "読み込んだPDFをアプリ内に保存し、一覧から再解析・削除できます。同じ内容のPDFは重複保存しません。保存したPDFのプレビュー、ページ移動、拡大縮小にも対応します。" = "Save imported PDFs in the app and re-analyze or delete them from the list. PDFs with the same contents are not saved more than once. Preview saved PDFs, move between pages, and zoom in or out.";
 "カレンダー登録" = "Calendar Registration";
@@ -270,7 +277,7 @@
 "イベントの日付を作成できませんでした。" = "Could not create the event date.";
 "イベントの登録" = "Register event";
 "削除してイベントの登録" = "Delete and register event";
-"削除してイベント一覧から選択" = "Delete and choose from event list";
+"削除してイベント一覧から選択" = "Replace from event list";
 "先にGoogleへログインしてください。" = "Sign in to Google first.";
 "Googleログイン画面を開けませんでした。" = "Could not open the Google sign-in page.";
 "Googleログインがキャンセルされました。" = "Google sign-in was canceled.";

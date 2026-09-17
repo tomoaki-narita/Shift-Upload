@@ -185,7 +185,9 @@ private enum ShiftHubLocalization {
 
 @MainActor
 struct ContentView: View {
-    @Environment(\.locale) private var locale
+    private var locale: Locale {
+        Locale(identifier: appLanguage)
+    }
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
     @AppStorage("workerName") private var workerName = ""
@@ -239,6 +241,7 @@ struct ContentView: View {
     @State private var isProcessing = false
     @State private var isSynchronizing = false
     @State private var displayMode: ShiftDisplayMode = .calendar
+    @State private var selectedCalendarDisplayColor: CalendarDisplayColor?
     @State private var isCloudKitStateLoaded = false
 
     private let analyzer = ShiftOCRAnalyzer()
@@ -433,6 +436,9 @@ struct ContentView: View {
                 onCalendarDestinationChange: { destination in
                     calendarDestination = destination.rawValue
                 },
+                onCalendarColorChange: { color in
+                    selectedCalendarDisplayColor = color
+                },
                 onOpenShiftUpload: {
                     isShiftUploadPresented = true
                 },
@@ -456,8 +462,9 @@ struct ContentView: View {
     private var shiftUploadScreen: some View {
         VStack(spacing: 0) {
 #if os(iOS)
-            header
+            iOSScanHeader
                 .zIndex(1)
+            header
 #else
             header
 #endif
@@ -502,46 +509,9 @@ struct ContentView: View {
             }
             .allowsHitTesting(isRegistrationDestinationMenuPresented)
         }
-        .navigationTitle("PDFスキャン")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("PDFスキャン")
-                    .font(.headline)
-            }
-
-            if isCloudSyncEnabled {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        Task { @MainActor in
-                            await synchronizeWithCloudKit()
-                        }
-                    } label: {
-                        if isSynchronizing {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
-                        }
-                    }
-                    .accessibilityLabel("今すぐ同期")
-                    .disabled(isSynchronizing)
-                }
-            }
-
-            ToolbarItem(placement: .topBarTrailing) {
-                registrationActionButton
-            }
-
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    isSettingsPresented = true
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .accessibilityLabel("設定")
-            }
-        }
+#endif
+#if os(iOS)
+        .toolbar(.hidden, for: .navigationBar)
 #endif
 #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -618,10 +588,6 @@ struct ContentView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-
-            Spacer(minLength: 8)
-
-            registrationActionButton
         }
     }
 
@@ -648,6 +614,7 @@ struct ContentView: View {
                 .fixedSize(horizontal: true, vertical: false)
 
             registrationDestinationMenu
+                .padding(.vertical, 4)
 
             if let registrationDestinationName {
                 Text(registrationDestinationName)
@@ -701,6 +668,25 @@ struct ContentView: View {
     }
 
     private var workerSearchField: some View {
+#if os(macOS)
+        HStack(spacing: 12) {
+            workerSearchInput
+
+            Spacer(minLength: 8)
+
+            registrationActionButton
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+#else
+        HStack(spacing: 12) {
+            workerSearchInput
+            registrationActionButton
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+#endif
+    }
+
+    private var workerSearchInput: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
@@ -886,6 +872,64 @@ struct ContentView: View {
         .padding(.vertical, 12)
         .zIndex(1)
     }
+
+    private var iOSScanHeader: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Button {
+                    isShiftUploadPresented = false
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(ToolbarIconButtonStyleD())
+                .accessibilityLabel("戻る")
+
+                if isCloudSyncEnabled {
+                    Button {
+                        Task { @MainActor in
+                            await synchronizeWithCloudKit()
+                        }
+                    } label: {
+                        if isSynchronizing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 36, height: 36)
+                        } else {
+                            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
+                                .frame(width: 36, height: 36)
+                        }
+                    }
+                    .buttonStyle(ToolbarIconButtonStyleD())
+                    .accessibilityLabel("今すぐ同期")
+                    .disabled(isSynchronizing)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            Text("PDFスキャン")
+                .font(.system(size: 18, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .layoutPriority(1)
+
+            HStack(spacing: 8) {
+                Button {
+                    isSettingsPresented = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(ToolbarIconButtonStyleD())
+                .accessibilityLabel("設定")
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity)
+        .frame(height: 56)
+    }
 #endif
 
     private var extractedRowPanel: some View {
@@ -901,18 +945,11 @@ struct ContentView: View {
 
                 Spacer()
 
-                Picker("表示", selection: $displayMode) {
-                    ForEach(ShiftDisplayMode.allCases) { mode in
-                        Image(systemName: mode.systemImage)
-                            .help(mode.title)
-                            .accessibilityLabel(mode.title)
-                            .tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 92)
+                ShiftDisplayModePicker(
+                    selection: $displayMode,
+                    selectedSymbolColor: selectedCalendarDisplayColor?.color ?? .accentColor
+                )
                 .accessibilityLabel("表示形式")
-                .labelsHidden()
 
 //                Text("\(extractedCells.count)件")
 //                    .font(.callout)
@@ -958,6 +995,8 @@ struct ContentView: View {
                                 timelineShiftView
                             case .calendar:
                                 calendarShiftView(availableHeight: geometry.size.height)
+                            case .list:
+                                listShiftView
                             }
                         }
                     }
@@ -995,6 +1034,90 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var listShiftView: some View {
+        let days = Array(Set(
+            extractedCells
+                .filter { !$0.valueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .compactMap { Int($0.dateText) }
+        )).sorted()
+
+        return LazyVStack(alignment: .leading, spacing: 12) {
+            if days.isEmpty {
+                ContentUnavailableView(
+                    localizedMessage("表示するイベントがありません"),
+                    systemImage: "list.bullet",
+                    description: Text(localizedMessage("読み込まれたイベントがありません。"))
+                )
+                .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ForEach(days, id: \.self) { day in
+                    Section {
+                        ForEach(extractedCells.filter {
+                            Int($0.dateText) == day &&
+                            !$0.valueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        }) { cell in
+                            extractedListRowView(for: cell, day: day)
+                        }
+                    } header: {
+                        Text(dayActionHeader(for: day))
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func extractedListRowView(for cell: ExtractedShiftCell, day: Int) -> some View {
+        Button {
+            presentExtractedDayActions(for: cell, day: day)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(cell.valueText.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .foregroundStyle(cell.valueText == "休" ? .red : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(savedTimeText(for: cell) ?? "-")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(
+                .background.secondary.opacity(0.45),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+#if os(macOS)
+        .popover(
+            isPresented: Binding(
+                get: { selectedExtractedDayAction?.day == day },
+                set: { isPresented in
+                    if !isPresented, selectedExtractedDayAction?.day == day {
+                        selectedExtractedDayAction = nil
+                    }
+                }
+            )
+        ) {
+            extractedDayActionsPopover(for: day)
+                .onDisappear {
+                    if selectedExtractedDayAction?.day == day {
+                        selectedExtractedDayAction = nil
+                    }
+                }
+        }
+#endif
     }
 
     private func calendarShiftView(availableHeight: CGFloat? = nil) -> some View {
@@ -1194,14 +1317,23 @@ struct ContentView: View {
 
     @ViewBuilder
     private func extractedDayActionsPopover(for day: Int) -> some View {
+#if os(macOS)
+        CalHubDateActionSheetContainer {
+            extractedDayActionsPopoverContent(for: day)
+        }
+#else
+        extractedDayActionsPopoverContent(for: day)
+#endif
+    }
+
+    private func extractedDayActionsPopoverContent(for day: Int) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(dayActionHeader(for: day))
                 .font(.headline)
                 .foregroundStyle(.primary)
-                .padding(.bottom, 14)
+                .padding(.bottom, 10)
 
             Divider()
-                .padding(.bottom, 6)
 
             if let cell = extractedCells.first(where: { Int($0.dateText) == day }) {
 #if os(iOS)
@@ -1228,23 +1360,33 @@ struct ContentView: View {
                 .listStyle(.plain)
                 .frame(minHeight: 72, maxHeight: 100)
 #else
-                TextField("イベント名", text: $editedExtractedShiftText)
+                TextField(localizedMessage("イベント名"), text: $editedExtractedShiftText)
                     .textFieldStyle(.roundedBorder)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
                     .padding(.top, 12)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 6)
+
+                if let detail = savedTimeText(for: cell) {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                        .padding(.bottom, 12)
+                }
 
                 VStack(spacing: 8) {
                     Button {
                         presentExtractedShiftSelection(for: day)
                     } label: {
-                        Label("イベント一覧から選択", systemImage: "list.bullet")
+                        Label(localizedMessage("イベント一覧から選択"), systemImage: "list.bullet")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     Button {
                         applyEditedExtractedShift(for: day)
                     } label: {
-                        Label("変更を適用", systemImage: "checkmark.circle")
+                        Label(localizedMessage("変更を適用"), systemImage: "checkmark.circle")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .disabled(editedExtractedShiftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1252,23 +1394,18 @@ struct ContentView: View {
                     Button(role: .destructive) {
                         deleteExtractedShift(for: day)
                     } label: {
-                        Label("削除", systemImage: "trash")
+                        Label(localizedMessage("削除"), systemImage: "trash")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .foregroundStyle(.red)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
 #endif
             }
         }
 #if os(iOS)
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-#else
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
-        .padding(.bottom, 16)
-        .frame(width: 250, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
 #endif
     }
 
@@ -1328,7 +1465,7 @@ struct ContentView: View {
                 .padding(.top, dividerPadding)
 
             if hasShift {
-                TextField("イベント名", text: $editedExtractedShiftText)
+                TextField(localizedMessage("イベント名"), text: $editedExtractedShiftText)
                     .textFieldStyle(.roundedBorder)
                     .padding(.bottom, fieldBottomPadding)
             }
@@ -1339,7 +1476,7 @@ struct ContentView: View {
                     selectedExtractedDirectDayAction = nil
                     presentExtractedShiftSelection(for: day)
                 } label: {
-                    Label("イベント一覧から選択", systemImage: "list.bullet")
+                    Label(localizedMessage("イベント一覧から選択"), systemImage: "list.bullet")
                         .frame(maxWidth: .infinity, minHeight: buttonHeight, maxHeight: buttonHeight, alignment: .leading)
                 }
 
@@ -1348,7 +1485,7 @@ struct ContentView: View {
                     selectedExtractedDirectDayAction = nil
                     applyEditedExtractedShift(for: day)
                 } label: {
-                    Label("変更を適用", systemImage: "checkmark.circle")
+                    Label(localizedMessage("変更を適用"), systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity, minHeight: buttonHeight, maxHeight: buttonHeight, alignment: .leading)
                 }
                 .disabled(editedExtractedShiftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1358,10 +1495,11 @@ struct ContentView: View {
                     selectedExtractedDirectDayAction = nil
                     deleteExtractedShift(for: day)
                 } label: {
-                    Label("削除", systemImage: "trash")
+                    Label(localizedMessage("削除"), systemImage: "trash")
                         .frame(maxWidth: .infinity, minHeight: buttonHeight, maxHeight: buttonHeight, alignment: .leading)
                 }
                 .disabled(!hasShift)
+                .foregroundStyle(.red)
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
@@ -1393,7 +1531,7 @@ struct ContentView: View {
             Divider()
                 .padding(.vertical, 12)
 
-            TextField("イベント名", text: $editedExtractedShiftText)
+            TextField(localizedMessage("イベント名"), text: $editedExtractedShiftText)
                 .textFieldStyle(.roundedBorder)
                 .padding(.bottom, 10)
 
@@ -1402,7 +1540,7 @@ struct ContentView: View {
                     isExtractedShiftActionPresented = false
                     presentExtractedShiftSelection(for: day)
                 } label: {
-                    Label("イベント一覧から選択", systemImage: "list.bullet")
+                    Label(localizedMessage("イベント一覧から選択"), systemImage: "list.bullet")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -1410,7 +1548,7 @@ struct ContentView: View {
                     isExtractedShiftActionPresented = false
                     applyEditedExtractedShift(for: day)
                 } label: {
-                    Label("変更を適用", systemImage: "checkmark.circle")
+                    Label(localizedMessage("変更を適用"), systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .disabled(editedExtractedShiftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1419,9 +1557,10 @@ struct ContentView: View {
                     isExtractedShiftActionPresented = false
                     deleteExtractedShift(for: day)
                 } label: {
-                    Label("削除", systemImage: "trash")
+                    Label(localizedMessage("削除"), systemImage: "trash")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .foregroundStyle(.red)
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
@@ -1431,16 +1570,22 @@ struct ContentView: View {
     }
 
     private func extractedShiftDetail(for cell: ExtractedShiftCell) -> String? {
-        let normalizedTitle = cell.valueText
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        savedTimeText(for: cell)
+    }
+#endif
 
-        if normalizedShiftTitle(normalizedTitle) == "休" {
+    private func savedTimeText(for cell: ExtractedShiftCell) -> String? {
+        let normalizedTitle = normalizedShiftTitle(cell.valueText)
+        guard !normalizedTitle.isEmpty else { return nil }
+
+        if normalizedTitle == "休" {
             return localizedMessage("終日")
         }
 
-        return shiftDefinitions.first(where: { $0.title == normalizedTitle })?.timeRangeText
+        return shiftDefinitions.first {
+            normalizedShiftTitle($0.title) == normalizedTitle
+        }?.timeRangeText
     }
-#endif
 
     private func presentExtractedDayActions(for cell: ExtractedShiftCell, day: Int) {
 #if os(iOS)
@@ -3409,7 +3554,7 @@ private struct DateTimeEventRegistrationView: View {
     @State private var startDate: Date
     @State private var endDate: Date
     @State private var isAllDay = false
-    @State private var isInvalidDateAlertPresented = false
+    @State private var validationMessage: String?
 
     init(
         initialStartDate: Date,
@@ -3423,13 +3568,26 @@ private struct DateTimeEventRegistrationView: View {
         _endDate = State(initialValue: Calendar.current.date(byAdding: .hour, value: 1, to: initialStartDate) ?? initialStartDate)
     }
 
-    private var canRegisterTitleOnly: Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var isValidationAlertPresented: Binding<Bool> {
+        Binding(
+            get: { validationMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    validationMessage = nil
+                }
+            }
+        )
     }
 
     private func registerEvent() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            validationMessage = localized("イベントタイトルを入力してください。")
+            return
+        }
+
         guard endDate >= startDate else {
-            isInvalidDateAlertPresented = true
+            validationMessage = localized("終了日時は開始日時以降にしてください。")
             return
         }
 
@@ -3437,7 +3595,7 @@ private struct DateTimeEventRegistrationView: View {
         let normalizedStartDate = isAllDay ? calendar.startOfDay(for: startDate) : startDate
         let normalizedEndDate = isAllDay ? calendar.startOfDay(for: endDate) : endDate
         onRegister(
-            title.trimmingCharacters(in: .whitespacesAndNewlines),
+            trimmedTitle,
             normalizedStartDate,
             normalizedEndDate,
             isAllDay
@@ -3493,7 +3651,6 @@ private struct DateTimeEventRegistrationView: View {
                     registerEvent()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!canRegisterTitleOnly)
 #endif
             }
             .padding(24)
@@ -3553,33 +3710,27 @@ private struct DateTimeEventRegistrationView: View {
 #else
             Form {
                 Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(localized("イベントタイトル"))
-                            .font(.headline)
-
-                        TextField(localized("タイトル"), text: $title, axis: .vertical)
-                            .lineLimit(1...5)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(
-                                Color(uiColor: .tertiarySystemFill),
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            )
-                    }
-                    .padding(16)
-                    .background(
-                        registrationSectionBackground,
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+                    TextField(localized("タイトル"), text: $title, axis: .vertical)
+                        .lineLimit(1...5)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            Color(uiColor: .tertiarySystemFill),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                        .padding(16)
+                        .background(
+                            registrationSectionBackground,
+                            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                } header: {
+                    Text(localized("イベントタイトル"))
                 }
 
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text(localized("日時"))
-                            .font(.headline)
-
                         Toggle(localized("終日"), isOn: $isAllDay)
 
                         Divider()
@@ -3590,6 +3741,8 @@ private struct DateTimeEventRegistrationView: View {
                             displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
                         )
                         .environment(\.locale, timePickerLocale)
+
+                        Divider()
 
                         DatePicker(
                             localized("終了"),
@@ -3611,6 +3764,8 @@ private struct DateTimeEventRegistrationView: View {
                     )
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
+                } header: {
+                    Text(localized("日時"))
                 }
 
                 Section {
@@ -3624,7 +3779,6 @@ private struct DateTimeEventRegistrationView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(!canRegisterTitleOnly)
                     }
                     .padding(16)
                     .background(
@@ -3643,11 +3797,11 @@ private struct DateTimeEventRegistrationView: View {
         }
         .alert(
             Text(localized("保存できません")),
-            isPresented: $isInvalidDateAlertPresented
+            isPresented: isValidationAlertPresented
         ) {
             Button(localized("OK"), role: .cancel) {}
         } message: {
-            Text(localized("終了日時は開始日時以降にしてください。"))
+            Text(validationMessage ?? "")
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -3661,24 +3815,11 @@ private struct DateTimeEventRegistrationView: View {
         )
 #endif
         .environment(\.locale, locale)
-        .onChange(of: startDate) {
-            if endDate < startDate {
-                endDate = Calendar.current.date(byAdding: .hour, value: 1, to: startDate) ?? startDate
-            }
-        }
-        .onChange(of: endDate) {
-            if endDate < startDate {
-                endDate = startDate
-            }
-        }
         .onChange(of: isAllDay) {
             let calendar = Calendar.current
             if isAllDay {
                 startDate = calendar.startOfDay(for: startDate)
                 endDate = calendar.startOfDay(for: endDate)
-                if endDate < startDate {
-                    endDate = startDate
-                }
             }
         }
     }
@@ -4503,6 +4644,7 @@ private struct CalendarEventManagerView: View {
     let onRegisterDateTimeEvent: (String, Date, Date, Bool, DateTimeEventRegistrationCompletion) -> Void
     let onRegisterShifts: ([CalendarDaySelection], String, RegistrationCompletion) -> Void
     let onCalendarDestinationChange: (CalendarDestination) -> Void
+    let onCalendarColorChange: (CalendarDisplayColor?) -> Void
     let onOpenShiftUpload: () -> Void
     let onOpenPDFList: () -> Void
     let onOpenSettings: () -> Void
@@ -4565,6 +4707,7 @@ private struct CalendarEventManagerView: View {
         onRegisterDateTimeEvent: @escaping (String, Date, Date, Bool, DateTimeEventRegistrationCompletion) -> Void,
         onRegisterShifts: @escaping ([CalendarDaySelection], String, RegistrationCompletion) -> Void,
         onCalendarDestinationChange: @escaping (CalendarDestination) -> Void,
+        onCalendarColorChange: @escaping (CalendarDisplayColor?) -> Void,
         onOpenShiftUpload: @escaping () -> Void,
         onOpenPDFList: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
@@ -4589,6 +4732,7 @@ private struct CalendarEventManagerView: View {
         self.onRegisterDateTimeEvent = onRegisterDateTimeEvent
         self.onRegisterShifts = onRegisterShifts
         self.onCalendarDestinationChange = onCalendarDestinationChange
+        self.onCalendarColorChange = onCalendarColorChange
         self.onOpenShiftUpload = onOpenShiftUpload
         self.onOpenPDFList = onOpenPDFList
         self.onOpenSettings = onOpenSettings
@@ -4947,10 +5091,14 @@ private struct CalendarEventManagerView: View {
         }
 #endif
         .onAppear {
+            onCalendarColorChange(model.calendarColor)
             guard !didLoadInitialMonth else { return }
             didLoadInitialMonth = true
             model.setLocaleIdentifier(locale.identifier)
             model.load()
+        }
+        .onChange(of: model.calendarColor) { _, color in
+            onCalendarColorChange(color)
         }
         .onChange(of: model.events) { _, events in
             guard !events.isEmpty else {
@@ -5116,7 +5264,6 @@ private struct CalendarEventManagerView: View {
 #endif
     }
 
-#if os(iOS)
     private var iOSHomeHeader: some View {
         HStack(spacing: 12) {
             if isCloudSyncEnabled {
@@ -5194,7 +5341,6 @@ private struct CalendarEventManagerView: View {
         .frame(maxWidth: .infinity)
         .frame(height: 56)
     }
-#endif
 
     private var daySelectionToolbar: some View {
         HStack(spacing: 10) {
@@ -6302,14 +6448,62 @@ private struct CalendarEventManagerView: View {
             }
 
 #if os(iOS)
-            if !actionableEvents.isEmpty {
-                Text(localized("イベントを選択"))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 12)
-                    .padding(.bottom, 6)
+            if actionableEvents.count == 1, let event = actionableEvents.first {
+                VStack(alignment: .leading, spacing: 0) {
+                    Divider()
+                    eventListRowContent(for: event)
+                        .padding(.top, 6)
+                        .padding(.bottom, 6)
+                }
 
-                eventSelectionList(for: day, events: actionableEvents)
+                dateTimeEventRegistrationButton(forDay: day)
+                    .padding(.top, 8)
+
+                eventRegistrationButton(forDay: day)
+                    .padding(.top, 8)
+
+                Button {
+                    selectedEventForActions = nil
+                    selectedBandEventForActions = nil
+                    presentShiftSelection(for: event, deleteExisting: true)
+                } label: {
+                    Label(localized("削除してイベント一覧から選択"), systemImage: "arrow.triangle.2.circlepath")
+                        .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .padding(.top, 8)
+
+                Button(role: .destructive) {
+                    selectedEventForActions = nil
+                    selectedDayForActions = nil
+                    selectedBandEventForActions = nil
+                    pendingInlineDeletion = nil
+                    model.requestDelete(event)
+                } label: {
+                    Label(localized("削除"), systemImage: "trash")
+                        .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .foregroundStyle(.red)
+                .padding(.top, 8)
+            } else {
+                if !actionableEvents.isEmpty {
+                    Text(localized("イベントを選択"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 12)
+                        .padding(.bottom, 6)
+
+                    eventSelectionList(for: day, events: actionableEvents)
+                }
+
+                eventRegistrationButton(forDay: day)
+                    .padding(.top, 12)
+
+                dateTimeEventRegistrationButton(forDay: day)
+                    .padding(.top, 8)
             }
 #else
             if !actionableEvents.isEmpty {
@@ -6336,13 +6530,7 @@ private struct CalendarEventManagerView: View {
             }
 #endif
 
-#if os(iOS)
-            eventRegistrationButton(forDay: day)
-                .padding(.top, 12)
-
-            dateTimeEventRegistrationButton(forDay: day)
-                .padding(.top, 8)
-#else
+#if os(macOS)
             if actionableEvents.count != 1 {
                 dateTimeEventRegistrationButton(forDay: day)
                     .padding(.top, 12)
@@ -6486,11 +6674,14 @@ private struct CalendarEventManagerView: View {
             Text(model.dayHeader(for: day, locale: locale))
                 .font(.headline)
                 .foregroundStyle(.primary)
+                .padding(.bottom, 10)
+
+            Divider()
 
             Text(event.title)
                 .font(.body.weight(.medium))
                 .foregroundStyle(.primary)
-                .padding(.top, 10)
+                .padding(.top, 12)
 
             let menuDetail = event.menuDetail(locale: locale)
             if !menuDetail.isEmpty {
@@ -6498,10 +6689,8 @@ private struct CalendarEventManagerView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.top, 2)
+                    .padding(.bottom, 12)
             }
-
-            Divider()
-                .padding(.vertical, 12)
 
             if pendingInlineDeletion?.id == event.id {
                 VStack(alignment: .leading, spacing: 10) {
@@ -6915,7 +7104,8 @@ private struct ShiftHubMacSettingsView: View {
                 settingsHero(for: selectedPane)
                 settingsContent(for: selectedPane)
             }
-            .padding(24)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
@@ -7068,7 +7258,7 @@ private struct ShiftHubMacSettingsView: View {
 
                 ShiftHubMacAboutFeatureRow(
                     title: localized("PDFスキャン"),
-                    detail: localized("文字データを持つ横向きPDFから、保存した名前に一致する行を抽出します。抽出結果はカレンダー表示と横並び表示を切り替えられ、日付ごとのイベント名を編集・削除できます。")
+                    detail: localized("文字データを持つ横向きPDFから、保存した名前に一致する行を抽出します。抽出結果はカレンダー表示、横並び表示、リスト表示を切り替えられ、日付ごとのイベント名を編集・削除できます。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
@@ -7239,11 +7429,6 @@ private struct ShiftHubMacSettingsHeroIcon: View {
             .font(.system(size: 34, weight: .regular))
             .symbolRenderingMode(.hierarchical)
             .frame(width: 58, height: 58)
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-            }
     }
 }
 
@@ -7347,6 +7532,7 @@ private struct AppSettingsView: View {
         )
         .environment(\.locale, Locale(identifier: appLanguage))
         .navigationTitle("設定")
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .frame(
             minWidth: 720,
             idealWidth: 760,
@@ -7463,7 +7649,7 @@ private struct ShiftHubAboutView: View {
             Section("主な機能") {
                 ShiftHubAboutRow(
                     title: "PDFスキャン",
-                    detail: "文字データを持つ横向きPDFから、保存した名前に一致する行を抽出します。抽出結果はカレンダー表示と横並び表示を切り替えられ、日付ごとのイベント名を編集・削除できます。"
+                    detail: "文字データを持つ横向きPDFから、保存した名前に一致する行を抽出します。抽出結果はカレンダー表示、横並び表示、リスト表示を切り替えられ、日付ごとのイベント名を編集・削除できます。"
                 )
                 ShiftHubAboutRow(
                     title: "保存済みPDF",
@@ -7681,6 +7867,7 @@ private extension UIImage {
 private struct ShiftDefinitionRegistrationView: View {
     let locale: Locale
     let onSave: (String, Int, Int) -> Void
+    let isEditing: Bool
 
     @Environment(\.dismiss) private var dismiss
 #if os(iOS)
@@ -7689,13 +7876,19 @@ private struct ShiftDefinitionRegistrationView: View {
     @State private var title = ""
     @State private var startDate: Date
     @State private var endDate: Date
-    @State private var isInvalidTimeAlertPresented = false
+    @State private var validationMessage: String?
 
-    init(locale: Locale, onSave: @escaping (String, Int, Int) -> Void) {
+    init(
+        locale: Locale,
+        initialDefinition: ShiftDefinition? = nil,
+        onSave: @escaping (String, Int, Int) -> Void
+    ) {
         self.locale = locale
         self.onSave = onSave
-        _startDate = State(initialValue: Self.date(from: 510))
-        _endDate = State(initialValue: Self.date(from: 1000))
+        isEditing = initialDefinition != nil
+        _title = State(initialValue: initialDefinition?.title ?? "")
+        _startDate = State(initialValue: Self.date(from: initialDefinition?.startMinutes ?? 510))
+        _endDate = State(initialValue: Self.date(from: initialDefinition?.endMinutes ?? 1000))
     }
 
     private func localized(_ key: String) -> String {
@@ -7708,8 +7901,15 @@ private struct ShiftDefinitionRegistrationView: View {
             : Locale(identifier: "en_GB")
     }
 
-    private var canSave: Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var isValidationAlertPresented: Binding<Bool> {
+        Binding(
+            get: { validationMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    validationMessage = nil
+                }
+            }
+        )
     }
 
 #if os(iOS)
@@ -7727,15 +7927,21 @@ private struct ShiftDefinitionRegistrationView: View {
 #endif
 
     private func saveDefinition() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            validationMessage = localized("イベントタイトルを入力してください。")
+            return
+        }
+
         let startMinutes = Self.minutes(from: startDate)
         let endMinutes = Self.minutes(from: endDate)
         guard endMinutes >= startMinutes else {
-            isInvalidTimeAlertPresented = true
+            validationMessage = localized("終了時刻は開始時刻以降にしてください。")
             return
         }
 
         onSave(
-            title.trimmingCharacters(in: .whitespacesAndNewlines),
+            trimmedTitle,
             startMinutes,
             endMinutes
         )
@@ -7746,10 +7952,10 @@ private struct ShiftDefinitionRegistrationView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(localized("イベントを登録"))
+                    Text(localized(isEditing ? "イベントを編集" : "イベントを登録"))
                         .font(.title.bold())
 
-                    Text(localized("イベントタイトルと時間を保存します。"))
+                    Text(localized(isEditing ? "イベントタイトルと時間を編集します。" : "イベントタイトルと時間を保存します。"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -7766,7 +7972,6 @@ private struct ShiftDefinitionRegistrationView: View {
                     saveDefinition()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!canSave)
 #endif
             }
             .padding(24)
@@ -7793,7 +7998,7 @@ private struct ShiftDefinitionRegistrationView: View {
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                     }
 
-                Text(localized("日時"))
+                Text(localized("開始時間と終了時間"))
                     .font(.headline)
                     .padding(.top, 8)
 
@@ -7820,34 +8025,27 @@ private struct ShiftDefinitionRegistrationView: View {
 #else
             Form {
                 Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(localized("イベントタイトル"))
-                            .font(.headline)
-
-                        TextField(localized("タイトル"), text: $title, axis: .vertical)
-                            .lineLimit(1...5)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(
-                                Color(uiColor: .tertiarySystemFill),
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            )
-
-                    }
-                    .padding(16)
-                    .background(
-                        registrationSectionBackground,
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+                    TextField(localized("タイトル"), text: $title, axis: .vertical)
+                        .lineLimit(1...5)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            Color(uiColor: .tertiarySystemFill),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                        .padding(16)
+                        .background(
+                            registrationSectionBackground,
+                            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                } header: {
+                    Text(localized("イベントタイトル"))
                 }
 
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text(localized("日時"))
-                            .font(.headline)
-
                         HStack {
                             Text(localized("開始"))
                             Spacer()
@@ -7881,6 +8079,8 @@ private struct ShiftDefinitionRegistrationView: View {
                     )
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
+                } header: {
+                    Text(localized("開始時間と終了時間"))
                 }
 
                 Section {
@@ -7894,7 +8094,6 @@ private struct ShiftDefinitionRegistrationView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(!canSave)
                     }
                     .padding(16)
                     .background(
@@ -7924,11 +8123,11 @@ private struct ShiftDefinitionRegistrationView: View {
         .environment(\.locale, locale)
         .alert(
             Text(localized("保存できません")),
-            isPresented: $isInvalidTimeAlertPresented
+            isPresented: isValidationAlertPresented
         ) {
-            Button("OK", role: .cancel) {}
+            Button(localized("OK"), role: .cancel) {}
         } message: {
-            Text(localized("終了時刻は開始時刻以降にしてください。"))
+            Text(validationMessage ?? "")
         }
     }
 
@@ -7959,6 +8158,7 @@ struct ShiftDefinitionSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
     @State private var isRegistrationPresented = false
+    @State private var editingDefinition: ShiftDefinition?
     @State private var isInvalidTimeAlertPresented = false
 
     var body: some View {
@@ -7975,6 +8175,16 @@ struct ShiftDefinitionSettingsView: View {
                 }
 
                 Spacer()
+
+                Button {
+                    isRegistrationPresented = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(ShiftHubLocalization.string("追加", locale: locale))
+                .help(ShiftHubLocalization.string("追加", locale: locale))
+                .padding(.trailing)
 
 #if os(macOS)
                 Button("完了") {
@@ -8005,6 +8215,9 @@ struct ShiftDefinitionSettingsView: View {
                         ForEach($definitions) { $definition in
                             ShiftDefinitionRowView(
                                 definition: $definition,
+                                editAction: {
+                                    editingDefinition = definition
+                                },
                                 deleteAction: {
                                     definitions.removeAll { $0.id == definition.id }
                                 }
@@ -8013,12 +8226,26 @@ struct ShiftDefinitionSettingsView: View {
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                Button {
+                                    editingDefinition = definition
+                                } label: {
+                                    Image(systemName: "pencil")
+                                }
+                                .tint(.blue)
+                                .accessibilityLabel(
+                                    ShiftHubLocalization.string("編集", locale: locale)
+                                )
+                            }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     definitions.removeAll { $0.id == definition.id }
                                 } label: {
-                                    Label("削除", systemImage: "trash")
+                                    Image(systemName: "trash")
                                 }
+                                .accessibilityLabel(
+                                    ShiftHubLocalization.string("削除", locale: locale)
+                                )
                             }
 #else
                             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
@@ -8036,25 +8263,6 @@ struct ShiftDefinitionSettingsView: View {
             .padding(24)
 #endif
 
-            Divider()
-
-            HStack {
-                Button {
-                    isRegistrationPresented = true
-                } label: {
-                    Label("追加", systemImage: "plus")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
-
-                Spacer()
-            }
-#if os(iOS)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 16)
-#else
-            .padding(24)
-#endif
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -8062,6 +8270,19 @@ struct ShiftDefinitionSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
 #else
         .frame(minWidth: 680, minHeight: 460)
+#endif
+#if os(iOS)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    isRegistrationPresented = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel(ShiftHubLocalization.string("追加", locale: locale))
+                .help(ShiftHubLocalization.string("追加", locale: locale))
+            }
+        }
 #endif
         .sheet(isPresented: $isRegistrationPresented) {
             ShiftDefinitionRegistrationView(locale: locale) { title, startMinutes, endMinutes in
@@ -8072,6 +8293,19 @@ struct ShiftDefinitionSettingsView: View {
                         endMinutes: endMinutes
                     )
                 )
+            }
+        }
+        .sheet(item: $editingDefinition) { definition in
+            ShiftDefinitionRegistrationView(
+                locale: locale,
+                initialDefinition: definition
+            ) { title, startMinutes, endMinutes in
+                guard let index = definitions.firstIndex(where: { $0.id == definition.id }) else {
+                    return
+                }
+                definitions[index].title = title
+                definitions[index].startMinutes = startMinutes
+                definitions[index].endMinutes = endMinutes
             }
         }
         .alert("保存できません", isPresented: $isInvalidTimeAlertPresented) {
@@ -11536,7 +11770,9 @@ private enum KeychainStore {
 
 struct ShiftDefinitionRowView: View {
     @Binding var definition: ShiftDefinition
+    let editAction: () -> Void
     let deleteAction: () -> Void
+    @Environment(\.locale) private var locale
 
     var body: some View {
 #if os(iOS)
@@ -11549,9 +11785,9 @@ struct ShiftDefinitionRowView: View {
 #if os(iOS)
     private var iOSRow: some View {
         HStack(spacing: 6) {
-            TextField("タイトル", text: $definition.title)
-                .textFieldStyle(.roundedBorder)
+            Text(definition.title)
                 .font(.callout)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(definition.timeRangeText)
                 .font(.callout.monospacedDigit())
@@ -11561,8 +11797,8 @@ struct ShiftDefinitionRowView: View {
                 .layoutPriority(1)
                 .frame(width: 92, alignment: .trailing)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal)
+        .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             Color.secondary.opacity(0.12),
@@ -11577,9 +11813,8 @@ struct ShiftDefinitionRowView: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 18)
 
-            TextField("タイトル", text: $definition.title)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: .infinity)
+            Text(definition.title)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(definition.timeRangeText)
                 .font(.callout.monospacedDigit())
@@ -11587,6 +11822,14 @@ struct ShiftDefinitionRowView: View {
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
                 .frame(width: 90, alignment: .leading)
+
+            Button(action: editAction) {
+                Image(systemName: "pencil")
+            }
+            .buttonStyle(.borderless)
+            .frame(width: 24)
+            .accessibilityLabel(ShiftHubLocalization.string("編集", locale: locale))
+            .help(ShiftHubLocalization.string("編集", locale: locale))
 
             Button(role: .destructive, action: deleteAction) {
                 Image(systemName: "trash")
@@ -11766,6 +12009,7 @@ struct YearMonth: Hashable {
 enum ShiftDisplayMode: String, CaseIterable, Identifiable {
     case calendar
     case timeline
+    case list
 
     var id: String { rawValue }
 
@@ -11775,6 +12019,8 @@ enum ShiftDisplayMode: String, CaseIterable, Identifiable {
             return "横並び"
         case .calendar:
             return "カレンダー"
+        case .list:
+            return "リスト"
         }
     }
 
@@ -11784,6 +12030,94 @@ enum ShiftDisplayMode: String, CaseIterable, Identifiable {
             return "rectangle"
         case .calendar:
             return "calendar"
+        case .list:
+            return "list.bullet"
+        }
+    }
+}
+
+private struct ShiftDisplayModePicker: View {
+    @Binding var selection: ShiftDisplayMode
+    let selectedSymbolColor: Color
+    @Namespace private var selectionNamespace
+    @State private var visualSelection: ShiftDisplayMode?
+    private let selectionAnimationDuration = 0.28
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(ShiftDisplayMode.allCases) { mode in
+                let isSelected = isVisuallySelected(mode)
+
+                Button {
+                    select(mode)
+                } label: {
+                    modeButtonLabel(for: mode, isSelected: isSelected)
+                }
+                .buttonStyle(.plain)
+                .help(mode.title)
+                .accessibilityLabel(mode.title)
+                .accessibilityAddTraits(selection == mode ? .isSelected : [])
+            }
+        }
+#if os(iOS)
+        .frame(height: 33)
+        .background(Color(uiColor: .secondarySystemFill), in: Capsule())
+#else
+        .frame(height: 25)
+        .background(Color.primary.opacity(0.06), in: Capsule(style: .continuous))
+#endif
+        .fixedSize(horizontal: true, vertical: false)
+        .onAppear {
+            visualSelection = selection
+        }
+        .onChange(of: selection) { _, newValue in
+            guard visualSelection != newValue else { return }
+            withAnimation(.snappy(duration: selectionAnimationDuration)) {
+                visualSelection = newValue
+            }
+        }
+    }
+
+    private func select(_ mode: ShiftDisplayMode) {
+        guard mode != selection else { return }
+        withAnimation(.snappy(duration: selectionAnimationDuration)) {
+            visualSelection = mode
+        }
+        selection = mode
+    }
+
+    private func isVisuallySelected(_ mode: ShiftDisplayMode) -> Bool {
+        (visualSelection ?? selection) == mode
+    }
+
+    private func modeButtonLabel(
+        for mode: ShiftDisplayMode,
+        isSelected: Bool
+    ) -> some View {
+        Image(systemName: mode.systemImage)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(isSelected ? selectedSymbolColor : .secondary)
+#if os(iOS)
+            .frame(minWidth: 44, maxHeight: .infinity)
+#else
+            .frame(width: 36, height: 25)
+#endif
+            .contentShape(Rectangle())
+            .background {
+                selectionBackground(isSelected: isSelected)
+            }
+    }
+
+    @ViewBuilder
+    private func selectionBackground(isSelected: Bool) -> some View {
+        if isSelected {
+            Capsule(style: .continuous)
+                .fill(Color.primary.opacity(0.3))
+                .padding(3)
+                .matchedGeometryEffect(
+                    id: "shift-display-mode-selection",
+                    in: selectionNamespace
+                )
         }
     }
 }
