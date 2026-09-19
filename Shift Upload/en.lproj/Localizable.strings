@@ -71,6 +71,13 @@
 "時間設定を確認してください: %@" = "Check the saved time settings: %@";
 "未登録タイトル: %@" = "Unregistered titles: %@";
 "登録から除外されるイベント: %@件" = "Events excluded from registration: %@";
+"時間未設定" = "Time not set";
+"日付不明" = "Date unknown";
+"タイトル未設定" = "Title not set";
+"日付を判定できませんでした" = "The date could not be determined";
+"タイトルが空です" = "The title is empty";
+"休の登録が無効です" = "Day-off registration is disabled";
+"イベント一覧に登録されていません" = "The title is not in the event list";
 "イベントを登録" = "Register event";
 "イベントを編集" = "Edit event";
 "イベントタイトル" = "Event title";
@@ -144,7 +151,7 @@
 "設定から日本語と英語を切り替えられます。" = "Switch between Japanese and English in Settings.";
 "対応形式と注意点" = "Format and usage notes";
 "PDF入力条件" = "PDF requirements";
-"PDFのみ対応しています。文字を選択・コピーできる文字データ層を持つ横向きの勤務表を使用してください。画像だけのスキャンPDFや縦向きPDFには対応していません。" = "Only PDF files are supported. Use a landscape schedule with an extractable text layer whose text can be selected and copied. Image-only scanned PDFs and portrait PDFs are not supported.";
+"PDFのみ対応しています。文字を選択・コピーできる文字データ層を持ち、左側に職員名、右側に1日から月末までの日付が横方向に並ぶ勤務表を使用してください。セルを区切る罫線がPDF内の図形情報として保存されている形式が対象です。画像だけのスキャンPDFや縦向きPDFには対応していません。" = "Only PDF files are supported. Use a schedule with an extractable text layer whose text can be selected and copied, employee names on the left, and dates from the first through the last day of the month arranged horizontally on the right. The cell-separating lines must be stored as vector drawing information in the PDF. Image-only scanned PDFs and portrait PDFs are not supported.";
 "年月の判定" = "Year and month";
 "PDFから年月を取得できない場合は、ファイル名を「2026-01.pdf」のようなYYYY-MM形式にしてください。" = "If the year and month cannot be read from the PDF, use a filename in YYYY-MM form, such as 2026-01.pdf.";
 "イベント名の照合" = "Event name matching";
