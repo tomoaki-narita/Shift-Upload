@@ -12,12 +12,12 @@ import UIKit
 #endif
 
 // Apple, Google, and Notion calendar clients and registration writers.
-private struct NotionRegistrationResult {
+struct NotionRegistrationResult {
     let savedCount: Int
     let skippedTitles: [String]
 }
 
-private struct NotionPropertyOption: Identifiable, Hashable {
+struct NotionPropertyOption: Identifiable, Hashable {
     let name: String
     let type: String
     let options: [String]
@@ -33,12 +33,12 @@ private struct NotionPropertyOption: Identifiable, Hashable {
     }
 }
 
-private struct NotionDatabaseSchema {
+struct NotionDatabaseSchema {
     let title: String
     let properties: [NotionPropertyOption]
 }
 
-private struct NotionSchemaClient {
+struct NotionSchemaClient {
     func fetchSchema(
         token: String,
         databaseID: String,
@@ -141,7 +141,7 @@ private enum NotionAPIError: LocalizedError {
 }
 
 @MainActor
-private final class NotionPageWriter {
+final class NotionPageWriter {
     private let endpoint = URL(string: "https://api.notion.com/v1/pages")!
 
     func register(
@@ -896,7 +896,7 @@ enum GoogleTokenStore {
 }
 
 @MainActor
-private final class GoogleCalendarProvider: ObservableObject {
+final class GoogleCalendarProvider: ObservableObject {
     @Published private(set) var calendars: [GoogleCalendarOption] = []
     @Published private(set) var japaneseHolidayCalendarID: String?
     @Published private(set) var message = ""
@@ -1911,7 +1911,7 @@ private enum GoogleCalendarError: LocalizedError {
     }
 }
 
-private struct AppleCalendarOption: Identifiable, Hashable {
+struct AppleCalendarOption: Identifiable, Hashable {
     let id: String
     let title: String
     let sourceTitle: String
@@ -1926,7 +1926,7 @@ private struct AppleCalendarOption: Identifiable, Hashable {
 }
 
 @MainActor
-private final class AppleCalendarProvider: ObservableObject {
+final class AppleCalendarProvider: ObservableObject {
     @Published private(set) var calendars: [AppleCalendarOption] = []
     @Published private(set) var message = ""
     @Published private(set) var isLoading = false
