@@ -555,7 +555,7 @@ struct RegistrationPreviewExcludedEvent: Identifiable {
     let reason: RegistrationPreviewExclusionReason
 }
 
-private enum RegistrationPreviewExclusionReason {
+enum RegistrationPreviewExclusionReason {
     case invalidDate
     case emptyTitle
     case restDisabled

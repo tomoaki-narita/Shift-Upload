@@ -3,6 +3,7 @@ import CryptoKit
 import EventKit
 import Foundation
 import AuthenticationServices
+import Network
 
 #if os(macOS)
 import AppKit
@@ -1795,7 +1796,7 @@ struct GoogleCalendarAPIClient {
     }
 }
 
-private struct GoogleCalendarRegistrationResult {
+struct GoogleCalendarRegistrationResult {
     let savedCount: Int
     let skippedTitles: [String]
 }
@@ -2009,7 +2010,7 @@ private final class AppleCalendarProvider: ObservableObject {
     }
 }
 
-private struct AppleCalendarRegistrationResult {
+struct AppleCalendarRegistrationResult {
     let savedCount: Int
     let skippedTitles: [String]
 }
