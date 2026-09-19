@@ -3943,6 +3943,29 @@ private struct CalendarEventRecord: Identifiable, Hashable {
             && components.day == day
     }
 
+    func occurs(on date: Date, fallbackYearMonth: YearMonth?) -> Bool {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let targetDay = calendar.startOfDay(for: date)
+
+        if let startDate {
+            let startDay = calendar.startOfDay(for: startDate)
+            let endDay = calendar.startOfDay(for: endDate ?? startDate)
+            return targetDay >= startDay && targetDay <= endDay
+        }
+
+        guard let fallbackYearMonth,
+              let fallbackDate = calendar.date(from: DateComponents(
+                  year: fallbackYearMonth.year,
+                  month: fallbackYearMonth.month,
+                  day: day
+              )) else {
+            return false
+        }
+
+        return calendar.isDate(targetDay, inSameDayAs: fallbackDate)
+    }
+
     var confirmationText: String {
         let displayedDetail = menuDetail(locale: Locale(identifier: "ja"))
         return displayedDetail.isEmpty ? "\(day)日の「\(title)」" : "\(day)日の「\(title)」\n\(displayedDetail)"
@@ -3970,6 +3993,7 @@ private struct CalendarEventDisplaySegment: Identifiable, Hashable {
 
 private struct CalendarBandEventSelection: Identifiable {
     let event: CalendarEventRecord
+    let yearMonth: YearMonth
     let day: Int
 
     var id: String {
@@ -4093,6 +4117,20 @@ private struct CalendarDaySelection: Hashable {
 
     var yearMonth: YearMonth {
         YearMonth(year: year, month: month)
+    }
+}
+
+private struct CalendarGridDate: Identifiable, Hashable {
+    let date: Date
+    let yearMonth: YearMonth
+    let day: Int
+    let slot: Int
+    let displayedMonth: YearMonth
+
+    var id: Date { date }
+
+    var isInDisplayedMonth: Bool {
+        yearMonth == displayedMonth
     }
 }
 
@@ -4666,10 +4704,12 @@ private struct CalendarEventManagerView: View {
     @State private var pendingShiftRegistration: PendingShiftRegistration?
     @State private var shiftTitleAfterDelete: String?
     @State private var selectedDayForActions: Int?
+    @State private var pendingDayActionsSelection: CalendarDaySelection?
     @State private var isDaySelectionMode = false
     @State private var selectedCalendarDays: Set<CalendarDaySelection> = []
     @State private var selectedEventForActions: CalendarEventRecord?
     @State private var selectedBandEventForActions: CalendarBandEventSelection?
+    @State private var pendingBandEventForActions: CalendarBandEventSelection?
 #if os(iOS)
     @State private var pendingInlineDeletion: CalendarEventRecord?
 #endif
@@ -5145,6 +5185,28 @@ private struct CalendarEventManagerView: View {
         .onChange(of: model.yearMonth) {
             selectedYear = model.yearMonth.year
             selectedMonth = model.yearMonth.month
+
+            if let pendingSelection = pendingDayActionsSelection,
+               pendingSelection.yearMonth == model.yearMonth {
+                pendingDayActionsSelection = nil
+                Task { @MainActor in
+                    await Task.yield()
+                    selectedDayForActions = pendingSelection.day
+#if os(macOS)
+                    isDayActionsPopoverPresented = true
+#endif
+                }
+            }
+
+            if let pendingBandSelection = pendingBandEventForActions,
+               pendingBandSelection.yearMonth == model.yearMonth {
+                pendingBandEventForActions = nil
+                Task { @MainActor in
+                    await Task.yield()
+                    selectedBandEventForActions = pendingBandSelection
+                }
+            }
+
             if model.shouldAnimateEventBandReveal {
                 beginEventBandReveal()
             } else {
@@ -5587,12 +5649,56 @@ private struct CalendarEventManagerView: View {
 
     private func moveMonth(by offset: Int) {
         let target = model.yearMonth.addingMonths(offset)
+        moveMonth(to: target)
+    }
+
+    private func moveMonth(to target: YearMonth, animated: Bool = false) {
         guard let pageID = pageID(for: target) else { return }
 
-        var transaction = Transaction()
-        transaction.animation = nil
-        withTransaction(transaction) {
-            monthPageID = pageID
+        if animated {
+            // Keep the pending date or event selection until the page scroll reaches idle.
+            isMonthScrollActive = true
+            withAnimation(.easeInOut(duration: 0.3)) {
+                monthPageID = pageID
+            }
+
+            // The scroll phase callback normally commits this transition. Keep a
+            // small fallback for platforms that do not report programmatic idle.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                guard pendingDayActionsSelection != nil || pendingBandEventForActions != nil,
+                      pendingMonthPageID == pageID,
+                      monthPageID == pageID else { return }
+                commitPendingMonthPage()
+            }
+        } else {
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                monthPageID = pageID
+            }
+        }
+    }
+
+    private func handleEventBandTap(
+        event: CalendarEventRecord,
+        yearMonth: YearMonth,
+        day: Int
+    ) {
+        isCalendarDestinationMenuPresented = false
+        isYearMonthPickerPresented = false
+        selectedDayForActions = nil
+
+        let selection = CalendarBandEventSelection(
+            event: event,
+            yearMonth: yearMonth,
+            day: day
+        )
+        if selection.yearMonth == model.yearMonth {
+            selectedBandEventForActions = selection
+        } else {
+            pendingBandEventForActions = selection
+            moveMonth(to: selection.yearMonth, animated: true)
         }
     }
 
@@ -5661,9 +5767,18 @@ private struct CalendarEventManagerView: View {
         eventBandRevealThroughDay = model.yearMonth.numberOfDays
     }
 
-    private func eventBandRevealOpacity(for yearMonth: YearMonth, day: Int) -> Double {
-        guard yearMonth == model.yearMonth, !model.events.isEmpty else { return 1 }
-        return day <= eventBandRevealThroughDay ? 1 : 0
+    private func eventBandRevealOpacity(
+        for yearMonth: YearMonth,
+        slot: Int,
+        gridDates: [CalendarGridDate]
+    ) -> Double {
+        guard yearMonth == model.yearMonth,
+              !model.events.isEmpty,
+              let gridDate = gridDates.first(where: { $0.slot == slot }),
+              gridDate.isInDisplayedMonth else {
+            return 1
+        }
+        return gridDate.day <= eventBandRevealThroughDay ? 1 : 0
     }
 
     private func monthForPageID(_ pageID: Int) -> YearMonth {
@@ -5677,60 +5792,101 @@ private struct CalendarEventManagerView: View {
         return (0...Self.monthPageRadius * 2).contains(pageID) ? pageID : nil
     }
 
-    private func eventDisplaySegments(
+    private func calendarGridDates(for yearMonth: YearMonth) -> [CalendarGridDate] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+
+        guard let monthStart = calendar.date(from: DateComponents(
+            year: yearMonth.year,
+            month: yearMonth.month,
+            day: 1
+        )) else {
+            return []
+        }
+
+        let leadingBlankCount = yearMonth.leadingBlankCount
+        let monthSlotCount = leadingBlankCount + yearMonth.numberOfDays
+        let rowCount = max(1, Int(ceil(Double(monthSlotCount) / 7.0)))
+        let totalSlots = rowCount * 7
+        let firstDate = calendar.date(
+            byAdding: .day,
+            value: -leadingBlankCount,
+            to: monthStart
+        ) ?? monthStart
+
+        return (0..<totalSlots).compactMap { slot in
+            guard let date = calendar.date(byAdding: .day, value: slot, to: firstDate) else {
+                return nil
+            }
+
+            let components = calendar.dateComponents([.year, .month, .day], from: date)
+            guard let year = components.year,
+                  let month = components.month,
+                  let day = components.day else {
+                return nil
+            }
+
+            return CalendarGridDate(
+                date: date,
+                yearMonth: YearMonth(year: year, month: month),
+                day: day,
+                slot: slot,
+                displayedMonth: yearMonth
+            )
+        }
+    }
+
+    private func calendarPageEvents(
         for yearMonth: YearMonth,
         events: [CalendarEventRecord]
+    ) -> [CalendarEventRecord] {
+        var pageEvents = events
+        pageEvents.append(contentsOf: model.cachedEvents(for: yearMonth.previousMonth))
+        pageEvents.append(contentsOf: model.cachedEvents(for: yearMonth.nextMonth))
+
+        return Array(
+            Dictionary(
+                pageEvents.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            .values
+        )
+    }
+
+    private func eventDisplaySegments(
+        for yearMonth: YearMonth,
+        events: [CalendarEventRecord],
+        gridDates: [CalendarGridDate]
     ) -> [CalendarEventDisplaySegment] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
 
         let result = events.flatMap { (event: CalendarEventRecord) -> [CalendarEventDisplaySegment] in
-            guard event.spansMultipleDays,
-                  let startDate = event.startDate,
-                  let endDate = event.endDate,
-                  let monthStart = calendar.date(from: DateComponents(
-                      year: yearMonth.year,
-                      month: yearMonth.month,
-                      day: 1
-                  )),
-                  let nextMonthStart = calendar.date(
-                      byAdding: .month,
-                      value: 1,
-                      to: monthStart
-                  ) else {
+            guard let fallbackDate = calendar.date(from: DateComponents(
+                year: yearMonth.year,
+                month: yearMonth.month,
+                day: event.day
+            )) else {
                 return []
             }
 
-            guard startDate < nextMonthStart, endDate > monthStart else {
-                return []
+            let startDate = calendar.startOfDay(for: event.startDate ?? fallbackDate)
+            let endDate = calendar.startOfDay(for: event.endDate ?? event.startDate ?? fallbackDate)
+            let matchingSlots = gridDates.filter { gridDate in
+                let date = calendar.startOfDay(for: gridDate.date)
+                return date >= startDate && date <= endDate
             }
 
-            let startDay = startDate < monthStart
-                ? 1
-                : calendar.component(.day, from: startDate)
-            let endDay: Int
-            if endDate >= nextMonthStart {
-                endDay = yearMonth.numberOfDays
-            } else {
-                endDay = calendar.component(.day, from: endDate)
-            }
-
-            guard (1...yearMonth.numberOfDays).contains(startDay),
-                  (1...yearMonth.numberOfDays).contains(endDay),
-                  endDay >= startDay else {
+            guard let firstSlot = matchingSlots.first?.slot,
+                  let lastSlot = matchingSlots.last?.slot,
+                  firstSlot <= lastSlot else {
                 return []
             }
 
             var segments: [CalendarEventDisplaySegment] = []
-            var segmentStartDay = startDay
-            while segmentStartDay <= endDay {
-                let weekdayColumn = (
-                    yearMonth.leadingBlankCount + segmentStartDay - 1
-                ) % 7
-                let segmentEndDay = min(
-                    endDay,
-                    segmentStartDay + (6 - weekdayColumn)
-                )
+            var segmentStartDay = firstSlot
+            while segmentStartDay <= lastSlot {
+                let segmentEndDay = min(lastSlot, ((segmentStartDay / 7) + 1) * 7 - 1)
                 segments.append(
                     CalendarEventDisplaySegment(
                         event: event,
@@ -5748,26 +5904,30 @@ private struct CalendarEventManagerView: View {
     private func singleDayEventBandSegments(
         for yearMonth: YearMonth,
         events: [CalendarEventRecord],
-        segments: [CalendarEventDisplaySegment]
+        segments: [CalendarEventDisplaySegment],
+        gridDates: [CalendarGridDate]
     ) -> [CalendarEventDisplaySegment] {
         var result: [CalendarEventDisplaySegment] = []
 
-        for day in 1...yearMonth.numberOfDays {
-            let dayEvents = events.filter { $0.starts(on: day, in: yearMonth) }
-            let segmentsForDay = segments.filter { $0.contains(day: day) }
+        for gridDate in gridDates {
+            let dayEvents = events.filter {
+                $0.occurs(on: gridDate.date, fallbackYearMonth: yearMonth)
+            }
+            let segmentsForDay = segments.filter { $0.contains(day: gridDate.slot) }
             let segmentStartEvents = segmentsForDay
-                .filter { $0.startDay == day }
+                .filter { $0.startDay == gridDate.slot }
                 .map(\.event)
             let displayEvents = Array(
                 Dictionary(
                     (dayEvents + segmentStartEvents).map { ($0.id, $0) },
                     uniquingKeysWith: { first, _ in first }
-                )
-                .values
+            )
+            .values
             )
             .filter { event in
                 !segmentsForDay.contains {
-                    $0.event.id == event.id && $0.startDay == day && $0.spanDays > 1
+                    $0.event.id == event.id
+                        && $0.spanDays > 1
                 }
             }
             .sorted(by: calendarEventComesBefore)
@@ -5776,8 +5936,8 @@ private struct CalendarEventManagerView: View {
             for event in displayEvents {
                 result.append(CalendarEventDisplaySegment(
                     event: event,
-                    startDay: day,
-                    endDay: day
+                    startDay: gridDate.slot,
+                    endDay: gridDate.slot
                 ))
             }
         }
@@ -5788,7 +5948,8 @@ private struct CalendarEventManagerView: View {
     private func eventBandLayouts(
         for yearMonth: YearMonth,
         events: [CalendarEventRecord],
-        segments: [CalendarEventDisplaySegment]
+        segments: [CalendarEventDisplaySegment],
+        gridDates: [CalendarGridDate]
     ) -> [CalendarEventBandLayout] {
         let candidates = Array(
             Dictionary(
@@ -5796,7 +5957,8 @@ private struct CalendarEventManagerView: View {
                     + singleDayEventBandSegments(
                         for: yearMonth,
                         events: events,
-                        segments: segments
+                        segments: segments,
+                        gridDates: gridDates
                     )).map { ($0.id, $0) },
                 uniquingKeysWith: { first, _ in first }
             ).values
@@ -5821,8 +5983,7 @@ private struct CalendarEventManagerView: View {
         var occupiedRanges: [Int: [[ClosedRange<Int>]]] = [:]
         var layouts: [CalendarEventBandLayout] = []
         for segment in candidates {
-            let startSlot = yearMonth.leadingBlankCount + segment.startDay - 1
-            let row = startSlot / 7
+            let row = segment.startDay / 7
             let range = segment.startDay...segment.endDay
             var rowLanes = occupiedRanges[row, default: []]
             var lane = 0
@@ -5862,7 +6023,7 @@ private struct CalendarEventManagerView: View {
             0,
             cardHeight - 12 - dateHeaderHeight - contentSpacing
         )
-        let height = max(0, (availableHeight - gap * 2) / 3)
+        let height = max(0, (availableHeight - gap * 2) / 3 - 1)
         return CalendarEventBandMetrics(
             top: 6 + dateHeaderHeight + contentSpacing,
             contentSpacing: contentSpacing,
@@ -5874,8 +6035,8 @@ private struct CalendarEventManagerView: View {
 
     private func eventBandCornerStyle(
         for layout: CalendarEventBandLayout,
-        yearMonth: YearMonth,
-        segments: [CalendarEventDisplaySegment]
+        segments: [CalendarEventDisplaySegment],
+        gridDates: [CalendarGridDate]
     ) -> (squareLeading: Bool, squareTrailing: Bool) {
         let hasPreviousSegment = segments.contains {
             $0.event.id == layout.event.id && $0.endDay == layout.startDay - 1
@@ -5883,28 +6044,103 @@ private struct CalendarEventManagerView: View {
         let hasNextSegment = segments.contains {
             $0.event.id == layout.event.id && $0.startDay == layout.endDay + 1
         }
-
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
-        let monthStart = calendar.date(from: DateComponents(
-            year: yearMonth.year,
-            month: yearMonth.month,
-            day: 1
-        ))
-        let nextMonthStart = monthStart.flatMap {
-            calendar.date(byAdding: .month, value: 1, to: $0)
+        let continuesBeforeGrid: Bool
+        let continuesAfterGrid: Bool
+
+        if let firstGridDate = gridDates.first?.date,
+           let lastGridDate = gridDates.last?.date {
+            let firstDay = calendar.startOfDay(for: firstGridDate)
+            let lastDay = calendar.startOfDay(for: lastGridDate)
+            continuesBeforeGrid = layout.event.startDate.map {
+                calendar.startOfDay(for: $0) < firstDay
+            } ?? false
+            continuesAfterGrid = layout.event.endDate.map {
+                calendar.startOfDay(for: $0) > lastDay
+            } ?? false
+        } else {
+            continuesBeforeGrid = false
+            continuesAfterGrid = false
         }
-        let continuesFromPreviousMonth = monthStart.map { monthStart in
-            layout.event.startDate.map { $0 < monthStart } ?? false
-        } ?? false
-        let continuesIntoNextMonth = nextMonthStart.map { nextMonthStart in
-            layout.event.endDate.map { $0 >= nextMonthStart } ?? false
-        } ?? false
 
         return (
-            squareLeading: hasPreviousSegment || continuesFromPreviousMonth,
-            squareTrailing: hasNextSegment || continuesIntoNextMonth
+            squareLeading: hasPreviousSegment || continuesBeforeGrid,
+            squareTrailing: hasNextSegment || continuesAfterGrid
         )
+    }
+
+    private func eventBandGradient(
+        for layout: CalendarEventBandLayout,
+        eventColor: Color,
+        gridDates: [CalendarGridDate]
+    ) -> LinearGradient {
+        let baseOpacity = isDaySelectionMode ? 0.08 : 0.25
+        let dimmedOpacity = baseOpacity * 0.45
+        let layoutDates = gridDates.filter {
+            (layout.startDay...layout.endDay).contains($0.slot)
+        }
+        let span = max(1, layoutDates.count)
+        let leadingOutsideCount = layoutDates.prefix {
+            !$0.isInDisplayedMonth
+        }.count
+        let trailingOutsideCount = layoutDates.reversed().prefix {
+            !$0.isInDisplayedMonth
+        }.count
+
+        let baseColor = eventColor.opacity(baseOpacity)
+        let dimmedColor = eventColor.opacity(dimmedOpacity)
+        let stops: [Gradient.Stop]
+
+        if leadingOutsideCount == span || trailingOutsideCount == span {
+            stops = [
+                Gradient.Stop(color: dimmedColor, location: 0),
+                Gradient.Stop(color: dimmedColor, location: 1)
+            ]
+        } else if leadingOutsideCount > 0 {
+            let boundary = CGFloat(leadingOutsideCount) / CGFloat(span)
+            stops = [
+                Gradient.Stop(color: dimmedColor, location: 0),
+                Gradient.Stop(color: dimmedColor, location: boundary),
+                Gradient.Stop(color: baseColor, location: boundary),
+                Gradient.Stop(color: baseColor, location: 1)
+            ]
+        } else if trailingOutsideCount > 0 {
+            let boundary = CGFloat(span - trailingOutsideCount) / CGFloat(span)
+            stops = [
+                Gradient.Stop(color: baseColor, location: 0),
+                Gradient.Stop(color: baseColor, location: boundary),
+                Gradient.Stop(color: dimmedColor, location: boundary),
+                Gradient.Stop(color: dimmedColor, location: 1)
+            ]
+        } else {
+            stops = [
+                Gradient.Stop(color: baseColor, location: 0),
+                Gradient.Stop(color: baseColor, location: 1)
+            ]
+        }
+
+        return LinearGradient(
+            stops: stops,
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private func eventBandDate(
+        for layout: CalendarEventBandLayout,
+        location: CGPoint,
+        bandWidth: CGFloat,
+        gridDates: [CalendarGridDate]
+    ) -> CalendarGridDate? {
+        let span = max(1, layout.spanDays)
+        let dayWidth = max(1, bandWidth / CGFloat(span))
+        let offset = min(
+            span - 1,
+            max(0, Int(location.x / dayWidth))
+        )
+        let slot = layout.startDay + offset
+        return gridDates.first { $0.slot == slot }
     }
 
     private var eventCalendarColumns: [GridItem] {
@@ -5985,15 +6221,19 @@ private struct CalendarEventManagerView: View {
         availableWidth: CGFloat,
         availableHeight: CGFloat
     ) -> some View {
-        let leadingBlankCount = yearMonth.leadingBlankCount
-        let totalSlots = leadingBlankCount + yearMonth.numberOfDays
-        let slots = Swift.Array<Int>(0..<totalSlots)
+        let gridDates = calendarGridDates(for: yearMonth)
         let isCurrentMonth = yearMonth == model.yearMonth
-        let displaySegments = eventDisplaySegments(for: yearMonth, events: events)
+        let pageEvents = calendarPageEvents(for: yearMonth, events: events)
+        let displaySegments = eventDisplaySegments(
+            for: yearMonth,
+            events: pageEvents,
+            gridDates: gridDates
+        )
         let bandLayouts = eventBandLayouts(
             for: yearMonth,
-            events: events,
-            segments: displaySegments
+            events: pageEvents,
+            segments: displaySegments,
+            gridDates: gridDates
         )
 #if os(iOS)
         let gridSpacing: CGFloat = 5
@@ -6024,40 +6264,32 @@ private struct CalendarEventManagerView: View {
         return ScrollView {
             ZStack(alignment: .topLeading) {
                 LazyVGrid(columns: eventCalendarColumns, spacing: gridSpacing) {
-                    ForEach(slots, id: \.self) { slot in
-                        if slot < leadingBlankCount {
-                            Color.clear
-                                .frame(maxWidth: .infinity)
-                                .frame(height: cardHeight)
-                        } else {
-                            eventDayCell(
-                                day: slot - leadingBlankCount + 1,
-                                yearMonth: yearMonth,
-                                events: events,
-                                segments: displaySegments,
-                                isInteractive: isCurrentMonth,
-                                isSelectionMode: isDaySelectionMode,
-                                isSelected: selectedCalendarDays.contains(
-                                    CalendarDaySelection(
-                                        year: yearMonth.year,
-                                        month: yearMonth.month,
-                                        day: slot - leadingBlankCount + 1
-                                    )
-                                ),
-                                cardHeight: cardHeight,
-                                bandMetrics: bandMetrics,
-                                bandLayouts: bandLayouts,
-                                hideEventContent: renderEventBandsInOverlay
-                            )
-                        }
+                    ForEach(gridDates) { gridDate in
+                        eventDayCell(
+                            gridDate: gridDate,
+                            events: pageEvents,
+                            segments: displaySegments,
+                            isInteractive: isCurrentMonth,
+                            isSelectionMode: isDaySelectionMode,
+                            isSelected: selectedCalendarDays.contains(
+                                CalendarDaySelection(
+                                    year: gridDate.yearMonth.year,
+                                    month: gridDate.yearMonth.month,
+                                    day: gridDate.day
+                                )
+                            ),
+                            cardHeight: cardHeight,
+                            bandMetrics: bandMetrics,
+                            bandLayouts: bandLayouts,
+                            hideEventContent: renderEventBandsInOverlay
+                        )
                     }
                 }
 
                 if renderEventBandsInOverlay {
                     ForEach(bandLayouts.filter { $0.lane < 3 }) { layout in
-                        let startSlot = leadingBlankCount + layout.startDay - 1
-                        let row = startSlot / 7
-                        let column = startSlot % 7
+                        let row = layout.startDay / 7
+                        let column = layout.startDay % 7
                         #if os(iOS)
                         let bandInset: CGFloat = 3
                         #else
@@ -6071,9 +6303,15 @@ private struct CalendarEventManagerView: View {
                             : layout.event.calendarColor?.color ?? Color.accentColor
                         let cornerStyle = eventBandCornerStyle(
                             for: layout,
-                            yearMonth: yearMonth,
-                            segments: displaySegments
+                            segments: displaySegments,
+                            gridDates: gridDates
                         )
+                        let bandStartDate = gridDates.first {
+                            $0.slot == layout.startDay
+                        }
+                        let bandTitleOpacity = bandStartDate?.isInDisplayedMonth == false
+                            ? 0.45
+                            : 1
 
                         ZStack(alignment: .leading) {
                             HStack(spacing: 0) {
@@ -6085,6 +6323,7 @@ private struct CalendarEventManagerView: View {
 #else
                                     .font(.caption.weight(.medium))
 #endif
+                                    .foregroundStyle(.primary.opacity(bandTitleOpacity))
                                     .padding(.horizontal, 6)
 
                                 Spacer(minLength: 0)
@@ -6092,32 +6331,48 @@ private struct CalendarEventManagerView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .allowsHitTesting(false)
 
-                            Button {
-                                isCalendarDestinationMenuPresented = false
-                                isYearMonthPickerPresented = false
-                                selectedDayForActions = nil
-                                selectedBandEventForActions = CalendarBandEventSelection(
-                                    event: layout.event,
-                                    day: layout.startDay
+                            Rectangle()
+                                .fill(.clear)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    SpatialTapGesture()
+                                        .onEnded { value in
+                                            let tappedDate = eventBandDate(
+                                                for: layout,
+                                                location: value.location,
+                                                bandWidth: bandWidth,
+                                                gridDates: gridDates
+                                            ) ?? bandStartDate
+                                            handleEventBandTap(
+                                                event: layout.event,
+                                                yearMonth: tappedDate?.yearMonth ?? yearMonth,
+                                                day: tappedDate?.day ?? 1
+                                            )
+                                        }
                                 )
-                            } label: {
-                                Rectangle()
-                                    .fill(.clear)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .contentShape(Rectangle())
-                                    .accessibilityLabel(layout.event.title)
-                            }
-                            .buttonStyle(.plain)
+                                .accessibilityLabel(layout.event.title)
+                                .accessibilityAddTraits(.isButton)
+                                .accessibilityAction {
+                                    handleEventBandTap(
+                                        event: layout.event,
+                                        yearMonth: bandStartDate?.yearMonth ?? yearMonth,
+                                        day: bandStartDate?.day ?? 1
+                                    )
+                                }
 #if os(macOS)
                             .popover(
                                 isPresented: bandEventPopoverBinding(
                                     for: layout.event,
-                                    day: layout.startDay
+                                    layout: layout,
+                                    gridDates: gridDates
                                 )
                             ) {
                                 bandEventActionsPopover(
                                     for: layout.event,
-                                    day: layout.startDay
+                                    day: selectedBandEventForActions?.day
+                                        ?? bandStartDate?.day
+                                        ?? 1
                                 )
                             }
 #endif
@@ -6128,7 +6383,13 @@ private struct CalendarEventManagerView: View {
                                 squareLeading: cornerStyle.squareLeading,
                                 squareTrailing: cornerStyle.squareTrailing
                             )
-                                .fill(eventColor.opacity(isDaySelectionMode ? 0.08 : 0.18))
+                                .fill(
+                                    eventBandGradient(
+                                        for: layout,
+                                        eventColor: eventColor,
+                                        gridDates: gridDates
+                                    )
+                                )
                         }
                         .position(
                             x: CGFloat(column) * (columnWidth + columnSpacing)
@@ -6140,10 +6401,15 @@ private struct CalendarEventManagerView: View {
                         )
                         .opacity(eventBandRevealOpacity(
                             for: yearMonth,
-                            day: layout.startDay
+                            slot: layout.startDay,
+                            gridDates: gridDates
                         ))
                         .zIndex(2)
-                        .allowsHitTesting(isCurrentMonth && !isDaySelectionMode && !model.isDeleting)
+                        .allowsHitTesting(
+                            isCurrentMonth
+                                && !isDaySelectionMode
+                                && !model.isDeleting
+                        )
                     }
                 }
 
@@ -6192,8 +6458,7 @@ private struct CalendarEventManagerView: View {
     }
 
     private func eventDayCell(
-        day: Int,
-        yearMonth: YearMonth,
+        gridDate: CalendarGridDate,
         events: [CalendarEventRecord],
         segments: [CalendarEventDisplaySegment],
         isInteractive: Bool,
@@ -6204,10 +6469,12 @@ private struct CalendarEventManagerView: View {
         bandLayouts: [CalendarEventBandLayout],
         hideEventContent: Bool
     ) -> some View {
-        let dayEvents = events.filter { $0.starts(on: day, in: yearMonth) }
-        let segmentsForDay = segments.filter { $0.contains(day: day) }
+        let dayEvents = events.filter {
+            $0.occurs(on: gridDate.date, fallbackYearMonth: gridDate.yearMonth)
+        }
+        let segmentsForDay = segments.filter { $0.contains(day: gridDate.slot) }
         let segmentStartEvents = segmentsForDay
-            .filter { $0.startDay == day }
+            .filter { $0.startDay == gridDate.slot }
             .map(\.event)
         let allDisplayEvents = Array(
             Dictionary(
@@ -6218,32 +6485,37 @@ private struct CalendarEventManagerView: View {
         )
         .filter { event in
             !segmentsForDay.contains {
-                $0.event.id == event.id && $0.startDay == day && $0.spanDays > 1
+                $0.event.id == event.id
+                    && $0.startDay == gridDate.slot
+                    && $0.spanDays > 1
             }
         }
             .sorted(by: calendarEventComesBefore)
             .prefix(3)
         let displayEvents = hideEventContent ? [] : allDisplayEvents
         let overflowCount = bandLayouts.filter {
-            $0.lane >= 3 && $0.contains(day: day)
+            $0.lane >= 3 && $0.contains(day: gridDate.slot)
         }.count
-        let weekdayColumn = (yearMonth.leadingBlankCount + day - 1) % 7
+        let weekdayColumn = gridDate.slot % 7
         let connectsToPreviousCard = weekdayColumn > 0 && segmentsForDay.contains {
-            $0.startDay < day
+            $0.startDay < gridDate.slot
         }
-        let selection = CalendarDaySelection(year: yearMonth.year, month: yearMonth.month, day: day)
-        let isToday = Calendar.current.date(
-            from: DateComponents(year: yearMonth.year, month: yearMonth.month, day: day)
-        ).map(Calendar.current.isDateInToday) ?? false
+        let selection = CalendarDaySelection(
+            year: gridDate.yearMonth.year,
+            month: gridDate.yearMonth.month,
+            day: gridDate.day
+        )
+        let isToday = Calendar.current.isDateInToday(gridDate.date)
 #if os(iOS)
         let dateHeaderHeight: CGFloat = 14
 #else
         let dateHeaderHeight: CGFloat = 18
 #endif
         return Button {
-            guard isInteractive else { return }
-
             if isSelectionMode {
+                guard gridDate.isInDisplayedMonth else {
+                    return
+                }
                 if selectedCalendarDays.contains(selection) {
                     selectedCalendarDays.remove(selection)
                 } else {
@@ -6252,11 +6524,20 @@ private struct CalendarEventManagerView: View {
                 return
             }
 
+            guard isInteractive else { return }
+
             isCalendarDestinationMenuPresented = false
             isYearMonthPickerPresented = false
+
+            if !gridDate.isInDisplayedMonth {
+                pendingDayActionsSelection = selection
+                moveMonth(to: gridDate.yearMonth, animated: true)
+                return
+            }
+
             Task { @MainActor in
                 await Task.yield()
-                selectedDayForActions = day
+                selectedDayForActions = gridDate.day
 #if os(macOS)
                 isDayActionsPopoverPresented = true
 #endif
@@ -6305,7 +6586,7 @@ private struct CalendarEventManagerView: View {
                     }
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Text("\(day)")
+                    Text("\(gridDate.day)")
 #if os(iOS)
                         .font(.caption.weight(.semibold))
 #else
@@ -6377,21 +6658,30 @@ private struct CalendarEventManagerView: View {
                 isSelectionMode: isSelectionMode
             )
         )
+        .opacity(gridDate.isInDisplayedMonth ? 1 : 0.38)
         .zIndex(connectsToPreviousCard ? 0 : 1)
         .disabled(model.isDeleting || !isInteractive)
 #if os(iOS)
         .sheet(
             isPresented: Binding(
-                get: { isInteractive && !isSelectionMode && selectedDayForActions == day },
+                get: {
+                    isInteractive
+                        && gridDate.isInDisplayedMonth
+                        && !isSelectionMode
+                        && selectedDayForActions == gridDate.day
+                },
                 set: { isPresented in
-                    if isInteractive && !isPresented && selectedDayForActions == day {
+                    if isInteractive
+                        && gridDate.isInDisplayedMonth
+                        && !isPresented
+                        && selectedDayForActions == gridDate.day {
                         selectedDayForActions = nil
                     }
                 }
             )
         ) {
             dayActionsPopover(
-                for: day,
+                for: gridDate.day,
                 additionalEvents: segmentsForDay.map(\.event)
             )
                 .presentationDragIndicator(.visible)
@@ -6401,13 +6691,17 @@ private struct CalendarEventManagerView: View {
             isPresented: Binding(
                 get: {
                     isInteractive
+                        && gridDate.isInDisplayedMonth
                         && !isSelectionMode
                         && isDayActionsPopoverPresented
-                        && selectedDayForActions == day
+                        && selectedDayForActions == gridDate.day
                         && selectedBandEventForActions == nil
                 },
                 set: { isPresented in
-                    if isInteractive && !isPresented && selectedDayForActions == day {
+                    if isInteractive
+                        && gridDate.isInDisplayedMonth
+                        && !isPresented
+                        && selectedDayForActions == gridDate.day {
                         isDayActionsPopoverPresented = false
                         selectedDayForActions = nil
                     }
@@ -6415,7 +6709,7 @@ private struct CalendarEventManagerView: View {
             )
         ) {
             dayActionsPopover(
-                for: day,
+                for: gridDate.day,
                 additionalEvents: segmentsForDay.map(\.event)
             )
         }
@@ -6731,17 +7025,30 @@ private struct CalendarEventManagerView: View {
 #if os(macOS)
     private func bandEventPopoverBinding(
         for event: CalendarEventRecord,
-        day: Int
+        layout: CalendarEventBandLayout,
+        gridDates: [CalendarGridDate]
     ) -> Binding<Bool> {
         Binding(
             get: {
-                selectedBandEventForActions?.event.id == event.id
-                    && selectedBandEventForActions?.day == day
+                guard let selection = selectedBandEventForActions,
+                      selection.event.id == event.id else {
+                    return false
+                }
+                return gridDates.contains {
+                    (layout.startDay...layout.endDay).contains($0.slot)
+                        && $0.yearMonth == selection.yearMonth
+                        && $0.day == selection.day
+                }
             },
             set: { isPresented in
                 guard !isPresented,
-                      selectedBandEventForActions?.event.id == event.id,
-                      selectedBandEventForActions?.day == day else {
+                      let selection = selectedBandEventForActions,
+                      selection.event.id == event.id,
+                      gridDates.contains(where: {
+                          (layout.startDay...layout.endDay).contains($0.slot)
+                              && $0.yearMonth == selection.yearMonth
+                              && $0.day == selection.day
+                      }) else {
                     return
                 }
                 selectedBandEventForActions = nil
@@ -9255,6 +9562,7 @@ private final class CalendarEventManagerModel: ObservableObject {
     @Published private(set) var pendingDeletion: CalendarEventRecord?
     @Published private(set) var message = ""
     @Published private(set) var shouldAnimateEventBandReveal = false
+    @Published private(set) var cacheRevision = 0
 
     private var destination: CalendarDestination
     @Published private(set) var yearMonth: YearMonth
@@ -9787,6 +10095,7 @@ private final class CalendarEventManagerModel: ObservableObject {
 
     private func store(_ cachedMonth: MonthCacheEntry, for yearMonth: YearMonth) {
         monthCache[yearMonth] = cachedMonth
+        cacheRevision &+= 1
         if yearMonth == self.yearMonth {
             display(cachedMonth)
         }
