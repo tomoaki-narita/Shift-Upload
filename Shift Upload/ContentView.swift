@@ -244,6 +244,9 @@ struct ContentView: View {
     @State private var displayMode: ShiftDisplayMode = .calendar
     @State private var selectedCalendarDisplayColor: CalendarDisplayColor?
     @State private var isCloudKitStateLoaded = false
+#if os(macOS)
+    @State private var isPDFDropTargeted = false
+#endif
 
     private let analyzer = ShiftOCRAnalyzer()
 
@@ -536,6 +539,20 @@ struct ContentView: View {
 #endif
 #if os(macOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    Color.accentColor.opacity(isPDFDropTargeted ? 0.9 : 0),
+                    style: StrokeStyle(lineWidth: 3, dash: [8, 6])
+                )
+                .padding(8)
+                .allowsHitTesting(false)
+        }
+        .onDrop(
+            of: [UTType.pdf.identifier],
+            isTargeted: $isPDFDropTargeted,
+            perform: handlePDFDrop
+        )
         .toolbar {
             if isCloudSyncEnabled {
                 ToolbarItem(placement: .primaryAction) {
@@ -1749,7 +1766,11 @@ struct ContentView: View {
         statusMessage = localizedMessage("勤務表の読み込みを解除しました。")
     }
 
-    private func saveAndAnalyzeImportedFile(at url: URL) {
+    private func saveAndAnalyzeImportedFile(
+        at url: URL,
+        removeAfterUse: Bool = false,
+        originalFileName: String? = nil
+    ) {
         guard url.pathExtension.localizedCaseInsensitiveCompare("pdf") == .orderedSame else {
             presentImportAlert(.unsupportedFile)
             return
@@ -1759,13 +1780,26 @@ struct ContentView: View {
         statusMessage = localizedMessage("PDFを確認中です。")
 
         Task {
+            defer {
+                if removeAfterUse {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+
             do {
                 // 文字データ層を確認できたPDFだけをアプリ内へ保存する。
                 _ = try await analyzer.recognizeText(in: url)
 
-                let result = try StoredScheduleStore.importFile(from: url, existing: savedSchedules)
+                let result = try StoredScheduleStore.importFile(
+                    from: url,
+                    existing: savedSchedules,
+                    fileName: originalFileName
+                )
                 if result.isNew {
                     savedSchedules.insert(result.schedule, at: 0)
+                } else if let index = savedSchedules.firstIndex(where: { $0.id == result.schedule.id }),
+                          savedSchedules[index] != result.schedule {
+                    savedSchedules[index] = result.schedule
                 }
                 analyzeFile(at: result.url, displayName: result.schedule.fileName)
             } catch {
@@ -1778,6 +1812,55 @@ struct ContentView: View {
             }
         }
     }
+
+#if os(macOS)
+    private func handlePDFDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !isProcessing,
+              let provider = providers.first(where: {
+                  $0.hasItemConformingToTypeIdentifier(UTType.pdf.identifier)
+              }) else {
+            return false
+        }
+
+        provider.loadFileRepresentation(forTypeIdentifier: UTType.pdf.identifier) { url, error in
+            guard let url else {
+                Task { @MainActor in
+                    statusMessage = localizedMessage(
+                        "PDFを読み込めませんでした: %@",
+                        arguments: error.map { localizedError($0) } ?? "Unknown error"
+                    )
+                }
+                return
+            }
+
+            let temporaryURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("pdf")
+
+            do {
+                try FileManager.default.copyItem(at: url, to: temporaryURL)
+            } catch {
+                Task { @MainActor in
+                    statusMessage = localizedMessage(
+                        "PDFを読み込めませんでした: %@",
+                        arguments: localizedError(error)
+                    )
+                }
+                return
+            }
+
+            let originalFileName = url.lastPathComponent
+            Task { @MainActor in
+                saveAndAnalyzeImportedFile(
+                    at: temporaryURL,
+                    removeAfterUse: true,
+                    originalFileName: originalFileName
+                )
+            }
+        }
+        return true
+    }
+#endif
 
     private func analyzeSavedSchedule(_ schedule: StoredSchedule) {
         do {
@@ -2728,7 +2811,11 @@ enum StoredScheduleStore {
         return schedules.sorted { $0.importedAt > $1.importedAt }
     }
 
-    static func importFile(from sourceURL: URL, existing: [StoredSchedule]) throws -> StoredScheduleImportResult {
+    static func importFile(
+        from sourceURL: URL,
+        existing: [StoredSchedule],
+        fileName: String? = nil
+    ) throws -> StoredScheduleImportResult {
         let didStartAccessing = sourceURL.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {
@@ -2745,8 +2832,29 @@ enum StoredScheduleStore {
             if !FileManager.default.fileExists(atPath: existingURL.path) {
                 try data.write(to: existingURL, options: .atomic)
             }
+
+            let displayFileName: String
+            if let fileName,
+               URL(fileURLWithPath: existingSchedule.fileName)
+                   .deletingPathExtension()
+                   .lastPathComponent
+                   .caseInsensitiveCompare(existingSchedule.id.uuidString) == .orderedSame {
+                displayFileName = fileName
+            } else {
+                displayFileName = existingSchedule.fileName
+            }
+
+            let schedule = displayFileName == existingSchedule.fileName
+                ? existingSchedule
+                : StoredSchedule(
+                    id: existingSchedule.id,
+                    fileName: displayFileName,
+                    storedFileName: existingSchedule.storedFileName,
+                    checksum: existingSchedule.checksum,
+                    importedAt: existingSchedule.importedAt
+                )
             return StoredScheduleImportResult(
-                schedule: existingSchedule,
+                schedule: schedule,
                 url: existingURL,
                 isNew: false
             )
@@ -2760,7 +2868,7 @@ enum StoredScheduleStore {
 
         let schedule = StoredSchedule(
             id: id,
-            fileName: sourceURL.lastPathComponent,
+            fileName: fileName ?? sourceURL.lastPathComponent,
             storedFileName: storedFileName,
             checksum: checksum,
             importedAt: Date()
@@ -13289,7 +13397,7 @@ final class ShiftOCRAnalyzer {
         var values: [String] = []
 
         for rawToken in tokens {
-            for token in splitYearSuffixes(in: rawToken) {
+            for token in normalizedShiftTokens(in: rawToken) {
                 let normalizedToken = normalizedShiftText(token)
                 guard !normalizedToken.isEmpty else { continue }
 
@@ -13318,30 +13426,9 @@ final class ShiftOCRAnalyzer {
         return values
     }
 
-    private func splitYearSuffixes(in token: String) -> [String] {
-        let normalizedToken = normalizedShiftText(token)
-        guard normalizedToken.contains("年") else { return [normalizedToken] }
-
-        var parts: [String] = []
-        var current = ""
-
-        for character in normalizedToken {
-            if character == "年" {
-                if !current.isEmpty {
-                    parts.append(current)
-                    current = ""
-                }
-                parts.append("年")
-            } else {
-                current.append(character)
-            }
-        }
-
-        if !current.isEmpty {
-            parts.append(current)
-        }
-
-        return parts
+    private func normalizedShiftTokens(in token: String) -> [String] {
+        // 「半年」「半年/5」のような複合勤務値は1日分として扱う。
+        [normalizedShiftText(token)]
     }
 
     private func adjustedWrappedRestSuffixes(in values: [String]) -> [String] {
@@ -13371,7 +13458,7 @@ final class ShiftOCRAnalyzer {
     }
 
     private func isShiftValueStart(_ token: String) -> Bool {
-        token.range(of: #"[休年△□①②③④⑤⑥⑦⑧⑨]|\d|\*"#, options: .regularExpression) != nil
+        token.range(of: #"[休半年△□①②③④⑤⑥⑦⑧⑨]|\d|\*"#, options: .regularExpression) != nil
     }
 
     private func yearMonth(from text: String) -> YearMonth? {
