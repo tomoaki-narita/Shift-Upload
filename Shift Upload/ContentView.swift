@@ -217,6 +217,7 @@ struct ContentView: View {
     @State private var isShiftUploadPresented = false
     @State private var isMissingShiftSelectionPresented = false
     @State private var isRestRegistrationAlertPresented = false
+    @State private var registrationPreview: RegistrationPreview?
     @State private var isRegisteringEvents = false
     @State private var selectedFileName = ""
     @State private var selectedYearMonth: YearMonth?
@@ -346,14 +347,21 @@ struct ContentView: View {
             analyzeSavedSchedule(schedule)
         }
         .sheet(isPresented: $isMissingShiftSelectionPresented) {
-            MissingShiftSelectionView(titles: pendingMissingShiftTitles) { selectedTitles in
-                completeMissingShiftSelection(selectedTitles)
+            MissingShiftSelectionView(titles: pendingMissingShiftTitles) { selectedTitles, definitions in
+                completeMissingShiftSelection(selectedTitles, definitions: definitions)
             }
         }
         .sheet(isPresented: $isExtractedShiftSelectionPresented) {
             ShiftSelectionView(definitions: shiftDefinitions, locale: locale) { title in
                 completeExtractedShiftSelection(title)
             }
+        }
+        .sheet(item: $registrationPreview) { preview in
+            RegistrationPreviewView(
+                preview: preview,
+                locale: locale,
+                onRegister: confirmPendingRegistration
+            )
         }
     }
 
@@ -478,6 +486,19 @@ struct ContentView: View {
                 isRegistrationDestinationMenuPresented = false
             }
         }
+        .alert("「休」も登録しますか？", isPresented: $isRestRegistrationAlertPresented) {
+            Button("休も登録") {
+                registerSelectedCalendar(includeRest: true)
+            }
+
+            Button("イベントだけ登録") {
+                registerSelectedCalendar(includeRest: false)
+            }
+
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text(restRegistrationMessage)
+        }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .overlayPreferenceValue(CalendarOverlayAnchorKey.self) { anchors in
@@ -554,19 +575,6 @@ struct ContentView: View {
 
         }
         .padding(24)
-        .alert("「休」も登録しますか？", isPresented: $isRestRegistrationAlertPresented) {
-            Button("休も登録") {
-                registerSelectedCalendar(includeRest: true)
-            }
-
-            Button("イベントだけ登録") {
-                registerSelectedCalendar(includeRest: false)
-            }
-
-            Button("キャンセル", role: .cancel) {}
-        } message: {
-            Text(restRegistrationMessage)
-        }
 #endif
     }
 
@@ -1629,18 +1637,21 @@ struct ContentView: View {
         }
 
         let cell = extractedCells[index]
-        extractedCells[index] = ExtractedShiftCell(
+        var updatedCells = extractedCells
+        updatedCells[index] = ExtractedShiftCell(
             dateText: cell.dateText,
             valueText: title,
             pageIndex: cell.pageIndex,
             boundingBox: cell.boundingBox
         )
+        extractedCells = updatedCells
         editedExtractedShiftText = title
         selectedExtractedDayAction = nil
 #if os(iOS)
         isExtractedShiftActionPresented = false
         selectedExtractedDirectDayAction = nil
 #endif
+        queueMissingShiftPromptsAfterEditing(title: title, cells: updatedCells)
         statusMessage = localizedMessage(
             "%@日のイベント名を変更しました。カレンダーへ登録すると反映されます。",
             arguments: String(day)
@@ -1674,18 +1685,21 @@ struct ContentView: View {
         }
 
         let cell = extractedCells[index]
-        extractedCells[index] = ExtractedShiftCell(
+        var updatedCells = extractedCells
+        updatedCells[index] = ExtractedShiftCell(
             dateText: cell.dateText,
             valueText: title,
             pageIndex: cell.pageIndex,
             boundingBox: cell.boundingBox
         )
+        extractedCells = updatedCells
         editedExtractedShiftText = title
         pendingExtractedDayForEdit = nil
         isExtractedShiftSelectionPresented = false
 #if os(iOS)
         isExtractedShiftActionPresented = false
 #endif
+        queueMissingShiftPromptsAfterEditing(title: title, cells: updatedCells)
         statusMessage = localizedMessage(
             "%@日のイベントを変更しました。カレンダーへ登録すると反映されます。",
             arguments: String(day)
@@ -1864,14 +1878,150 @@ struct ContentView: View {
     }
 
     private func registerSelectedCalendar(includeRest: Bool) {
+        guard let targetYearMonth = selectedYearMonth else {
+            statusMessage = localizedMessage("登録する年月を選択してください。")
+            return
+        }
+
+        registrationPreview = makeRegistrationPreview(
+            cells: extractedCells,
+            yearMonth: targetYearMonth,
+            includeRest: includeRest
+        )
+    }
+
+    private func confirmPendingRegistration(_ preview: RegistrationPreview) {
+        registrationPreview = nil
+        performSelectedCalendarRegistration(
+            cells: preview.cells,
+            yearMonth: preview.yearMonth,
+            includeRest: preview.includeRest
+        )
+    }
+
+    private func performSelectedCalendarRegistration(
+        cells: [ExtractedShiftCell],
+        yearMonth: YearMonth,
+        includeRest: Bool
+    ) {
         switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
         case .apple:
-            registerAppleCalendarEvents(includeRest: includeRest)
+            registerAppleCalendarEvents(
+                cells: cells,
+                yearMonth: yearMonth,
+                includeRest: includeRest
+            )
         case .notion:
-            registerNotionPages(includeRest: includeRest)
+            registerNotionPages(
+                cells: cells,
+                yearMonth: yearMonth,
+                includeRest: includeRest
+            )
         case .google:
-            registerGoogleCalendarEvents(includeRest: includeRest)
+            registerGoogleCalendarEvents(
+                cells: cells,
+                yearMonth: yearMonth,
+                includeRest: includeRest
+            )
         }
+    }
+
+    private func makeRegistrationPreview(
+        cells: [ExtractedShiftCell],
+        yearMonth: YearMonth,
+        includeRest: Bool
+    ) -> RegistrationPreview {
+        let definitionByTitle = Dictionary(
+            uniqueKeysWithValues: shiftDefinitions.map { (normalizedShiftTitle($0.title), $0) }
+        )
+        let destination = CalendarDestination(rawValue: calendarDestination) ?? .apple
+        let restTitle = registrationRestTitle(for: destination)
+        var events: [RegistrationPreviewEvent] = []
+        var skippedTitles: [String] = []
+        var excludedCount = 0
+        var invalidItems: [String] = []
+
+        for cell in cells {
+            guard let day = Int(cell.dateText), (1...yearMonth.numberOfDays).contains(day) else {
+                excludedCount += 1
+                continue
+            }
+
+            let title = normalizedShiftTitle(cell.valueText)
+            guard !title.isEmpty else {
+                excludedCount += 1
+                continue
+            }
+
+            if title == "休" {
+                guard includeRest else {
+                    excludedCount += 1
+                    continue
+                }
+
+                events.append(
+                    RegistrationPreviewEvent(
+                        yearMonth: yearMonth,
+                        day: day,
+                        title: restTitle,
+                        startMinutes: nil,
+                        endMinutes: nil
+                    )
+                )
+                continue
+            }
+
+            guard let definition = definitionByTitle[title] else {
+                if !skippedTitles.contains(title) {
+                    skippedTitles.append(title)
+                }
+                excludedCount += 1
+                continue
+            }
+
+            guard (0...1_439).contains(definition.startMinutes),
+                  (0...1_439).contains(definition.endMinutes),
+                  definition.endMinutes >= definition.startMinutes else {
+                invalidItems.append(title)
+                continue
+            }
+
+            events.append(
+                RegistrationPreviewEvent(
+                    yearMonth: yearMonth,
+                    day: day,
+                    title: title,
+                    startMinutes: definition.startMinutes,
+                    endMinutes: definition.endMinutes
+                )
+            )
+        }
+
+        return RegistrationPreview(
+            cells: cells,
+            yearMonth: yearMonth,
+            includeRest: includeRest,
+            destinationTitle: destination.title,
+            events: events,
+            skippedTitles: skippedTitles,
+            excludedCount: excludedCount,
+            invalidItems: invalidItems
+        )
+    }
+
+    private func registrationRestTitle(for destination: CalendarDestination) -> String {
+        let configuredTitle: String
+        switch destination {
+        case .apple:
+            configuredTitle = appleRestEventTitle
+        case .google:
+            configuredTitle = googleRestEventTitle
+        case .notion:
+            configuredTitle = notionRestEventTitle
+        }
+
+        let trimmedTitle = configuredTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTitle.isEmpty ? "休" : trimmedTitle
     }
 
     private var restRegistrationMessage: String {
@@ -2316,24 +2466,44 @@ struct ContentView: View {
         isMissingShiftSelectionPresented = !uniqueTitles.isEmpty
     }
 
-    private func completeMissingShiftSelection(_ selectedTitles: Set<String>) {
+    private func queueMissingShiftPromptsAfterEditing(
+        title: String,
+        cells: [ExtractedShiftCell]
+    ) {
+        ignoredMissingShiftTitles.remove(normalizedShiftTitle(title))
+
+        Task { @MainActor in
+            await Task.yield()
+            queueMissingShiftPrompts(for: cells)
+        }
+    }
+
+    private func completeMissingShiftSelection(
+        _ selectedTitles: Set<String>,
+        definitions: [ShiftDefinition]
+    ) {
         let titlesToSave = pendingMissingShiftTitles.filter { selectedTitles.contains($0) }
         let titlesToIgnore = pendingMissingShiftTitles.filter { !selectedTitles.contains($0) }
-        let newTitles = titlesToSave.filter { title in
-            !shiftDefinitions.contains { normalizedShiftTitle($0.title) == normalizedShiftTitle(title) }
+        let definitionsByTitle = Dictionary(
+            uniqueKeysWithValues: definitions.map { (normalizedShiftTitle($0.title), $0) }
+        )
+        let newDefinitions = titlesToSave.compactMap { title -> ShiftDefinition? in
+            guard let definition = definitionsByTitle[normalizedShiftTitle(title)] else { return nil }
+            guard !shiftDefinitions.contains(where: {
+                normalizedShiftTitle($0.title) == normalizedShiftTitle(title)
+            }) else { return nil }
+            return definition
         }
 
-        shiftDefinitions.append(contentsOf: newTitles.map {
-            ShiftDefinition(title: $0, startMinutes: 510, endMinutes: 1000)
-        })
+        shiftDefinitions.append(contentsOf: newDefinitions)
         ignoredMissingShiftTitles.formUnion(titlesToIgnore.map(normalizedShiftTitle))
         pendingMissingShiftTitles = []
         isMissingShiftSelectionPresented = false
 
-        if !newTitles.isEmpty {
+        if !newDefinitions.isEmpty {
             statusMessage = localizedMessage(
                 "%@件のイベントをイベント一覧に保存しました。時間はイベント設定から変更できます。",
-                arguments: String(newTitles.count)
+                arguments: String(newDefinitions.count)
             )
         } else if !titlesToIgnore.isEmpty {
             statusMessage = localizedMessage("選択したイベントをイベント一覧に保存しませんでした。")
@@ -4251,6 +4421,255 @@ private struct ShiftSelectionView: View {
     }
 }
 
+private struct RegistrationPreview: Identifiable {
+    let id = UUID()
+    let cells: [ExtractedShiftCell]
+    let yearMonth: YearMonth
+    let includeRest: Bool
+    let destinationTitle: String
+    let events: [RegistrationPreviewEvent]
+    let skippedTitles: [String]
+    let excludedCount: Int
+    let invalidItems: [String]
+
+    var canRegister: Bool {
+        !events.isEmpty && invalidItems.isEmpty
+    }
+}
+
+private struct RegistrationPreviewEvent: Identifiable {
+    let id = UUID()
+    let yearMonth: YearMonth
+    let day: Int
+    let title: String
+    let startMinutes: Int?
+    let endMinutes: Int?
+}
+
+private struct RegistrationPreviewDay: Identifiable {
+    let yearMonth: YearMonth
+    let day: Int
+    let events: [RegistrationPreviewEvent]
+
+    var id: String {
+        "\(yearMonth.year)-\(yearMonth.month)-\(day)"
+    }
+}
+
+private struct RegistrationPreviewView: View {
+    let preview: RegistrationPreview
+    let locale: Locale
+    let onRegister: (RegistrationPreview) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private var groupedEvents: [RegistrationPreviewDay] {
+        let grouped = Dictionary(grouping: preview.events) { event in
+            "\(event.yearMonth.year)-\(event.yearMonth.month)-\(event.day)"
+        }
+
+        return grouped.values.compactMap { events in
+            guard let first = events.first else { return nil }
+            return RegistrationPreviewDay(
+                yearMonth: first.yearMonth,
+                day: first.day,
+                events: events.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            )
+        }
+        .sorted {
+            if $0.yearMonth.year != $1.yearMonth.year {
+                return $0.yearMonth.year < $1.yearMonth.year
+            }
+            if $0.yearMonth.month != $1.yearMonth.month {
+                return $0.yearMonth.month < $1.yearMonth.month
+            }
+            return $0.day < $1.day
+        }
+    }
+
+    private func localized(_ key: String) -> String {
+        ShiftHubLocalization.string(key, locale: locale)
+    }
+
+    private func localized(_ key: String, arguments: CVarArg...) -> String {
+        ShiftHubLocalization.format(key, locale: locale, arguments: arguments)
+    }
+
+    private func dateTitle(for day: RegistrationPreviewDay) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        guard let date = calendar.date(from: DateComponents(
+            year: day.yearMonth.year,
+            month: day.yearMonth.month,
+            day: day.day
+        )) else {
+            return "\(day.yearMonth.month)/\(day.day)"
+        }
+
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.dateFormat = locale.identifier.hasPrefix("en")
+            ? "MMM d (EEE)"
+            : "M月d日（EEE）"
+        return formatter.string(from: date)
+    }
+
+    private func timeText(for event: RegistrationPreviewEvent) -> String {
+        guard let startMinutes = event.startMinutes,
+              let endMinutes = event.endMinutes else {
+            return localized("終日")
+        }
+
+        return "\(Self.minuteText(startMinutes))-\(Self.minuteText(endMinutes))"
+    }
+
+    private static func minuteText(_ minutes: Int) -> String {
+        let clampedMinutes = min(max(minutes, 0), 1_439)
+        return String(format: "%d:%02d", clampedMinutes / 60, clampedMinutes % 60)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(localized("登録内容を確認"))
+                        .font(.title.bold())
+
+                    Text(localized("登録前に内容を確認してください。"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                VStack(alignment: .trailing, spacing: 6) {
+                    Text(preview.destinationTitle)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Text(localized("登録件数: %@", arguments: String(preview.events.count)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(24)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    if !preview.invalidItems.isEmpty || !preview.skippedTitles.isEmpty || preview.excludedCount > 0 {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(localized("登録されないイベント"))
+                                .font(.headline)
+
+                            if !preview.invalidItems.isEmpty {
+                                Text(localized(
+                                    "時間設定を確認してください: %@",
+                                    arguments: preview.invalidItems.joined(separator: ", ")
+                                ))
+                                    .foregroundStyle(.red)
+                            }
+
+                            if !preview.skippedTitles.isEmpty {
+                                Text(localized(
+                                    "未登録タイトル: %@",
+                                    arguments: preview.skippedTitles.joined(separator: ", ")
+                                ))
+                                .foregroundStyle(.secondary)
+                            }
+
+                            if preview.excludedCount > 0 {
+                                Text(localized(
+                                    "登録から除外されるイベント: %@件",
+                                    arguments: String(preview.excludedCount)
+                                ))
+                                .foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.callout)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            .background.secondary.opacity(0.32),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                    }
+
+                    if groupedEvents.isEmpty {
+                        Text(localized("登録できるイベントがありません。"))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 20)
+                    } else {
+                        ForEach(groupedEvents) { day in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(dateTitle(for: day))
+                                    .font(.headline)
+                                    .foregroundStyle(.secondary)
+
+                                VStack(spacing: 0) {
+                                    ForEach(day.events) { event in
+                                        HStack(spacing: 12) {
+                                            Text(event.title)
+                                                .lineLimit(2)
+
+                                            Spacer(minLength: 12)
+
+                                            Text(timeText(for: event))
+                                                .font(.callout.monospacedDigit())
+                                                .foregroundStyle(.secondary)
+                                                .fixedSize(horizontal: true, vertical: false)
+                                        }
+                                        .padding(.horizontal, 14)
+                                        .frame(minHeight: 44)
+
+                                        if event.id != day.events.last?.id {
+                                            Divider()
+                                        }
+                                    }
+                                }
+                                .background(
+                                    .background.secondary.opacity(0.45),
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                )
+                            }
+                        }
+                    }
+
+                }
+                .padding(24)
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+
+                Button(localized("キャンセル")) {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+
+                Button(localized("登録")) {
+                    onRegister(preview)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!preview.canRegister)
+            }
+            .padding(20)
+        }
+#if os(iOS)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .presentationDragIndicator(.visible)
+#else
+        .frame(width: 560, height: 640)
+#endif
+        .environment(\.locale, locale)
+    }
+}
+
 private struct ShiftSelectionRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -6131,13 +6550,17 @@ private struct CalendarEventManagerView: View {
         for layout: CalendarEventBandLayout,
         location: CGPoint,
         bandWidth: CGFloat,
+        leadingExtension: CGFloat,
+        trailingExtension: CGFloat,
         gridDates: [CalendarGridDate]
     ) -> CalendarGridDate? {
         let span = max(1, layout.spanDays)
-        let dayWidth = max(1, bandWidth / CGFloat(span))
+        let contentWidth = max(1, bandWidth - leadingExtension - trailingExtension)
+        let dayWidth = max(1, contentWidth / CGFloat(span))
+        let contentLocation = location.x - leadingExtension
         let offset = min(
             span - 1,
-            max(0, Int(location.x / dayWidth))
+            max(0, Int(contentLocation / dayWidth))
         )
         let slot = layout.startDay + offset
         return gridDates.first { $0.slot == slot }
@@ -6292,20 +6715,32 @@ private struct CalendarEventManagerView: View {
                         let column = layout.startDay % 7
                         #if os(iOS)
                         let bandInset: CGFloat = 3
-                        #else
+#else
                         let bandInset: CGFloat = 6
-                        #endif
-                        let bandWidth = max(0, columnWidth * CGFloat(layout.spanDays)
-                            + columnSpacing * CGFloat(layout.spanDays - 1)
-                            - bandInset * 2)
-                        let eventColor = layout.event.isRestEvent
-                            ? Color.red
-                            : layout.event.calendarColor?.color ?? Color.accentColor
+#endif
                         let cornerStyle = eventBandCornerStyle(
                             for: layout,
                             segments: displaySegments,
                             gridDates: gridDates
                         )
+                        let continuesFromPreviousWeek = layout.startDay % 7 == 0
+                            && cornerStyle.squareLeading
+                        let continuesIntoNextWeek = layout.endDay % 7 == 6
+                            && cornerStyle.squareTrailing
+                        let leadingExtension = continuesFromPreviousWeek
+                            ? bandInset + columnSpacing / 2
+                            : 0
+                        let trailingExtension = continuesIntoNextWeek
+                            ? bandInset + columnSpacing / 2
+                            : 0
+                        let bandWidth = max(0, columnWidth * CGFloat(layout.spanDays)
+                            + columnSpacing * CGFloat(layout.spanDays - 1)
+                            - bandInset * 2
+                            + leadingExtension
+                            + trailingExtension)
+                        let eventColor = layout.event.isRestEvent
+                            ? Color.red
+                            : layout.event.calendarColor?.color ?? Color.accentColor
                         let bandStartDate = gridDates.first {
                             $0.slot == layout.startDay
                         }
@@ -6342,6 +6777,8 @@ private struct CalendarEventManagerView: View {
                                                 for: layout,
                                                 location: value.location,
                                                 bandWidth: bandWidth,
+                                                leadingExtension: leadingExtension,
+                                                trailingExtension: trailingExtension,
                                                 gridDates: gridDates
                                             ) ?? bandStartDate
                                             handleEventBandTap(
@@ -6393,7 +6830,7 @@ private struct CalendarEventManagerView: View {
                         }
                         .position(
                             x: CGFloat(column) * (columnWidth + columnSpacing)
-                                + bandInset + bandWidth / 2,
+                                + bandInset - leadingExtension + bandWidth / 2,
                             y: CGFloat(row) * (cardHeight + gridSpacing)
                                 + bandMetrics.top
                                 + CGFloat(layout.lane) * bandMetrics.laneHeight
@@ -7630,7 +8067,7 @@ private struct ShiftHubMacSettingsView: View {
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("イベント名の照合"),
-                    detail: localized("PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-16:40です。")
+                    detail: localized("PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-17:30です。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
@@ -7903,6 +8340,7 @@ private struct AppSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
 #endif
     }
+
 }
 
 private struct ShiftHubAboutView: View {
@@ -8007,7 +8445,7 @@ private struct ShiftHubAboutView: View {
                 )
                 ShiftHubAboutRow(
                     title: "イベント名の照合",
-                    detail: "PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-16:40です。"
+                    detail: "PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-17:30です。"
                 )
                 ShiftHubAboutRow(
                     title: "休の登録",
@@ -8080,41 +8518,54 @@ private struct ShiftHubAboutRow: View {
     }
 }
 
+private struct MissingShiftTimeDraft {
+    var startMinutes: Int
+    var endMinutes: Int
+}
+
 private struct MissingShiftSelectionView: View {
     let titles: [String]
-    let onComplete: (Set<String>) -> Void
+    let onComplete: (Set<String>, [ShiftDefinition]) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     @State private var selectedTitles: Set<String>
+    @State private var timeDrafts: [String: MissingShiftTimeDraft]
+    @State private var validationMessage: String?
 
-    init(titles: [String], onComplete: @escaping (Set<String>) -> Void) {
+    init(
+        titles: [String],
+        onComplete: @escaping (Set<String>, [ShiftDefinition]) -> Void
+    ) {
         self.titles = titles
         self.onComplete = onComplete
         _selectedTitles = State(initialValue: [])
+        _timeDrafts = State(initialValue: titles.reduce(into: [:]) { drafts, title in
+            drafts[title] = MissingShiftTimeDraft(startMinutes: 510, endMinutes: 1050)
+        })
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("イベント一覧にありません")
+                    Text(localized("未登録イベント"))
                         .font(.title2.bold())
 
-                    Text("保存するイベントを選択してください。")
+                    Text(localized("保存するイベントを選択してください。"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                Button("保存") {
-                    onComplete(selectedTitles)
-                    dismiss()
+                Button(localized("保存")) {
+                    save()
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button("閉じる") {
-                    onComplete([])
+                Button(localized("閉じる")) {
+                    onComplete([], [])
                     dismiss()
                 }
                 .buttonStyle(.bordered)
@@ -8124,13 +8575,21 @@ private struct MissingShiftSelectionView: View {
             Divider()
 
             List(titles, id: \.self) { title in
-                Toggle(isOn: selectionBinding(for: title)) {
-                    Text(title)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(isOn: selectionBinding(for: title)) {
+                        Text(title)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 #if os(macOS)
-                .toggleStyle(.checkbox)
+                    .toggleStyle(.checkbox)
 #endif
+
+                    if selectedTitles.contains(title) {
+                        timePickers(for: title)
+                            .padding(.top, 4)
+                    }
+                }
+                .padding(.vertical, 4)
             }
             .listStyle(.inset)
             .frame(minWidth: 360, minHeight: 220)
@@ -8138,8 +8597,97 @@ private struct MissingShiftSelectionView: View {
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 #else
-        .frame(width: 420, height: 330)
+        .frame(width: 420, height: 420)
 #endif
+        .alert(
+            Text(localized("保存できません")),
+            isPresented: validationAlertBinding
+        ) {
+            Button(localized("OK"), role: .cancel) {}
+        } message: {
+            Text(validationMessage ?? "")
+        }
+    }
+
+    private var validationAlertBinding: Binding<Bool> {
+        Binding(
+            get: { validationMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    validationMessage = nil
+                }
+            }
+        )
+    }
+
+    private var timePickerLocale: Locale {
+        locale.identifier.hasPrefix("ja")
+            ? Locale(identifier: "ja_JP")
+            : Locale(identifier: "en_GB")
+    }
+
+    private func localized(_ key: String) -> String {
+        ShiftHubLocalization.string(key, locale: locale)
+    }
+
+    @ViewBuilder
+    private func timePickers(for title: String) -> some View {
+        HStack(spacing: 24) {
+            timePickerRow(
+                label: localized("開始"),
+                selection: startDateBinding(for: title)
+            )
+            timePickerRow(
+                label: localized("終了"),
+                selection: endDateBinding(for: title)
+            )
+        }
+    }
+
+    private func timePickerRow(label: String, selection: Binding<Date>) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            DatePicker(
+                "",
+                selection: selection,
+                displayedComponents: .hourAndMinute
+            )
+            .labelsHidden()
+            .controlSize(.small)
+#if os(iOS)
+            .scaleEffect(0.85, anchor: .leading)
+            .frame(height: 24)
+#endif
+            .environment(\.locale, timePickerLocale)
+        }
+    }
+
+    private func save() {
+        guard !hasInvalidSelectedTime else {
+            validationMessage = localized("終了時刻は開始時刻以降にしてください。")
+            return
+        }
+
+        let definitions = titles.compactMap { title -> ShiftDefinition? in
+            guard selectedTitles.contains(title), let draft = timeDrafts[title] else { return nil }
+            return ShiftDefinition(
+                title: title,
+                startMinutes: draft.startMinutes,
+                endMinutes: draft.endMinutes
+            )
+        }
+        onComplete(selectedTitles, definitions)
+        dismiss()
+    }
+
+    private var hasInvalidSelectedTime: Bool {
+        selectedTitles.contains { title in
+            guard let draft = timeDrafts[title] else { return false }
+            return draft.endMinutes < draft.startMinutes
+        }
     }
 
     private func selectionBinding(for title: String) -> Binding<Bool> {
@@ -8153,6 +8701,38 @@ private struct MissingShiftSelectionView: View {
                 }
             }
         )
+    }
+
+    private func startDateBinding(for title: String) -> Binding<Date> {
+        Binding(
+            get: { date(from: timeDrafts[title]?.startMinutes ?? 510) },
+            set: { date in
+                timeDrafts[title, default: MissingShiftTimeDraft(startMinutes: 510, endMinutes: 1050)].startMinutes = minutes(from: date)
+            }
+        )
+    }
+
+    private func endDateBinding(for title: String) -> Binding<Date> {
+        Binding(
+            get: { date(from: timeDrafts[title]?.endMinutes ?? 1050) },
+            set: { date in
+                timeDrafts[title, default: MissingShiftTimeDraft(startMinutes: 510, endMinutes: 1050)].endMinutes = minutes(from: date)
+            }
+        )
+    }
+
+    private func date(from minutes: Int) -> Date {
+        Calendar.current.date(
+            bySettingHour: minutes / 60,
+            minute: minutes % 60,
+            second: 0,
+            of: Date()
+        ) ?? Date()
+    }
+
+    private func minutes(from date: Date) -> Int {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
     }
 }
 
@@ -8195,7 +8775,7 @@ private struct ShiftDefinitionRegistrationView: View {
         isEditing = initialDefinition != nil
         _title = State(initialValue: initialDefinition?.title ?? "")
         _startDate = State(initialValue: Self.date(from: initialDefinition?.startMinutes ?? 510))
-        _endDate = State(initialValue: Self.date(from: initialDefinition?.endMinutes ?? 1000))
+        _endDate = State(initialValue: Self.date(from: initialDefinition?.endMinutes ?? 1050))
     }
 
     private func localized(_ key: String) -> String {
@@ -12187,7 +12767,7 @@ struct ShiftDefinition: Identifiable, Codable, Equatable {
         let oldTimeRange = try container.decodeIfPresent(String.self, forKey: .timeRange) ?? ""
         let parsedMinutes = Self.minutes(from: oldTimeRange)
         startMinutes = parsedMinutes?.start ?? 510
-        endMinutes = parsedMinutes?.end ?? 1000
+        endMinutes = parsedMinutes?.end ?? 1050
     }
 
     func encode(to encoder: Encoder) throws {

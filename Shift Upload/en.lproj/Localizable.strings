@@ -63,6 +63,14 @@
 "終日イベントとして登録します。" = "This will be registered as an all-day event.";
 "登録時間: %@" = "Registered time: %@";
 "登録" = "Register";
+"登録内容を確認" = "Review registration";
+"登録前に内容を確認してください。" = "Review these events before registering them.";
+"登録件数: %@" = "Events to register: %@";
+"登録できるイベントがありません。" = "There are no events to register.";
+"登録されないイベント" = "Events not registered";
+"時間設定を確認してください: %@" = "Check the saved time settings: %@";
+"未登録タイトル: %@" = "Unregistered titles: %@";
+"登録から除外されるイベント: %@件" = "Events excluded from registration: %@";
 "イベントを登録" = "Register event";
 "イベントを編集" = "Edit event";
 "イベントタイトル" = "Event title";
@@ -140,7 +148,7 @@
 "年月の判定" = "Year and month";
 "PDFから年月を取得できない場合は、ファイル名を「2026-01.pdf」のようなYYYY-MM形式にしてください。" = "If the year and month cannot be read from the PDF, use a filename in YYYY-MM form, such as 2026-01.pdf.";
 "イベント名の照合" = "Event name matching";
-"PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-16:40です。" = "If an extracted shift name is not in Event Settings, save it before registration or it will be skipped. Newly saved events start with 8:30-16:40.";
+"PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-17:30です。" = "If an extracted shift name is not in Event Settings, save it before registration or it will be skipped. Newly saved events start with 8:30-17:30.";
 "休の登録" = "Day-off registration";
 "「休」は登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。" = "You can choose whether to include \"休\" at registration. Apple Calendar and Google Calendar use an all-day event; Notion uses a timed 00:00-23:59 value.";
 "日付カードの表示" = "Date card display";
@@ -224,7 +232,7 @@
 
 /* Common placeholders and messages */
 "保存するイベントを選択してください。" = "Choose the events to save.";
-"イベント一覧にありません" = "Not in the saved events";
+"未登録イベント" = "Unregistered Events";
 "保存" = "Save";
 "閉じる" = "Close";
 "休 →" = "Day off →";
