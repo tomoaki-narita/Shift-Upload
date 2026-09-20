@@ -1450,20 +1450,6 @@ struct CalendarEventManagerView: View {
                 return []
             }
 
-            // Timed events need an independent vertical position for each day;
-            // an event that crosses midnight is therefore split at day edges.
-            if !event.isAllDay,
-               event.startDate != nil,
-               event.endDate != nil {
-                return matchingSlots.map {
-                    CalendarEventDisplaySegment(
-                        event: event,
-                        startDay: $0.slot,
-                        endDay: $0.slot
-                    )
-                }
-            }
-
             var segments: [CalendarEventDisplaySegment] = []
             var segmentStartDay = firstSlot
             while segmentStartDay <= lastSlot {
@@ -1610,56 +1596,8 @@ struct CalendarEventManagerView: View {
             contentSpacing: contentSpacing,
             gap: gap,
             height: height,
-            laneHeight: height + gap,
-            contentHeight: availableHeight
+            laneHeight: height + gap
         )
-    }
-
-    private func timedEventBandPosition(
-        for event: CalendarEventRecord,
-        on date: Date,
-        contentHeight: CGFloat
-    ) -> (top: CGFloat, height: CGFloat)? {
-        guard !event.isAllDay,
-              let startDate = event.startDate,
-              let endDate = event.endDate,
-              endDate > startDate,
-              contentHeight > 0 else {
-            return nil
-        }
-
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .current
-        let dayStart = calendar.startOfDay(for: date)
-        guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
-            return nil
-        }
-
-        let visibleStart = max(startDate, dayStart)
-        let visibleEnd = min(endDate, nextDay)
-        guard visibleEnd > visibleStart else { return nil }
-
-        func minutesSinceStartOfDay(_ value: Date) -> CGFloat {
-            let components = calendar.dateComponents(
-                [.hour, .minute, .second],
-                from: dayStart,
-                to: value
-            )
-            let hours = CGFloat(components.hour ?? 0)
-            let minutes = CGFloat(components.minute ?? 0)
-            let seconds = CGFloat(components.second ?? 0)
-            return hours * 60 + minutes + seconds / 60
-        }
-
-        let startMinutes = min(24 * 60, max(0, minutesSinceStartOfDay(visibleStart)))
-        let endMinutes = min(24 * 60, max(0, minutesSinceStartOfDay(visibleEnd)))
-        let startFraction = startMinutes / (24 * 60)
-        let durationFraction = max(0, endMinutes - startMinutes) / (24 * 60)
-        let rawHeight = contentHeight * durationFraction
-        let height = min(contentHeight, max(12, rawHeight))
-        let top = min(contentHeight - height, contentHeight * startFraction)
-
-        return (max(0, top), height)
     }
 
     private func eventBandCornerStyle(
@@ -1967,20 +1905,6 @@ struct CalendarEventManagerView: View {
                         let bandTitleOpacity = bandStartDate?.isInDisplayedMonth == false
                             ? 0.45
                             : 1
-                        let timedBandPosition = bandStartDate.flatMap {
-                            timedEventBandPosition(
-                                for: layout.event,
-                                on: $0.date,
-                                contentHeight: bandMetrics.contentHeight
-                            )
-                        }
-                        let bandHeight = timedBandPosition?.height ?? bandMetrics.height
-                        let bandTop = timedBandPosition.map {
-                            bandMetrics.top + $0.top
-                        } ?? (
-                            bandMetrics.top
-                                + CGFloat(layout.lane) * bandMetrics.laneHeight
-                        )
 
                         ZStack(alignment: .leading) {
                             HStack(spacing: 0) {
@@ -2049,7 +1973,7 @@ struct CalendarEventManagerView: View {
                             }
 #endif
                         }
-                        .frame(width: bandWidth, height: bandHeight)
+                        .frame(width: bandWidth, height: bandMetrics.height)
                         .background {
                             CalendarEventBandShape(
                                 squareLeading: cornerStyle.squareLeading,
@@ -2067,8 +1991,9 @@ struct CalendarEventManagerView: View {
                             x: CGFloat(column) * (columnWidth + columnSpacing)
                                 + bandInset - leadingExtension + bandWidth / 2,
                             y: CGFloat(row) * (cardHeight + gridSpacing)
-                                + bandTop
-                                + bandHeight / 2
+                                + bandMetrics.top
+                                + CGFloat(layout.lane) * bandMetrics.laneHeight
+                                + bandMetrics.height / 2
                         )
                         .opacity(eventBandRevealOpacity(
                             for: yearMonth,

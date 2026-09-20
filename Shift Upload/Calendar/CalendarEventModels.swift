@@ -202,7 +202,6 @@ struct CalendarEventBandMetrics {
     let gap: CGFloat
     let height: CGFloat
     let laneHeight: CGFloat
-    let contentHeight: CGFloat
 }
 
 struct CalendarEventBandShape: Shape {
