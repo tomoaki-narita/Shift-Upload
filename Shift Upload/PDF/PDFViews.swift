@@ -11,6 +11,7 @@ import UIKit
 
 struct SavedScheduleListView: View {
     let schedules: [StoredSchedule]
+    let selectedScheduleID: UUID?
     let onSelect: (StoredSchedule) -> Void
     let onDelete: (StoredSchedule) -> Void
 
@@ -30,7 +31,7 @@ struct SavedScheduleListView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(ShiftHubLocalization.string("PDF一覧", locale: displayLocale))
+                    Text(ShiftHubLocalization.string("履歴", locale: displayLocale))
                         .font(.title2.bold())
 
                     Text(ShiftHubLocalization.string("保存した勤務表を選択して解析します。", locale: displayLocale))
@@ -89,6 +90,12 @@ struct SavedScheduleListView: View {
                                     }
 
                                     Spacer(minLength: 4)
+
+                                    if schedule.id == selectedScheduleID {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                            .accessibilityLabel(ShiftHubLocalization.string("表示中", locale: displayLocale))
+                                    }
                                 }
                             }
                             .buttonStyle(SavedScheduleRowButtonStyle())
@@ -144,6 +151,7 @@ struct SavedScheduleListView: View {
 
 struct PDFListView: View {
     let schedules: [StoredSchedule]
+    let selectedScheduleID: UUID?
     let onDelete: (StoredSchedule) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -162,7 +170,7 @@ struct PDFListView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(ShiftHubLocalization.string("PDF一覧", locale: displayLocale))
+                    Text(ShiftHubLocalization.string("履歴", locale: displayLocale))
                         .font(.title2.bold())
 
                     Text(ShiftHubLocalization.string("保存したPDFを表示または削除できます。", locale: displayLocale))
@@ -225,6 +233,12 @@ struct PDFListView: View {
                                     }
 
                                     Spacer(minLength: 4)
+
+                                    if schedule.id == selectedScheduleID {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                            .accessibilityLabel(ShiftHubLocalization.string("表示中", locale: displayLocale))
+                                    }
                                 }
                             }
                             .buttonStyle(SavedScheduleRowButtonStyle())

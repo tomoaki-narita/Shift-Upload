@@ -12,6 +12,7 @@ import UIKit
 final class ShiftOCRAnalyzer {
     private let gridDetector = ShiftPDFGridDetector()
     private var latestTableGrids: [PDFTableGrid] = []
+    private var latestRasterTables: [RasterTableGrid] = []
 
     func yearMonth(from items: [RecognizedTextItem]) -> YearMonth? {
         for item in items {
@@ -31,9 +32,12 @@ final class ShiftOCRAnalyzer {
             }
         }
 
-        guard url.pathExtension.localizedCaseInsensitiveCompare("pdf") == .orderedSame else {
+        let fileExtension = url.pathExtension.lowercased()
+        guard fileExtension == "pdf" else {
             throw ShiftOCRAnalyzerError.unsupportedFile
         }
+
+        latestRasterTables = []
 
         guard let document = PDFDocument(url: url) else {
             throw ShiftOCRAnalyzerError.unreadableFile
@@ -43,7 +47,7 @@ final class ShiftOCRAnalyzer {
         guard !textLayerItems.isEmpty else {
             throw ShiftOCRAnalyzerError.missingTextLayer
         }
-        guard Self.supportsHorizontalTextLayout(document) else {
+        guard Self.supportsSupportedTextLayout(document) else {
             throw ShiftOCRAnalyzerError.unsupportedLayout
         }
 
@@ -56,7 +60,7 @@ final class ShiftOCRAnalyzer {
         return sortedItems(textLayerItems)
     }
 
-    static func supportsHorizontalTextLayout(_ document: PDFDocument) -> Bool {
+    static func supportsSupportedTextLayout(_ document: PDFDocument) -> Bool {
         guard document.pageCount > 0 else { return false }
 
         return (0..<document.pageCount).allSatisfy { pageIndex in
@@ -64,26 +68,47 @@ final class ShiftOCRAnalyzer {
                 return false
             }
 
-            let dateTokens = dateSequence(in: textLayerTokens(from: page))
-            guard dateTokens.count >= 20 else {
-                return false
+            let tokens = textLayerTokens(from: page)
+            let horizontalDates = dateSequence(in: tokens)
+            if horizontalDates.count >= 20 {
+                let xSpan = horizontalDates.map { $0.bounds.midX }.max()! - horizontalDates.map { $0.bounds.midX }.min()!
+                let ySpan = horizontalDates.map { $0.bounds.midY }.max()! - horizontalDates.map { $0.bounds.midY }.min()!
+                if xSpan > ySpan * 2 {
+                    return true
+                }
             }
 
-            let xValues = dateTokens.map { $0.bounds.midX }
-            let yValues = dateTokens.map { $0.bounds.midY }
-            guard let minX = xValues.min(), let maxX = xValues.max(),
-                  let minY = yValues.min(), let maxY = yValues.max() else {
-                return false
+            let verticalDates = verticalDateSequence(in: tokens)
+            if verticalDates.count >= 20 {
+                let xSpan = verticalDates.map { $0.bounds.midX }.max()! - verticalDates.map { $0.bounds.midX }.min()!
+                let ySpan = verticalDates.map { $0.bounds.midY }.max()! - verticalDates.map { $0.bounds.midY }.min()!
+                if ySpan > xSpan * 2 {
+                    return true
+                }
             }
 
-            let xSpan = maxX - minX
-            let ySpan = maxY - minY
-            let increasingXCount = zip(dateTokens.dropFirst(), dateTokens).filter { current, previous in
-                current.bounds.midX > previous.bounds.midX
-            }.count
-
-            return xSpan > ySpan * 2 && increasingXCount >= dateTokens.count - 2
+            return false
         }
+    }
+
+    static func supportsFile(at url: URL) -> Bool {
+        let fileExtension = url.pathExtension.lowercased()
+        guard fileExtension == "pdf" else {
+            return false
+        }
+
+        guard let document = PDFDocument(url: url), document.pageCount > 0 else {
+            return false
+        }
+
+        let hasTextLayer = (0..<document.pageCount).contains { pageIndex in
+            guard let pageText = document.page(at: pageIndex)?.string else {
+                return false
+            }
+            return !pageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        return hasTextLayer && supportsSupportedTextLayout(document)
     }
 
     private struct TextLayerToken {
@@ -204,6 +229,41 @@ final class ShiftOCRAnalyzer {
         return bestSequence
     }
 
+    private static func verticalDateSequence(in tokens: [TextLayerToken]) -> [TextLayerToken] {
+        let sortedTokens = tokens.sorted {
+            if abs($0.bounds.midX - $1.bounds.midX) > 0.03 {
+                return $0.bounds.midX < $1.bounds.midX
+            }
+            return $0.bounds.midY > $1.bounds.midY
+        }
+        var bestSequence: [TextLayerToken] = []
+
+        for startIndex in sortedTokens.indices {
+            guard normalizedText(sortedTokens[startIndex].text) == "1" else { continue }
+
+            let anchorX = sortedTokens[startIndex].bounds.midX
+            var expectedDay = 1
+            var sequence: [TextLayerToken] = []
+
+            for token in sortedTokens[startIndex...] {
+                guard abs(token.bounds.midX - anchorX) <= 0.04,
+                      normalizedText(token.text) == String(expectedDay) else {
+                    continue
+                }
+
+                sequence.append(token)
+                expectedDay += 1
+                if expectedDay > 31 { break }
+            }
+
+            if sequence.count > bestSequence.count {
+                bestSequence = sequence
+            }
+        }
+
+        return bestSequence
+    }
+
     private static func normalizedText(_ text: String) -> String {
         text
             .folding(options: [.widthInsensitive, .caseInsensitive], locale: .current)
@@ -231,6 +291,10 @@ final class ShiftOCRAnalyzer {
             return []
         }
 
+        if let cells = rasterGridCells(matching: normalizedName, from: items, yearMonth: yearMonth) {
+            return cells
+        }
+
         if let cells = gridCells(matching: normalizedName, from: items, yearMonth: yearMonth) {
             return cells
         }
@@ -240,6 +304,93 @@ final class ShiftOCRAnalyzer {
         }
 
         return directTextCells(matching: normalizedName, from: items, yearMonth: yearMonth) ?? []
+    }
+
+    private struct RasterTableGrid {
+        let pageIndex: Int
+        let imageSize: CGSize
+        let dayBoundaries: [CGFloat]
+        let rows: [RasterTableRow]
+    }
+
+    private struct RasterTableRow {
+        let name: String
+        let dayValues: [String]
+        let top: CGFloat
+        let bottom: CGFloat
+    }
+
+    private struct RasterOCRText {
+        let text: String
+        let boundingBox: CGRect
+    }
+
+    private func rasterGridCells(
+        matching normalizedName: String,
+        from items: [RecognizedTextItem],
+        yearMonth: YearMonth?
+    ) -> [ExtractedShiftCell]? {
+        let dayCount = yearMonth?.numberOfDays ?? 31
+
+        for table in latestRasterTables {
+            let row = table.rows.first(where: { row in
+                let normalizedRowName = normalize(row.name)
+                return normalizedRowName.hasPrefix(normalizedName)
+                    || normalizedRowName.contains(normalizedName)
+            }) ?? rasterRowClosestToName(
+                normalizedName: normalizedName,
+                items: items,
+                in: table
+            )
+            guard let row else {
+                continue
+            }
+
+            let values = Array(row.dayValues.prefix(dayCount))
+            guard values.count == dayCount else { continue }
+
+            return values.enumerated().map { index, value in
+                let left = table.dayBoundaries[index]
+                let right = table.dayBoundaries[index + 1]
+                let minY = 1 - row.bottom / table.imageSize.height
+                let height = (row.bottom - row.top) / table.imageSize.height
+
+                return ExtractedShiftCell(
+                    dateText: String(index + 1),
+                    valueText: normalizedRasterShiftText(value),
+                    pageIndex: table.pageIndex,
+                    boundingBox: CGRect(
+                        x: left / table.imageSize.width,
+                        y: minY,
+                        width: (right - left) / table.imageSize.width,
+                        height: height
+                    )
+                )
+            }
+        }
+
+        return nil
+    }
+
+    private func rasterRowClosestToName(
+        normalizedName: String,
+        items: [RecognizedTextItem],
+        in table: RasterTableGrid
+    ) -> RasterTableRow? {
+        let nameItems = items.filter { item in
+            item.rawPageText == nil && normalize(item.text).contains(normalizedName)
+        }
+        guard let nameItem = nameItems.min(by: { lhs, rhs in
+            lhs.boundingBox.midX < rhs.boundingBox.midX
+        }) else {
+            return nil
+        }
+
+        let nameY = (1 - nameItem.boundingBox.midY) * table.imageSize.height
+        return table.rows.min { lhs, rhs in
+            abs(((lhs.top + lhs.bottom) / 2) - nameY)
+                < abs(((rhs.top + rhs.bottom) / 2) - nameY)
+        }
     }
 
     private func gridCells(
@@ -320,41 +471,81 @@ final class ShiftOCRAnalyzer {
             let dateTokens = Self.dateSequence(
                 in: pageTokens.map { TextLayerToken(text: $0.text, bounds: $0.boundingBox) }
             )
-            guard dateTokens.count >= dayCount else { continue }
+            if dateTokens.count >= dayCount {
+                let dateColumns = dateTokens.prefix(dayCount).enumerated().map { index, token in
+                    DateColumn(day: index + 1, centerX: token.bounds.midX, pageIndex: pageIndex)
+                }
+                guard let target = targetTextLayerRow(
+                    matching: normalizedName,
+                    in: pageTokens
+                ) else {
+                    continue
+                }
 
-            let dateColumns = dateTokens.prefix(dayCount).enumerated().map { index, token in
-                DateColumn(day: index + 1, centerX: token.bounds.midX, pageIndex: pageIndex)
+                let rowTokens = textLayerTokens(
+                    in: target.rowRange,
+                    from: pageTokens
+                )
+                let cells = dateColumns.map { column in
+                    let range = dateCellRange(for: column, in: dateColumns)
+                    let cellTokens = rowTokens
+                        .filter { range.contains($0.boundingBox.midX) }
+                        .sorted { lhs, rhs in
+                            if let lhsOrder = lhs.textLayerOrder,
+                               let rhsOrder = rhs.textLayerOrder,
+                               lhsOrder != rhsOrder {
+                                return lhsOrder < rhsOrder
+                            }
+                            if abs(lhs.boundingBox.midY - rhs.boundingBox.midY) > 0.01 {
+                                return lhs.boundingBox.midY > rhs.boundingBox.midY
+                            }
+                            return lhs.boundingBox.minX < rhs.boundingBox.minX
+                        }
+                    let valueText = normalizedShiftText(cellTokens.map(\.text).joined())
+
+                    return ExtractedShiftCell(
+                        dateText: String(column.day),
+                        valueText: valueText,
+                        pageIndex: pageIndex,
+                        boundingBox: cellTokens.map(\.boundingBox).reduce(.null) { $0.union($1) }
+                    )
+                }
+
+                return cells
             }
-            guard let target = targetTextLayerRow(
-                matching: normalizedName,
-                in: pageTokens
-            ) else {
+
+            let verticalDates = Self.verticalDateSequence(
+                in: pageTokens.map { TextLayerToken(text: $0.text, bounds: $0.boundingBox) }
+            )
+            guard verticalDates.count >= dayCount,
+                  let target = targetTextLayerColumn(
+                      matching: normalizedName,
+                      in: pageTokens,
+                      dateRows: verticalDates
+                  ) else {
                 continue
             }
 
-            let rowTokens = textLayerTokens(
-                in: target.rowRange,
-                from: pageTokens
-            )
-            let cells = dateColumns.map { column in
-                let range = dateCellRange(for: column, in: dateColumns)
-                let cellTokens = rowTokens
-                    .filter { range.contains($0.boundingBox.midX) }
+            let columnTokens = pageTokens.filter { target.xRange.contains($0.boundingBox.midX) }
+            let dateRows = verticalDates.prefix(dayCount).enumerated().map { index, token in
+                DateRow(day: index + 1, centerY: token.bounds.midY, pageIndex: pageIndex)
+            }
+            let cells = dateRows.map { row in
+                let range = dateCellRange(for: row, in: dateRows)
+                let cellTokens = columnTokens
+                    .filter { range.contains($0.boundingBox.midY) }
                     .sorted { lhs, rhs in
                         if let lhsOrder = lhs.textLayerOrder,
                            let rhsOrder = rhs.textLayerOrder,
                            lhsOrder != rhsOrder {
                             return lhsOrder < rhsOrder
                         }
-                        if abs(lhs.boundingBox.midY - rhs.boundingBox.midY) > 0.01 {
-                            return lhs.boundingBox.midY > rhs.boundingBox.midY
-                        }
-                        return lhs.boundingBox.minX < rhs.boundingBox.minX
+                        return lhs.boundingBox.minY < rhs.boundingBox.minY
                     }
                 let valueText = normalizedShiftText(cellTokens.map(\.text).joined())
 
                 return ExtractedShiftCell(
-                    dateText: String(column.day),
+                    dateText: String(row.day),
                     valueText: valueText,
                     pageIndex: pageIndex,
                     boundingBox: cellTokens.map(\.boundingBox).reduce(.null) { $0.union($1) }
@@ -369,6 +560,10 @@ final class ShiftOCRAnalyzer {
 
     private struct TextLayerRow {
         let rowRange: ClosedRange<CGFloat>
+    }
+
+    private struct TextLayerColumn {
+        let xRange: ClosedRange<CGFloat>
     }
 
     private func targetTextLayerRow(
@@ -432,6 +627,71 @@ final class ShiftOCRAnalyzer {
         }
     }
 
+    private func targetTextLayerColumn(
+        matching normalizedName: String,
+        in pageTokens: [RecognizedTextItem],
+        dateRows: [TextLayerToken]
+    ) -> TextLayerColumn? {
+        guard let firstDateY = dateRows.first?.bounds.midY else { return nil }
+        let headerRows = rowGroups(from: pageTokens).filter { row in
+            let centerY = row.map(\.boundingBox.midY).reduce(0, +) / CGFloat(row.count)
+            return centerY > firstDateY + 0.01
+        }
+
+        let target = headerRows.compactMap { row -> (row: [RecognizedTextItem], bounds: CGRect)? in
+            guard let bounds = nameBounds(in: row.sorted { $0.boundingBox.minX < $1.boundingBox.minX }, matching: normalizedName) else {
+                return nil
+            }
+            return (row, bounds)
+        }.first
+
+        let fallbackTarget = target ?? pageTokens.compactMap { item -> (row: [RecognizedTextItem], bounds: CGRect)? in
+            guard normalize(item.text).contains(normalizedName) else { return nil }
+            return ([item], item.boundingBox)
+        }.first
+        guard let target = fallbackTarget else { return nil }
+
+        let referenceItems = target.row
+        let centers = clusteredCoordinateCenters(
+            referenceItems.map(\.boundingBox.midX).sorted(),
+            maximumGap: 0.04
+        )
+        guard let targetIndex = centers.indices.min(by: { lhs, rhs in
+            abs(centers[lhs] - target.bounds.midX) < abs(centers[rhs] - target.bounds.midX)
+        }) else {
+            return nil
+        }
+
+        let center = centers[targetIndex]
+        let left = targetIndex > centers.startIndex
+            ? (centers[targetIndex - 1] + center) / 2
+            : max(0, target.bounds.minX - max(target.bounds.width, 0.03))
+        let right = targetIndex + 1 < centers.endIndex
+            ? (center + centers[targetIndex + 1]) / 2
+            : min(1, target.bounds.maxX + max(target.bounds.width, 0.03))
+        return TextLayerColumn(xRange: left...right)
+    }
+
+    private func clusteredCoordinateCenters(
+        _ coordinates: [CGFloat],
+        maximumGap: CGFloat
+    ) -> [CGFloat] {
+        guard let first = coordinates.first else { return [] }
+        var clusters: [[CGFloat]] = [[first]]
+
+        for coordinate in coordinates.dropFirst() {
+            if coordinate - (clusters.last?.last ?? coordinate) <= maximumGap {
+                clusters[clusters.index(before: clusters.endIndex)].append(coordinate)
+            } else {
+                clusters.append([coordinate])
+            }
+        }
+
+        return clusters.map { values in
+            values.reduce(0, +) / CGFloat(values.count)
+        }
+    }
+
     private func dateCellRange(
         for column: DateColumn,
         in columns: [DateColumn]
@@ -460,6 +720,36 @@ final class ShiftOCRAnalyzer {
         }
 
         return (column.centerX - leftStep / 2)...(column.centerX + rightStep / 2)
+    }
+
+    private func dateCellRange(
+        for row: DateRow,
+        in rows: [DateRow]
+    ) -> ClosedRange<CGFloat> {
+        let sortedRows = rows.sorted { $0.centerY > $1.centerY }
+        guard let index = sortedRows.firstIndex(of: row) else {
+            return row.centerY...row.centerY
+        }
+
+        let upperStep: CGFloat
+        if index > sortedRows.startIndex {
+            upperStep = sortedRows[index - 1].centerY - row.centerY
+        } else if index + 1 < sortedRows.endIndex {
+            upperStep = sortedRows[index].centerY - sortedRows[index + 1].centerY
+        } else {
+            upperStep = 0.05
+        }
+
+        let lowerStep: CGFloat
+        if index + 1 < sortedRows.endIndex {
+            lowerStep = row.centerY - sortedRows[index + 1].centerY
+        } else if index > sortedRows.startIndex {
+            lowerStep = sortedRows[index - 1].centerY - row.centerY
+        } else {
+            lowerStep = 0.05
+        }
+
+        return (row.centerY - lowerStep / 2)...(row.centerY + upperStep / 2)
     }
 
     private func fallbackCells(from rowItems: [RecognizedTextItem], excludingNameBounds nameBounds: CGRect?) -> [ExtractedShiftCell] {
@@ -847,6 +1137,490 @@ final class ShiftOCRAnalyzer {
         }
     }
 
+    private func rasterTableGrid(from image: CGImage, pageIndex: Int) -> RasterTableGrid? {
+        guard let buffer = RasterPixelBuffer(image: image) else { return nil }
+
+        let verticalLines = rasterLineCenters(
+            in: buffer,
+            orientation: .vertical,
+            threshold: 0.42
+        )
+        let horizontalLines = rasterLineCenters(
+            in: buffer,
+            orientation: .horizontal,
+            threshold: 0.65
+        )
+        guard let dayBoundaries = regularLineRun(
+            in: verticalLines,
+            minimumCount: 32,
+            maximumGapVariation: 0.28
+        ),
+        let rowBoundaries = staffRowLineRun(in: horizontalLines),
+        dayBoundaries.count >= 32,
+        rowBoundaries.count >= 3 else {
+            return nil
+        }
+
+        let dayBoundaryValues = dayBoundaries.map { CGFloat($0) }
+        let nameLeft = verticalLines.last { $0 < dayBoundaries[0] } ?? 0
+        let dayStart = dayBoundaries[0]
+        let rows = rowBoundaries.dropLast().compactMap { boundary -> RasterTableRow? in
+            let top = boundary.0
+            let bottom = boundary.1
+            guard bottom - top > 8 else { return nil }
+
+            let nameWidthPixels = max(dayStart - nameLeft, 1)
+            let nameRect = CGRect(
+                x: CGFloat(nameLeft),
+                y: top,
+                width: CGFloat(nameWidthPixels),
+                height: bottom - top
+            )
+            guard let nameImage = image.cropping(to: nameRect) else {
+                return nil
+            }
+
+            let nameObservations = rasterOCR(in: nameImage)
+            let rowName = nameObservations
+                .sorted { lhs, rhs in
+                    lhs.boundingBox.minX < rhs.boundingBox.minX
+                }
+                .map(\.text)
+                .joined()
+
+            // OCR each cell independently. This prevents values from adjacent
+            // days and notes below the table from being assigned to this row.
+            let values = dayBoundaries.indices.dropLast().map { dayIndex in
+                let left = CGFloat(dayBoundaries[dayIndex])
+                let right = CGFloat(dayBoundaries[dayIndex + 1])
+                let horizontalInset = max((right - left) * 0.10, 2)
+                let verticalInset = max((bottom - top) * 0.08, 2)
+                let cellRect = CGRect(
+                    x: left + horizontalInset,
+                    y: top + verticalInset,
+                    width: max(right - left - horizontalInset * 2, 1),
+                    height: max(bottom - top - verticalInset * 2, 1)
+                )
+
+                guard let cellImage = image.cropping(to: cellRect) else {
+                    return ""
+                }
+
+                return rasterCellText(in: cellImage)
+            }
+
+            return RasterTableRow(
+                name: rowName,
+                dayValues: values,
+                top: top,
+                bottom: bottom
+            )
+        }
+
+        guard rows.count >= 1 else { return nil }
+        return RasterTableGrid(
+            pageIndex: pageIndex,
+            imageSize: CGSize(width: buffer.width, height: buffer.height),
+            dayBoundaries: dayBoundaryValues,
+            rows: rows
+        )
+    }
+
+    private enum RasterLineOrientation {
+        case vertical
+        case horizontal
+    }
+
+    private struct RasterPixelBuffer {
+        let width: Int
+        let height: Int
+        let bytes: [UInt8]
+
+        init?(image: CGImage) {
+            let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+            let bytesPerRow = image.width * 4
+            var pixels = Array(repeating: UInt8(0), count: image.height * bytesPerRow)
+            guard let context = CGContext(
+                data: &pixels,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else {
+                return nil
+            }
+
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            width = image.width
+            height = image.height
+            bytes = pixels
+        }
+
+        func luminance(atX x: Int, y: Int) -> Int {
+            let index = (y * width + x) * 4
+            return Int(bytes[index]) + Int(bytes[index + 1]) + Int(bytes[index + 2])
+        }
+    }
+
+    private func rasterLineCenters(
+        in buffer: RasterPixelBuffer,
+        orientation: RasterLineOrientation,
+        threshold: Double
+    ) -> [Int] {
+        let coordinateCount = orientation == .vertical ? buffer.width : buffer.height
+        let sampleCount = orientation == .vertical ? buffer.height / 4 : buffer.width / 4
+        guard coordinateCount > 0, sampleCount > 0 else { return [] }
+
+        let minimumDarkSamples = Int(Double(sampleCount) * threshold)
+        let candidateCoordinates = (0..<coordinateCount).compactMap { coordinate -> Int? in
+            var darkSamples = 0
+            if orientation == .vertical {
+                for y in stride(from: 0, to: buffer.height, by: 4) {
+                    if buffer.luminance(atX: coordinate, y: y) < 720 {
+                        darkSamples += 1
+                    }
+                }
+            } else {
+                for x in stride(from: 0, to: buffer.width, by: 4) {
+                    if buffer.luminance(atX: x, y: coordinate) < 720 {
+                        darkSamples += 1
+                    }
+                }
+            }
+
+            return darkSamples >= minimumDarkSamples ? coordinate : nil
+        }
+
+        return clusteredCenters(candidateCoordinates)
+    }
+
+    private func clusteredCenters(_ coordinates: [Int]) -> [Int] {
+        guard let first = coordinates.first else { return [] }
+        var clusters: [[Int]] = [[first]]
+
+        for coordinate in coordinates.dropFirst() {
+            if coordinate - (clusters.last?.last ?? coordinate) <= 4 {
+                clusters[clusters.index(before: clusters.endIndex)].append(coordinate)
+            } else {
+                clusters.append([coordinate])
+            }
+        }
+
+        return clusters.map { values in
+            values[values.count / 2]
+        }
+    }
+
+    private func regularLineRun(
+        in centers: [Int],
+        minimumCount: Int,
+        maximumGapVariation: Double
+    ) -> [Int]? {
+        guard centers.count >= minimumCount else { return nil }
+        var bestRun: [Int] = []
+
+        for startIndex in centers.indices {
+            var run = [centers[startIndex]]
+            var expectedGap: Double?
+
+            for index in centers.index(after: startIndex)..<centers.endIndex {
+                let gap = centers[index] - centers[index - 1]
+                if let expectedGap {
+                    let variation = abs(Double(gap) - expectedGap) / expectedGap
+                    guard variation <= maximumGapVariation else { break }
+                } else {
+                    expectedGap = Double(gap)
+                }
+                run.append(centers[index])
+            }
+
+            if run.count > bestRun.count {
+                bestRun = run
+            }
+        }
+
+        guard bestRun.count >= minimumCount else { return nil }
+        return Array(bestRun.prefix(minimumCount + 1))
+    }
+
+    private func staffRowLineRun(in centers: [Int]) -> [(CGFloat, CGFloat)]? {
+        guard centers.count >= 4 else { return nil }
+        let gaps = zip(centers.dropFirst(), centers).map { current, previous in
+            current - previous
+        }
+        let sortedGaps = gaps.sorted()
+        let medianGap = Double(sortedGaps[sortedGaps.count / 2])
+        let candidateStart = gaps.indices
+            .filter { index in
+                Double(gaps[index]) > medianGap * 1.45
+            }
+            .max { lhs, rhs in
+                gaps[lhs] < gaps[rhs]
+            }
+
+        let startIndex = candidateStart.map { centers.index(after: $0) } ?? centers.startIndex
+        let rowCenters = Array(centers[startIndex...])
+        guard rowCenters.count >= 3 else { return nil }
+
+        return zip(rowCenters.dropFirst(), rowCenters).map { pair in
+            (CGFloat(pair.1), CGFloat(pair.0))
+        }
+    }
+
+    private func rasterOCR(
+        in image: CGImage,
+        minimumTextHeight: Float = 0.01,
+        recognitionLanguages: [String] = ["ja-JP", "en-US"],
+        customWords: [String] = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "△", "□", "休", "年"]
+    ) -> [RasterOCRText] {
+        guard let scaledImage = scaledRasterImage(image, scale: 3) else { return [] }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = recognitionLanguages
+        request.usesLanguageCorrection = false
+        request.customWords = customWords
+        request.minimumTextHeight = minimumTextHeight
+
+        do {
+            try VNImageRequestHandler(cgImage: scaledImage, options: [:]).perform([request])
+        } catch {
+            return []
+        }
+
+        return (request.results ?? []).compactMap { observation in
+            let candidates = observation.topCandidates(5).map(\.string)
+            guard let text = bestRasterOCRCandidate(from: candidates),
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+
+            return RasterOCRText(
+                text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                boundingBox: observation.boundingBox
+            )
+        }
+    }
+
+    private func bestRasterOCRCandidate(from candidates: [String]) -> String? {
+        candidates
+            .map { candidate in
+                let text = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+                let japaneseCount = text.unicodeScalars.reduce(into: 0) { count, scalar in
+                    let value = scalar.value
+                    if (0x3040...0x30FF).contains(value) || (0x4E00...0x9FFF).contains(value) {
+                        count += 1
+                    }
+                }
+                let shiftSymbolCount = text.filter { "休年△□①②③④⑤⑥⑦⑧⑨".contains($0) }.count
+                let suspiciousLatinCount = text.filter { "LlIiZz".contains($0) }.count
+
+                return (japaneseCount * 4) + (shiftSymbolCount * 5) - (suspiciousLatinCount * 2)
+            }
+            .enumerated()
+            .max { lhs, rhs in
+                if lhs.element != rhs.element {
+                    return lhs.element < rhs.element
+                }
+                return lhs.offset > rhs.offset
+            }
+            .map { candidates[$0.offset] }
+    }
+
+    private func rasterCellText(in image: CGImage) -> String {
+        let primaryText = rasterOCR(in: image)
+            .sorted { lhs, rhs in
+                if abs(lhs.boundingBox.midY - rhs.boundingBox.midY) > 0.05 {
+                    return lhs.boundingBox.midY > rhs.boundingBox.midY
+                }
+                return lhs.boundingBox.minX < rhs.boundingBox.minX
+            }
+            .map(\.text)
+            .joined()
+
+        let mayBeCircledOne = primaryText == "祝" || primaryText == "祝★"
+        let mayBePlainOne = ["0", "O", "o", "1", "I", "l", "i", "①", "01", "O1", "o1", "(1)"].contains(primaryText)
+        if mayBePlainOne, looksLikeCircledDigit(in: image) {
+            return "①"
+        }
+        if primaryText.isEmpty, looksLikeCircledDigit(in: image) {
+            return "①"
+        }
+        guard primaryText.isEmpty || mayBeCircledOne else { return primaryText }
+
+        // Vision frequently recognizes the circled 1 used in this table as
+        // the standalone holiday glyph "祝". A standalone 祝 is not a valid
+        // shift value for this scanner, so preserve the circled-number value
+        // instead of dropping it during normalization.
+        if mayBeCircledOne {
+            return "①"
+        }
+
+        let alternateText = rasterOCR(
+            in: image,
+            minimumTextHeight: 0.0001,
+            recognitionLanguages: ["en-US"],
+            customWords: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"]
+        )
+        let alternateValue = alternateText.map(\.text).joined()
+
+        // Circled shift numbers are small and can disappear at the normal
+        // threshold. Retry only an empty cell and accept the retry when it
+        // produced a circled number, avoiding noise in genuinely empty cells.
+        let retryText = rasterOCR(in: image, minimumTextHeight: 0.0001)
+            .map(\.text)
+            .joined()
+        let circledText = retryText.filter { "①②③④⑤⑥⑦⑧⑨".contains($0) }
+        if !circledText.isEmpty {
+            return circledText
+        }
+        if ["1", "I", "l", "i"].contains(alternateValue) {
+            return "①"
+        }
+        if mayBeCircledOne && looksLikeCircledDigit(in: image) {
+            return "①"
+        }
+        return ["1", "I", "l", "i"].contains(retryText) ? "①" : ""
+    }
+
+    private func looksLikeCircledDigit(in image: CGImage) -> Bool {
+        guard let buffer = RasterPixelBuffer(image: image),
+              buffer.width >= 12,
+              buffer.height >= 12 else {
+            return false
+        }
+
+        let threshold = 720
+        var darkPixels = Set<Int>()
+        for y in 2..<(buffer.height - 2) {
+            for x in 2..<(buffer.width - 2) {
+                if buffer.luminance(atX: x, y: y) < threshold {
+                    darkPixels.insert(y * buffer.width + x)
+                }
+            }
+        }
+
+        var visited = Set<Int>()
+        for seed in darkPixels {
+            guard !visited.contains(seed) else { continue }
+
+            var queue = [seed]
+            var component: [CGPoint] = []
+            visited.insert(seed)
+            var cursor = 0
+
+            while cursor < queue.count {
+                let index = queue[cursor]
+                cursor += 1
+                let x = index % buffer.width
+                let y = index / buffer.width
+                component.append(CGPoint(x: x, y: y))
+
+                for offsetY in -1...1 {
+                    for offsetX in -1...1 {
+                        guard offsetX != 0 || offsetY != 0 else { continue }
+                        let neighborX = x + offsetX
+                        let neighborY = y + offsetY
+                        guard neighborX >= 2,
+                              neighborX < buffer.width - 2,
+                              neighborY >= 2,
+                              neighborY < buffer.height - 2 else {
+                            continue
+                        }
+
+                        let neighbor = neighborY * buffer.width + neighborX
+                        guard darkPixels.contains(neighbor), !visited.contains(neighbor) else {
+                            continue
+                        }
+
+                        visited.insert(neighbor)
+                        queue.append(neighbor)
+                    }
+                }
+            }
+
+            guard component.count >= 12,
+                  let minXValue = component.map(\.x).min(),
+                  let maxXValue = component.map(\.x).max(),
+                  let minYValue = component.map(\.y).min(),
+                  let maxYValue = component.map(\.y).max() else {
+                continue
+            }
+
+            let minX = Int(minXValue)
+            let maxX = Int(maxXValue)
+            let minY = Int(minYValue)
+            let maxY = Int(maxYValue)
+
+            let width = maxX - minX + 1
+            let height = maxY - minY + 1
+            let aspectRatio = Double(width) / Double(height)
+            guard width >= 8,
+                  height >= 8,
+                  (0.65...1.35).contains(aspectRatio) else {
+                continue
+            }
+
+            func containsDarkPixel(nearX x: Double, nearY y: Double) -> Bool {
+                let xStart = max(Int(x - 2), minX)
+                let xEnd = min(Int(x + 2), maxX)
+                let yStart = max(Int(y - 2), minY)
+                let yEnd = min(Int(y + 2), maxY)
+                for sampleY in yStart...yEnd {
+                    for sampleX in xStart...xEnd {
+                        if darkPixels.contains(sampleY * buffer.width + sampleX) {
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+
+            let centerX = Double(minX + maxX) / 2
+            let centerY = Double(minY + maxY) / 2
+            let cardinalMatches = stride(from: 0.42, through: 0.50, by: 0.02).map { radiusFactor in
+                let radiusX = Double(width) * radiusFactor
+                let radiusY = Double(height) * radiusFactor
+                let cardinalPoints = [
+                    (centerX, centerY - radiusY),
+                    (centerX + radiusX, centerY),
+                    (centerX, centerY + radiusY),
+                    (centerX - radiusX, centerY)
+                ]
+                return cardinalPoints.filter {
+                    containsDarkPixel(nearX: $0.0, nearY: $0.1)
+                }.count
+            }.max() ?? 0
+
+            if cardinalMatches >= 3 {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func scaledRasterImage(_ image: CGImage, scale: CGFloat) -> CGImage? {
+        let width = max(Int(CGFloat(image.width) * scale), 1)
+        let height = max(Int(CGFloat(image.height) * scale), 1)
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+
     private func pageImages(from url: URL) throws -> [(index: Int, image: CGImage)] {
         if url.pathExtension.localizedCaseInsensitiveCompare("pdf") == .orderedSame {
             guard let document = PDFDocument(url: url) else {
@@ -1035,10 +1809,43 @@ final class ShiftOCRAnalyzer {
             .replacingOccurrences(of: "口", with: "□")
             .replacingOccurrences(of: "ロ", with: "□")
             .replacingOccurrences(of: "A", with: "△")
+            .replacingOccurrences(of: "a", with: "△")
             .replacingOccurrences(of: "▲", with: "△")
 
         if normalized == "祝" {
             normalized = ""
+        }
+
+        return normalized
+    }
+
+    private func normalizedRasterShiftText(_ text: String) -> String {
+        var normalized = normalizedShiftText(normalize(text))
+            .replacingOccurrences(of: "／", with: "/")
+
+        // Vision can mistake small shift symbols and separators for Latin
+        // glyphs or digits after a raster cell has been cropped.
+        if normalized == "L7" || normalized == "I7" || normalized == "l7" {
+            return "△1"
+        }
+        if normalized == "L2" || normalized == "I2" || normalized == "l2" {
+            return "△2"
+        }
+        if normalized == "27" {
+            return "2フ"
+        }
+        if normalized == "半年5" || normalized == "半年15" {
+            return "半年/5"
+        }
+        if normalized.hasPrefix("2") && normalized.hasSuffix("会議") {
+            normalized = "2/会議"
+        }
+        if normalized.hasPrefix("2勤務") && normalized.hasSuffix("委") && !normalized.contains("/") {
+            let suffix = String(normalized.dropFirst("2勤務".count))
+            normalized = "2勤務/" + suffix
+        }
+        if normalized == "2勤務/倭委" {
+            normalized = "2勤務/委"
         }
 
         return normalized
@@ -1068,13 +1875,13 @@ enum ShiftOCRAnalyzerError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedFile:
-            return "PDFのみ対応しています"
+            return "文字情報を持つPDFに対応しています"
         case .missingTextLayer:
             return "文字データを持つPDFではありません"
         case .unsupportedLayout:
-            return "横型のPDFのみ対応しています"
+            return "横型または縦型のPDFのみ対応しています"
         case .unreadableFile:
-            return "PDFファイルを開けませんでした。"
+            return "勤務表ファイルを開けませんでした。"
         }
     }
 }

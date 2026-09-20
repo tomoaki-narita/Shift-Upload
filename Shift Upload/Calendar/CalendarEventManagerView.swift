@@ -538,6 +538,10 @@ struct CalendarEventManagerView: View {
             }
 #endif
         }
+#if os(macOS)
+        .animation(.easeInOut(duration: 0.2), value: model.message)
+        .animation(.easeInOut(duration: 0.2), value: model.isLoading)
+#endif
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 #else
@@ -640,7 +644,7 @@ struct CalendarEventManagerView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help(ShiftHubLocalization.string("PDF一覧", locale: locale))
+                .help(ShiftHubLocalization.string("履歴", locale: locale))
             }
 
             ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -927,7 +931,7 @@ struct CalendarEventManagerView: View {
                         .frame(width: 36, height: 36)
                 }
                 .buttonStyle(ToolbarIconButtonStyleD())
-                .accessibilityLabel(ShiftHubLocalization.string("PDF一覧", locale: locale))
+                .accessibilityLabel(ShiftHubLocalization.string("履歴", locale: locale))
 
                 Button {
                     toggleDaySelectionMode()
@@ -1369,7 +1373,7 @@ struct CalendarEventManagerView: View {
 
         let leadingBlankCount = yearMonth.leadingBlankCount
         let monthSlotCount = leadingBlankCount + yearMonth.numberOfDays
-        let rowCount = max(1, Int(ceil(Double(monthSlotCount) / 7.0)))
+        let rowCount = max(6, Int(ceil(Double(monthSlotCount) / 7.0)))
         let totalSlots = rowCount * 7
         let firstDate = calendar.date(
             byAdding: .day,
@@ -1580,13 +1584,13 @@ struct CalendarEventManagerView: View {
 #else
         let dateHeaderHeight: CGFloat = 18
         let contentSpacing: CGFloat = 7
-        let gap: CGFloat = 4
+        let gap = min(4, max(1, 1 + (cardHeight - 52) / 22))
 #endif
         let availableHeight = max(
             0,
             cardHeight - 12 - dateHeaderHeight - contentSpacing
         )
-        let height = max(0, (availableHeight - gap * 2) / 3 - 1)
+        let height = max(0, (availableHeight - gap * 2) / 3)
         return CalendarEventBandMetrics(
             top: 6 + dateHeaderHeight + contentSpacing,
             contentSpacing: contentSpacing,
@@ -1815,12 +1819,22 @@ struct CalendarEventManagerView: View {
         ) / CGFloat(max(rowCount, 1))
         let cardHeight = min(80, max(52, fittedCardHeight))
 #else
-        let cardHeight: CGFloat = 112
         let gridSpacing: CGFloat = 8
         let columnSpacing: CGFloat = 8
         let horizontalInsets: CGFloat = 48
+        let rowCount = 6
+        let verticalInsets: CGFloat = 16
+        let fittedCardHeight = (
+            availableHeight
+                - verticalInsets
+                - CGFloat(max(rowCount - 1, 0)) * gridSpacing
+        ) / CGFloat(rowCount)
+        let cardHeight = max(52, fittedCardHeight)
 #endif
         let bandMetrics = calendarEventBandMetrics(cardHeight: cardHeight)
+#if os(macOS)
+        let bandTitleFontSize = min(12, max(5, bandMetrics.height * 0.9))
+#endif
         // Keep adjacent pages on the same band renderer while they are being
         // swiped into view; only the current page remains interactive.
         let renderEventBandsInOverlay = true
@@ -1896,11 +1910,12 @@ struct CalendarEventManagerView: View {
                             HStack(spacing: 0) {
                                 Text(layout.event.title)
 #if os(iOS)
-                                    .font(.system(size: 8, weight: .medium))
+                                    .font(.system(size: 10, weight: .medium))
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.75)
 #else
-                                    .font(.caption.weight(.medium))
+                                    .font(.system(size: bandTitleFontSize, weight: .medium))
+                                    .lineLimit(1)
 #endif
                                     .foregroundStyle(.primary.opacity(bandTitleOpacity))
                                     .padding(.horizontal, 6)
@@ -2327,7 +2342,7 @@ struct CalendarEventManagerView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Divider()
                     eventListRowContent(for: event)
-                        .padding(.top, 6)
+                        .padding(.top, 11)
                         .padding(.bottom, 6)
                 }
 

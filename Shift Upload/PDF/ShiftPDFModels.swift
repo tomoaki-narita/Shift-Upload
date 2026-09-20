@@ -30,6 +30,12 @@ struct DateColumn: Equatable {
     let pageIndex: Int
 }
 
+struct DateRow: Equatable {
+    let day: Int
+    let centerY: CGFloat
+    let pageIndex: Int
+}
+
 struct PDFGridCell: Equatable {
     let day: Int?
     let bounds: CGRect

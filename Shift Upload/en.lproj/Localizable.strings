@@ -8,7 +8,8 @@
 "勤務表を選択" = "Choose schedule";
 "読み込みを解除" = "Clear loaded schedule";
 "勤務表の読み込みを解除しました。" = "The loaded schedule was cleared.";
-"PDF一覧" = "PDF List";
+"履歴" = "History";
+"表示中" = "Currently displayed";
 "保存した勤務表を選択して解析します。" = "Choose a saved schedule to analyze it.";
 "保存した勤務表がありません" = "No saved schedules";
 "勤務表を選択すると、ここに保存されます。" = "Schedules are saved here when you choose one.";

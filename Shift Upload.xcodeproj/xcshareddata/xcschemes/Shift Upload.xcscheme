@@ -65,14 +65,6 @@
             ReferencedContainer = "container:Shift Upload.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <MacroExpansion>
-         <BuildableReference
-            BuildableIdentifier = "primary"
-            BlueprintIdentifier = "0826483B304FBF7600BEFF29"
-            BuildableName = "Shift Upload.app"
-            ReferencedContainer = "container:Shift Upload.xcodeproj">
-         </BuildableReference>
-      </MacroExpansion>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

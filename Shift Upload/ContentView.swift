@@ -132,6 +132,7 @@ struct ContentView: View {
     @State private var registrationPreview: RegistrationPreview?
     @State private var isRegisteringEvents = false
     @State private var selectedFileName = ""
+    @State private var selectedScheduleID: UUID?
     @State private var selectedYearMonth: YearMonth?
     @State private var recognizedItems: [RecognizedTextItem] = []
     @State private var extractedCells: [ExtractedShiftCell] = []
@@ -151,7 +152,7 @@ struct ContentView: View {
     @State private var isImportAlertPresented = false
     @State private var importAlertTitle = ""
     @State private var importAlertMessage = ""
-    @State private var statusMessage = "文字データを持つPDFの勤務表を選択"
+    @State private var statusMessage = "勤務表のPDFを選択"
     @State private var isProcessing = false
     @State private var isSynchronizing = false
     @State private var displayMode: ShiftDisplayMode = .calendar
@@ -175,7 +176,7 @@ struct ContentView: View {
         }
         .environment(\.locale, Locale(identifier: appLanguage))
 #if os(macOS)
-        .frame(minWidth: 720, minHeight: 950)
+        .frame(minWidth: 720, minHeight: 720)
 #endif
         .fileImporter(
             isPresented: $isImporterPresented,
@@ -192,6 +193,7 @@ struct ContentView: View {
         .sheet(isPresented: $isSavedScheduleListPresented) {
             SavedScheduleListView(
                 schedules: savedSchedules,
+                selectedScheduleID: selectedScheduleID,
                 onSelect: { schedule in
                     isSavedScheduleListPresented = false
                     analyzeSavedSchedule(schedule)
@@ -202,6 +204,7 @@ struct ContentView: View {
         .sheet(isPresented: $isPDFListPresented) {
             PDFListView(
                 schedules: savedSchedules,
+                selectedScheduleID: selectedScheduleID,
                 onDelete: deleteSavedSchedule
             )
         }
@@ -792,7 +795,7 @@ struct ContentView: View {
             isSavedScheduleListPresented = true
         } label: {
             Label(
-                ShiftHubLocalization.string("PDF一覧", locale: Locale(identifier: appLanguage)),
+                ShiftHubLocalization.string("履歴", locale: Locale(identifier: appLanguage)),
                 systemImage: "folder"
             )
         }
@@ -930,7 +933,7 @@ struct ContentView: View {
                                     )
                                 },
                                 description: {
-                                    Text(verbatim: localizedMessage("文字データを持つPDFの勤務表を選択"))
+                                    Text(verbatim: localizedMessage("勤務表のPDFを選択"))
                                 }
                             )
                             .frame(maxWidth: .infinity, minHeight: 120)
@@ -1096,7 +1099,11 @@ struct ContentView: View {
             max(52, min(78, (height - weekdayHeaderHeight - CGFloat(rowCount) * 8) / CGFloat(rowCount)))
         } ?? 78
 #else
-        let cardHeight: CGFloat = 96
+        let rowCount = max(1, Int(ceil(Double(leadingBlankCount + extractedCells.count) / 7.0)))
+        let weekdayHeaderHeight: CGFloat = 28
+        let cardHeight = availableHeight.map { height in
+            max(52, (height - weekdayHeaderHeight - CGFloat(rowCount) * 8) / CGFloat(rowCount))
+        } ?? 96
 #endif
 
         return VStack(spacing: 8) {
@@ -1240,19 +1247,13 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
             .padding(10)
-#if os(iOS)
             .frame(height: height, alignment: .top)
-#else
-            .frame(minHeight: 96)
-#endif
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
             .clipped()
             .contentShape(Rectangle())
         }
-#if os(iOS)
         .frame(height: height)
-#endif
         .buttonStyle(CalendarDayCardButtonStyle())
 #if os(macOS)
         .popover(
@@ -1686,6 +1687,7 @@ struct ContentView: View {
 
     private func resetImportedSchedule() {
         selectedFileName = ""
+        selectedScheduleID = nil
         selectedYearMonth = nil
         recognizedItems = []
         extractedCells = []
@@ -1708,13 +1710,13 @@ struct ContentView: View {
         removeAfterUse: Bool = false,
         originalFileName: String? = nil
     ) {
-        guard url.pathExtension.localizedCaseInsensitiveCompare("pdf") == .orderedSame else {
+        guard Self.isSupportedScheduleFile(url) else {
             presentImportAlert(.unsupportedFile)
             return
         }
 
         isProcessing = true
-        statusMessage = localizedMessage("PDFを確認中です。")
+        statusMessage = localizedMessage("勤務表ファイルを確認中です。")
 
         Task {
             defer {
@@ -1738,6 +1740,7 @@ struct ContentView: View {
                           savedSchedules[index] != result.schedule {
                     savedSchedules[index] = result.schedule
                 }
+                selectedScheduleID = result.schedule.id
                 analyzeFile(at: result.url, displayName: result.schedule.fileName)
             } catch {
                 if let analyzerError = error as? ShiftOCRAnalyzerError {
@@ -1753,17 +1756,20 @@ struct ContentView: View {
 #if os(macOS)
     private func handlePDFDrop(_ providers: [NSItemProvider]) -> Bool {
         guard !isProcessing,
-              let provider = providers.first(where: {
-                  $0.hasItemConformingToTypeIdentifier(UTType.pdf.identifier)
-              }) else {
+              let providerAndType = providers.compactMap({ provider in
+                  [UTType.pdf.identifier]
+                      .first(where: { provider.hasItemConformingToTypeIdentifier($0) })
+                      .map { (provider, $0) }
+              }).first else {
             return false
         }
+        let (provider, typeIdentifier) = providerAndType
 
-        provider.loadFileRepresentation(forTypeIdentifier: UTType.pdf.identifier) { url, error in
+        provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
             guard let url else {
                 Task { @MainActor in
                     statusMessage = localizedMessage(
-                        "PDFを読み込めませんでした: %@",
+                        "勤務表を読み込めませんでした: %@",
                         arguments: error.map { localizedError($0) } ?? "Unknown error"
                     )
                 }
@@ -1772,14 +1778,14 @@ struct ContentView: View {
 
             let temporaryURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension("pdf")
+                .appendingPathExtension(url.pathExtension)
 
             do {
                 try FileManager.default.copyItem(at: url, to: temporaryURL)
             } catch {
                 Task { @MainActor in
                     statusMessage = localizedMessage(
-                        "PDFを読み込めませんでした: %@",
+                        "勤務表を読み込めませんでした: %@",
                         arguments: localizedError(error)
                     )
                 }
@@ -1806,6 +1812,7 @@ struct ContentView: View {
                 statusMessage = localizedMessage("保存した勤務表が見つかりません。")
                 return
             }
+            selectedScheduleID = schedule.id
             analyzeFile(at: url, displayName: schedule.fileName)
         } catch {
             statusMessage = localizedMessage("保存した勤務表を開けませんでした: %@", arguments: localizedError(error))
@@ -1822,7 +1829,7 @@ struct ContentView: View {
     }
 
     private func analyzeFile(at url: URL, displayName: String? = nil) {
-        guard url.pathExtension.localizedCaseInsensitiveCompare("pdf") == .orderedSame else {
+        guard Self.isSupportedScheduleFile(url) else {
             presentImportAlert(.unsupportedFile)
             return
         }
@@ -1835,7 +1842,7 @@ struct ContentView: View {
         pendingMissingShiftTitles = []
         ignoredMissingShiftTitles = []
         isMissingShiftSelectionPresented = false
-        statusMessage = localizedMessage("PDFを解析中です。")
+        statusMessage = localizedMessage("勤務表を解析中です。")
 
         Task {
             do {
@@ -1874,17 +1881,17 @@ struct ContentView: View {
     private func presentImportAlert(_ error: ShiftOCRAnalyzerError) {
         switch error {
         case .unsupportedFile:
-            importAlertTitle = "PDFのみ対応しています"
-            importAlertMessage = "JPGやPNGではなく、文字データを持つPDFを選択してください。"
+            importAlertTitle = "対応していないファイルです"
+            importAlertMessage = "文字を選択・コピーできる横型または縦型のPDFを選択してください。"
         case .missingTextLayer:
             importAlertTitle = "取得できないPDFです"
             importAlertMessage = "文字データを持つPDFではありません。文字を選択・コピーできるPDFを使用してください。"
         case .unsupportedLayout:
             importAlertTitle = "対応していないPDFです"
-            importAlertMessage = "横型で文字データを持つPDFを選択してください。縦型のPDFには対応していません。"
+            importAlertMessage = "文字データを持ち、日付が横または縦に連続して並ぶ表形式のPDFを選択してください。"
         case .unreadableFile:
-            importAlertTitle = "PDFを読み込めません"
-            importAlertMessage = "PDFファイルを開けませんでした。"
+            importAlertTitle = "勤務表を読み込めません"
+            importAlertMessage = "勤務表ファイルを開けませんでした。"
         }
 
         isImportAlertPresented = true
@@ -2742,7 +2749,7 @@ struct ContentView: View {
 
     private static func removeInvalidStoredSchedules(from schedules: [StoredSchedule]) -> [StoredSchedule] {
         schedules.filter { schedule in
-            guard URL(fileURLWithPath: schedule.fileName).pathExtension.localizedCaseInsensitiveCompare("pdf") == .orderedSame else {
+            guard isSupportedScheduleFile(URL(fileURLWithPath: schedule.fileName)) else {
                 try? StoredScheduleStore.deleteFile(for: schedule)
                 return false
             }
@@ -2752,24 +2759,17 @@ struct ContentView: View {
                 return true
             }
 
-            guard let document = PDFDocument(url: url), document.pageCount > 0 else {
+            guard ShiftOCRAnalyzer.supportsFile(at: url) else {
                 try? StoredScheduleStore.deleteFile(for: schedule)
                 return false
             }
-
-            let hasTextLayer = (0..<document.pageCount).contains { pageIndex in
-                guard let pageText = document.page(at: pageIndex)?.string else {
-                    return false
-                }
-                return !pageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
-            let isHorizontal = ShiftOCRAnalyzer.supportsHorizontalTextLayout(document)
-
-            if !hasTextLayer || !isHorizontal {
-                try? StoredScheduleStore.deleteFile(for: schedule)
-            }
-            return hasTextLayer && isHorizontal
+            return true
         }
+    }
+
+    private static func isSupportedScheduleFile(_ url: URL) -> Bool {
+        let fileExtension = url.pathExtension.lowercased()
+        return fileExtension == "pdf"
     }
 
     private static func storedSchedulesJSON(from schedules: [StoredSchedule]) -> String {
