@@ -2,6 +2,59 @@ import Foundation
 import CoreGraphics
 import SwiftUI
 
+struct CalendarEventMetadata: Equatable, Hashable {
+    var notes: String = ""
+    var location: String = ""
+    var url: String = ""
+    var tagValue: String = ""
+    var propertyValues: [String: String] = [:]
+
+    nonisolated static let empty = CalendarEventMetadata()
+
+    nonisolated var isEmpty: Bool {
+        notes.isEmpty && location.isEmpty && url.isEmpty && tagValue.isEmpty && propertyValues.isEmpty
+    }
+
+    nonisolated var normalized: CalendarEventMetadata {
+        CalendarEventMetadata(
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            location: location.trimmingCharacters(in: .whitespacesAndNewlines),
+            url: url.trimmingCharacters(in: .whitespacesAndNewlines),
+            tagValue: tagValue.trimmingCharacters(in: .whitespacesAndNewlines),
+            propertyValues: propertyValues.reduce(into: [:]) { result, item in
+                result[item.key] = item.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        )
+    }
+}
+
+struct CalendarEventDraft: Equatable, Hashable {
+    var title: String
+    var startDate: Date
+    var endDate: Date
+    var isAllDay: Bool
+    var metadata: CalendarEventMetadata = .empty
+}
+
+struct CalendarEventMetadataFieldLabels: Equatable, Hashable {
+    let notes: String
+    let location: String
+    let url: String
+    let tag: String
+    let notesIsAvailable: Bool
+    let locationIsAvailable: Bool
+    let urlIsAvailable: Bool
+    let tagIsAvailable: Bool
+    let tagDefaultValue: String
+    let additionalProperties: [NotionPropertyOption]
+    let defaultPropertyValues: [String: String]
+
+    var hasAvailableFields: Bool {
+        notesIsAvailable || locationIsAvailable || urlIsAvailable || tagIsAvailable
+            || !additionalProperties.isEmpty
+    }
+}
+
 struct CalendarDisplayColor: Hashable {
     let red: Double
     let green: Double
@@ -49,6 +102,7 @@ struct CalendarEventRecord: Identifiable, Hashable {
     let isAllDay: Bool
     let startDate: Date?
     let endDate: Date?
+    let metadata: CalendarEventMetadata
     let calendarColor: CalendarDisplayColor?
     let isReadOnly: Bool
 
@@ -60,6 +114,7 @@ struct CalendarEventRecord: Identifiable, Hashable {
         isAllDay: Bool,
         startDate: Date? = nil,
         endDate: Date? = nil,
+        metadata: CalendarEventMetadata = .empty,
         calendarColor: CalendarDisplayColor?,
         isReadOnly: Bool = false
     ) {
@@ -70,6 +125,7 @@ struct CalendarEventRecord: Identifiable, Hashable {
         self.isAllDay = isAllDay
         self.startDate = startDate
         self.endDate = endDate
+        self.metadata = metadata
         self.calendarColor = calendarColor
         self.isReadOnly = isReadOnly
     }

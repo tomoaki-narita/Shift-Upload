@@ -22,6 +22,33 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     }
 }
 
+private struct CompactToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                configuration.isOn.toggle()
+            }
+        } label: {
+            HStack(spacing: 10) {
+                configuration.label
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Capsule()
+                    .fill(configuration.isOn ? Color.accentColor : Color.secondary.opacity(0.45))
+                    .frame(width: 42, height: 24)
+                    .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 20, height: 20)
+                            .padding(2)
+                    }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 #if os(macOS)
 private enum ShiftHubMacSettingsPane: String, CaseIterable, Identifiable {
     case general
@@ -426,8 +453,13 @@ private struct ShiftHubMacSettingsView: View {
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
-                    title: localized("Notion DB"),
-                    detail: localized("用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型・複数選択型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列・タグ列・タグ値を選択してください。")
+                        title: localized("Notion DB"),
+                        detail: localized("用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列を選択してください。必要に応じて、イベントに紐付けるタグ列とタグ値を設定します。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("Notionの場所情報"),
+                    detail: localized("場所情報をNotionに保存する場合は、データベースにリッチテキスト型のプロパティを作成してください。")
                 )
             }
 
@@ -730,6 +762,14 @@ private struct ShiftHubAboutView: View {
                     detail: "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。保存済みイベントの一覧から登録できるほか、トップ画面ではタイトルと開始・終了日時を指定したイベントを登録できます。PDFスキャンと複数選択は同日登録に対応します。"
                 )
                 ShiftHubAboutRow(
+                    title: "Notionプロパティ設定",
+                    detail: "Notionのタイトル列・日時列を選択し、編集可能なプロパティを登録画面に追加できます。セレクト系のデフォルト値は設定画面で指定でき、複数日登録にも使用されます。"
+                )
+                ShiftHubAboutRow(
+                    title: "登録時の文字変換",
+                    detail: "任意の文字列を、登録時に別の文字列へ変換できます。勤務表の休み表示などに利用できます。"
+                )
+                ShiftHubAboutRow(
                     title: "イベント管理",
                     detail: "月を移動し、日付ごとの通常イベントを確認、変更、削除できます。空の日付への新規登録、既存イベントの置き換えにも対応します。"
                 )
@@ -773,8 +813,8 @@ private struct ShiftHubAboutView: View {
                     detail: "PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-17:30です。"
                 )
                 ShiftHubAboutRow(
-                    title: "休の登録",
-                    detail: "「休」は登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。"
+                    title: "休みデータの登録",
+                    detail: "設定した変換元の文字列は、登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。"
                 )
                 ShiftHubAboutRow(
                     title: "日付カードの表示",
@@ -796,8 +836,12 @@ private struct ShiftHubAboutView: View {
                     detail: "用意するもの: Googleアカウント。\n設定方法: Googleログインを選択し、カレンダーへのアクセスを許可して登録先を選択してください。OAuthクライアントの設定はアプリ側で管理します。"
                 )
                 ShiftHubAboutRow(
-                    title: "Notion DB",
-                    detail: "用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型・複数選択型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列・タグ列・タグ値を選択してください。"
+                        title: "Notion DB",
+                        detail: "用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列を選択してください。必要に応じて、イベントに紐付けるタグ列とタグ値を設定します。"
+                )
+                ShiftHubAboutRow(
+                    title: "Notionの場所情報",
+                    detail: "場所情報をNotionに保存する場合は、データベースにリッチテキスト型のプロパティを作成してください。"
                 )
             }
 
@@ -1517,24 +1561,179 @@ struct ShiftDefinitionSettingsView: View {
     }
 }
 
+private enum NotionPropertyRole: String, CaseIterable, Hashable, Identifiable {
+    case unused
+    case title
+    case date
+    case tag
+    case notes
+    case location
+    case url
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .unused:
+            return "使用しない"
+        case .title:
+            return "イベント名"
+        case .date:
+            return "日時"
+        case .tag:
+            return "タグ"
+        case .notes:
+            return "メモ"
+        case .location:
+            return "場所"
+        case .url:
+            return "URL"
+        }
+    }
+
+    var allowsUnused: Bool {
+        switch self {
+        case .notes, .location, .url:
+            return true
+        case .title, .date, .unused:
+            return false
+        case .tag:
+            return true
+        }
+    }
+}
+
+private struct NotionPropertySelectionView: View {
+    let role: NotionPropertyRole
+    let properties: [NotionPropertyOption]
+    let locale: Locale
+    let allowsUnused: Bool
+    @Binding var selection: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            if allowsUnused {
+                Button {
+                    selection = ""
+                    dismiss()
+                } label: {
+                    HStack {
+                        Text("使用しない")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if selection.isEmpty {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .listRowInsets(EdgeInsets())
+            }
+
+            if properties.isEmpty {
+                Text("利用可能な列がありません")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(properties) { property in
+                    Button {
+                        selection = property.name
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text(property.displayName(for: locale))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if selection == property.name {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowInsets(EdgeInsets())
+                }
+            }
+        }
+        .navigationTitle(role.title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct NotionTagValueSelectionView: View {
+    let options: [String]
+    @Binding var selection: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    selection = option
+                    dismiss()
+                } label: {
+                    HStack {
+                        Text(option)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if selection == option {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .listRowInsets(EdgeInsets())
+            }
+        }
+        .navigationTitle("タグ値")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 struct CalendarSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("calendarDestination") private var calendarDestination = CalendarDestination.apple.rawValue
     @AppStorage("appleCalendarIdentifier") private var appleCalendarIdentifier = ""
     @AppStorage("appleCalendarName") private var appleCalendarName = ""
-    @AppStorage("appleRestEventTitle") private var appleRestEventTitle = "休"
+    @AppStorage("restEventSourceTitle") private var restEventSourceTitle = ""
+    @AppStorage("appleRestEventTitle") private var appleRestEventTitle = ""
+    @AppStorage("appleNotesEnabled") private var appleNotesEnabled = true
+    @AppStorage("appleLocationEnabled") private var appleLocationEnabled = true
+    @AppStorage("appleURLEnabled") private var appleURLEnabled = true
     @AppStorage("googleCalendarID") private var googleCalendarID = "primary"
     @AppStorage("googleCalendarName") private var googleCalendarName = ""
-    @AppStorage("googleRestEventTitle") private var googleRestEventTitle = "休"
+    @AppStorage("googleRestEventTitle") private var googleRestEventTitle = ""
     @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
+    @AppStorage("googleNotesEnabled") private var googleNotesEnabled = true
+    @AppStorage("googleLocationEnabled") private var googleLocationEnabled = true
+    @AppStorage("googleURLEnabled") private var googleURLEnabled = true
     @AppStorage("notionDataSourceID") private var notionDataSourceID = ""
     @AppStorage("notionDatabaseName") private var notionDatabaseName = ""
     @AppStorage("notionTitleProperty") private var notionTitleProperty = "tasks"
     @AppStorage("notionDateProperty") private var notionDateProperty = "due date"
     @AppStorage("notionTagProperty") private var notionTagProperty = "tag"
     @AppStorage("notionTagValue") private var notionTagValue = "shift"
-    @AppStorage("notionRestEventTitle") private var notionRestEventTitle = "休"
+    @AppStorage("notionNotesProperty") private var notionNotesProperty = ""
+    @AppStorage("notionLocationProperty") private var notionLocationProperty = ""
+    @AppStorage("notionURLProperty") private var notionURLProperty = ""
+    @AppStorage("notionMetadataMappingVersion") private var notionMetadataMappingVersion = 0
+    @AppStorage("notionFetchedPropertiesJSON") private var notionFetchedPropertiesJSON = ""
+    @AppStorage("notionEnabledPropertyNamesJSON") private var notionEnabledPropertyNamesJSON = ""
+    @AppStorage("notionDefaultPropertyValuesJSON") private var notionDefaultPropertyValuesJSON = ""
+    @AppStorage("notionRestEventTitle") private var notionRestEventTitle = ""
     @StateObject private var appleCalendarProvider = AppleCalendarProvider()
     @StateObject private var googleCalendarProvider = GoogleCalendarProvider()
     @State private var notionToken = ""
@@ -1633,6 +1832,12 @@ struct CalendarSettingsView: View {
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             }
+
+                            calendarMetadataSettings(
+                                notes: $appleNotesEnabled,
+                                location: $appleLocationEnabled,
+                                url: $appleURLEnabled
+                            )
                         }
 
                     case .google:
@@ -1714,6 +1919,12 @@ struct CalendarSettingsView: View {
                             Text("Googleにログインしてカレンダーへのアクセスを許可し、登録先を選択します。")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
+
+                            calendarMetadataSettings(
+                                notes: $googleNotesEnabled,
+                                location: $googleLocationEnabled,
+                                url: $googleURLEnabled
+                            )
                         }
 
                     case .notion:
@@ -1740,90 +1951,33 @@ struct CalendarSettingsView: View {
                             }
 
                             if !notionProperties.isEmpty {
-                                Text("取得した列から選択")
-                                    .font(.callout.weight(.semibold))
-
-                                if !notionProperties.filter({ $0.type == "title" }).isEmpty {
-                                    Picker("タイトル列", selection: $notionTitleProperty) {
-                                        ForEach(notionProperties.filter { $0.type == "title" }) { property in
-                                            Text(property.displayName(for: locale))
-                                                .tag(property.name)
-                                        }
-                                    }
-                                }
-
-                                if !notionProperties.filter({ $0.type == "date" }).isEmpty {
-                                    Picker("日付列", selection: $notionDateProperty) {
-                                        ForEach(notionProperties.filter { $0.type == "date" }) { property in
-                                            Text(property.displayName(for: locale))
-                                                .tag(property.name)
-                                        }
-                                    }
-                                }
-
-                                if !notionProperties.filter({ $0.type == "multi_select" }).isEmpty {
-                                    Picker("タグ列", selection: $notionTagProperty) {
-                                        ForEach(notionProperties.filter { $0.type == "multi_select" }) { property in
-                                            Text(property.displayName(for: locale))
-                                                .tag(property.name)
-                                        }
-                                    }
-
-                                    if let selectedTagProperty = notionProperties.first(where: {
-                                        $0.name == notionTagProperty && $0.type == "multi_select"
-                                    }), !selectedTagProperty.options.isEmpty {
-                                        Picker("タグ値を選択", selection: $notionTagValue) {
-                                            ForEach(selectedTagProperty.options, id: \.self) { option in
-                                                Text(option)
-                                                    .tag(option)
-                                            }
-                                        }
-                                    }
-                                }
+                                notionPropertySelectionList
+                            } else {
+                                notionPropertyHelpText
                             }
-
-                            if !notionPropertyMessage.isEmpty {
-                                Text(notionPropertyMessage)
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Text("データベースID、列名、タグ値はNotion側の設定に合わせて入力してください。Bearer、プロパティの種類、JSON構造はアプリが補完します。対象データベースをNotionの接続に共有し、ページ追加権限を付与してください。")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
                         }
                     }
 
-                    calendarSection("休の登録名", systemImage: "textformat") {
+                    calendarSection("登録時の文字変換", systemImage: "textformat") {
                         switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
                         case .apple:
-                            restEventTitleField($appleRestEventTitle)
+                            restEventTitleField(
+                                source: $restEventSourceTitle,
+                                destination: $appleRestEventTitle
+                            )
                         case .google:
-                            restEventTitleField($googleRestEventTitle)
+                            restEventTitleField(
+                                source: $restEventSourceTitle,
+                                destination: $googleRestEventTitle
+                            )
                         case .notion:
-                            restEventTitleField($notionRestEventTitle)
+                            restEventTitleField(
+                                source: $restEventSourceTitle,
+                                destination: $notionRestEventTitle
+                            )
                         }
                     }
 
-                    calendarSection("登録ルール", systemImage: "checklist") {
-                        switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
-                        case .apple:
-                            ruleRow("休", "時間を指定しない終日イベントとして登録")
-                            ruleRow("イベント", "開始・終了時刻を指定して登録")
-                            ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
-                            ruleRow("日をまたぐイベント", "トップ画面から開始日時と終了日時を指定して登録")
-                        case .notion:
-                            ruleRow("休", "00:00〜23:59の時間付きデータとして登録")
-                            ruleRow("イベント", "日付プロパティに開始・終了時刻を登録")
-                            ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
-                            ruleRow("日をまたぐイベント", "トップ画面から開始日時と終了日時を指定して登録")
-                        case .google:
-                            ruleRow("休", "時間を指定しない終日イベントとして登録")
-                            ruleRow("イベント", "開始・終了時刻を指定して登録")
-                            ruleRow("複合イベント", "登録済みのイベント情報から時間を参照")
-                            ruleRow("日をまたぐイベント", "トップ画面から開始日時と終了日時を指定して登録")
-                        }
-                    }
                 }
                 .padding(24)
             }
@@ -1893,14 +2047,518 @@ struct CalendarSettingsView: View {
         }
     }
 
-    private func restEventTitleField(_ title: Binding<String>) -> some View {
-        HStack(spacing: 8) {
-            Text("休 →")
+    private func restEventTitleField(
+        source: Binding<String>,
+        destination: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                TextField("休", text: source, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                Text("→")
+                    .foregroundStyle(.secondary)
+                TextField("off", text: destination, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            Text("任意の文字列を、登録時に別の文字列へ変換できます。")
+                .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField("登録名（例: off）", text: title)
-                .textFieldStyle(.roundedBorder)
         }
-        .help("勤務表の「休」を、この名前で登録します。")
+        .help("左の文字列を、右の文字列に変換して登録します。")
+    }
+
+    private func calendarMetadataSettings(
+        notes: Binding<Bool>,
+        location: Binding<Bool>,
+        url: Binding<Bool>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+                .padding(.vertical, 4)
+
+            Text("登録時に入力するプロパティ")
+                .font(.callout.weight(.semibold))
+
+            Toggle("メモ・説明", isOn: notes)
+                .tint(.accentColor)
+                .toggleStyle(CompactToggleStyle())
+            Divider()
+                .padding(.vertical, 5)
+            Toggle("場所", isOn: location)
+                .tint(.accentColor)
+                .toggleStyle(CompactToggleStyle())
+            Divider()
+                .padding(.vertical, 5)
+            Toggle("URL", isOn: url)
+                .tint(.accentColor)
+                .toggleStyle(CompactToggleStyle())
+
+            Text("ONにした項目を登録・編集画面で入力できます。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var notionPropertySelectionList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("取得したプロパティ設定")
+                    .font(.callout.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach([NotionPropertyRole.title, .date]) { role in
+                        notionRoleRow(role)
+
+                        if role == .title {
+                            notionPropertyDivider
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+                .background(
+                    notionFixedPropertyBackground,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+                .padding(.horizontal, 10)
+
+                if notionTagProperties.count > 1 {
+                    notionPropertyDivider
+                    notionIdentifierTagRow
+                }
+
+                ForEach(notionEditableProperties) { property in
+                    if property.id != notionEditableProperties.first?.id || notionTagProperties.count > 1 {
+                        notionPropertyDivider
+                    }
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Toggle(isOn: notionPropertyEnabledBinding(for: property)) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(property.displayName(for: locale))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Text(propertyTypeDescription(property.type))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tint(.accentColor)
+                        .toggleStyle(CompactToggleStyle())
+
+                        if notionEnabledPropertyNames.contains(property.name),
+                           ["multi_select", "select"].contains(property.type) {
+                            notionDefaultValuePicker(for: property)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                }
+            }
+
+            .background(
+                notionPropertyPanelBackground,
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+
+            notionPropertyHelpText
+        }
+    }
+
+    private var notionPropertyDivider: some View {
+        Divider()
+            .padding(.horizontal, 16)
+    }
+
+    private var notionFixedPropertyBackground: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(0.06)
+            : Color.black.opacity(0.045)
+    }
+
+    private var notionPropertyPanelBackground: Color {
+        colorScheme == .dark
+            ? Color.black.opacity(0.28)
+            : Color.white.opacity(0.72)
+    }
+
+    private var notionEditableProperties: [NotionPropertyOption] {
+        notionProperties.filter {
+            ["multi_select", "select", "rich_text", "url"].contains($0.type)
+        }
+    }
+
+    private var notionTagProperties: [NotionPropertyOption] {
+        notionProperties.filter { $0.type == "multi_select" }
+    }
+
+    private var notionIdentifierTagRow: some View {
+#if os(iOS)
+        NavigationLink {
+            NotionPropertySelectionView(
+                role: .tag,
+                properties: notionProperties.filter { $0.type == "multi_select" },
+                locale: locale,
+                allowsUnused: true,
+                selection: $notionTagProperty
+            )
+        } label: {
+            notionValueRow(
+                title: "イベントに紐付けるタグ",
+                value: notionPropertyDisplayName(for: .tag)
+            )
+        }
+        .tint(.primary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+#else
+        Picker(selection: $notionTagProperty) {
+            Text("使用しない")
+                .tag("")
+            ForEach(notionProperties.filter { $0.type == "multi_select" }) { property in
+                Text(property.displayName(for: locale))
+                    .tag(property.name)
+            }
+        } label: {
+            notionValueRow(
+                title: "イベントに紐付けるタグ",
+                value: notionPropertyDisplayName(for: .tag)
+            )
+        }
+        .pickerStyle(.menu)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+#endif
+    }
+
+    private func propertyTypeDescription(_ type: String) -> String {
+        let key: String
+        switch type {
+        case "multi_select":
+            key = "タグ値を選択"
+        case "select":
+            key = "選択肢から選択"
+        case "rich_text":
+            key = "テキストを入力"
+        case "url":
+            key = "URLを入力"
+        default:
+            key = type
+        }
+
+        return ShiftHubLocalization.string(key, locale: locale)
+    }
+
+    private func notionPropertyEnabledBinding(for property: NotionPropertyOption) -> Binding<Bool> {
+        Binding(
+            get: { notionEnabledPropertyNames.contains(property.name) },
+            set: { isEnabled in
+                var names = notionEnabledPropertyNames
+                if isEnabled {
+                    if !names.contains(property.name) {
+                        names.append(property.name)
+                    }
+                } else {
+                    names.removeAll { $0 == property.name }
+                }
+                notionEnabledPropertyNamesJSON = encodePropertyNames(names)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func notionDefaultValuePicker(for property: NotionPropertyOption) -> some View {
+        if property.options.isEmpty {
+            Text("選択肢がありません")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 6)
+        } else {
+            CalHubSegmentedControl(
+                options: [""] + property.options,
+                selection: notionDefaultPropertyValueBinding(for: property),
+                animationDuration: 0.16
+            )
+            .accessibilityLabel("デフォルト値")
+            .padding(.top, 8)
+        }
+    }
+
+    private func notionDefaultPropertyValueBinding(for property: NotionPropertyOption) -> Binding<String> {
+        Binding(
+            get: { notionDefaultPropertyValues[property.name] ?? "" },
+            set: { value in
+                var values = notionDefaultPropertyValues
+                values[property.name] = value
+                notionDefaultPropertyValuesJSON = encodePropertyValues(values)
+                if property.type == "multi_select", property.name == notionTagProperty {
+                    notionTagValue = value
+                }
+            }
+        )
+    }
+
+    private var notionEnabledPropertyNames: [String] {
+        decodePropertyNames(notionEnabledPropertyNamesJSON)
+    }
+
+    private func decodePropertyNames(_ json: String) -> [String] {
+        guard let data = json.data(using: .utf8),
+              let names = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return names
+    }
+
+    private func encodePropertyNames(_ names: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(names),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
+    }
+
+    private var notionDefaultPropertyValues: [String: String] {
+        guard let data = notionDefaultPropertyValuesJSON.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return values
+    }
+
+    private func encodePropertyValues(_ values: [String: String]) -> String {
+        guard let data = try? JSONEncoder().encode(values),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
+    }
+
+    @ViewBuilder
+    private func notionRoleRow(_ role: NotionPropertyRole) -> some View {
+        let properties = notionProperties(for: role)
+#if os(iOS)
+        NavigationLink {
+            NotionPropertySelectionView(
+                role: role,
+                properties: properties,
+                locale: locale,
+                allowsUnused: role.allowsUnused,
+                selection: notionPropertySelectionBinding(for: role)
+            )
+        } label: {
+            notionValueRow(
+                title: role.title,
+                value: notionPropertyDisplayName(for: role)
+            )
+        }
+        .tint(.primary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+#else
+        Picker(selection: notionPropertySelectionBinding(for: role)) {
+            if role.allowsUnused {
+                Text("使用しない")
+                    .tag("")
+            }
+            ForEach(properties) { property in
+                Text(property.displayName(for: locale))
+                    .tag(property.name)
+            }
+        } label: {
+            notionValueRow(
+                title: role.title,
+                value: notionPropertyDisplayName(for: role)
+            )
+        }
+        .pickerStyle(.menu)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+#endif
+    }
+
+    private func notionValueRow(
+        title: LocalizedStringKey,
+        value: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+
+            Spacer(minLength: 12)
+
+            Text(value)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private func notionProperties(for role: NotionPropertyRole) -> [NotionPropertyOption] {
+        let supportedType: String
+        switch role {
+        case .title:
+            supportedType = "title"
+        case .date:
+            supportedType = "date"
+        case .tag:
+            supportedType = "multi_select"
+        case .notes, .location:
+            supportedType = "rich_text"
+        case .url:
+            supportedType = "url"
+        case .unused:
+            return []
+        }
+
+        return notionProperties.filter { $0.type == supportedType }
+    }
+
+    private func notionPropertyName(for role: NotionPropertyRole) -> String {
+        let configuredName: String
+        switch role {
+        case .title:
+            configuredName = notionTitleProperty
+        case .date:
+            configuredName = notionDateProperty
+        case .tag:
+            configuredName = notionTagProperty
+        case .notes:
+            configuredName = notionNotesProperty
+        case .location:
+            configuredName = notionLocationProperty
+        case .url:
+            configuredName = notionURLProperty
+        case .unused:
+            return ""
+        }
+
+        guard notionProperties.isEmpty || notionProperties(for: role).contains(where: {
+            $0.name == configuredName
+        }) else {
+            return ""
+        }
+        return configuredName
+    }
+
+    private func notionPropertyDisplayName(for role: NotionPropertyRole) -> String {
+        let propertyName = notionPropertyName(for: role)
+        guard let property = notionProperties.first(where: { $0.name == propertyName }) else {
+            return ShiftHubLocalization.string(
+                role.allowsUnused ? "使用しない" : "未設定",
+                locale: locale
+            )
+        }
+        return property.displayName(for: locale)
+    }
+
+    private func notionPropertySelectionBinding(for role: NotionPropertyRole) -> Binding<String> {
+        Binding(
+            get: {
+                notionPropertyName(for: role)
+            },
+            set: { propertyName in
+                if propertyName.isEmpty {
+                    clearNotionProperty(for: role)
+                } else {
+                    setNotionPropertyRole(role, for: propertyName)
+                }
+            }
+        )
+    }
+
+    private func clearNotionProperty(for role: NotionPropertyRole) {
+        switch role {
+        case .title:
+            notionTitleProperty = ""
+        case .date:
+            notionDateProperty = ""
+        case .tag:
+            notionTagProperty = ""
+        case .notes:
+            notionNotesProperty = ""
+        case .location:
+            notionLocationProperty = ""
+        case .url:
+            notionURLProperty = ""
+        case .unused:
+            break
+        }
+    }
+
+    private func setNotionPropertyRole(
+        _ role: NotionPropertyRole,
+        for propertyName: String
+    ) {
+        switch role {
+        case .unused:
+            break
+        case .title:
+            notionTitleProperty = ""
+        case .date:
+            notionDateProperty = ""
+        case .tag:
+            notionTagProperty = ""
+        case .notes:
+            notionNotesProperty = ""
+        case .location:
+            notionLocationProperty = ""
+        case .url:
+            notionURLProperty = ""
+        }
+
+        if notionTitleProperty == propertyName { notionTitleProperty = "" }
+        if notionDateProperty == propertyName { notionDateProperty = "" }
+        if notionTagProperty == propertyName { notionTagProperty = "" }
+        if notionNotesProperty == propertyName { notionNotesProperty = "" }
+        if notionLocationProperty == propertyName { notionLocationProperty = "" }
+        if notionURLProperty == propertyName { notionURLProperty = "" }
+
+        switch role {
+        case .unused:
+            break
+        case .title:
+            notionTitleProperty = propertyName
+        case .date:
+            notionDateProperty = propertyName
+        case .tag:
+            notionTagProperty = propertyName
+            if let property = notionProperties.first(where: { $0.name == propertyName }) {
+                if property.options.contains(notionTagValue) {
+                    ensureNotionTagDefaultValue()
+                } else {
+                    notionTagValue = property.options.first ?? ""
+                    ensureNotionTagDefaultValue()
+                }
+            }
+        case .notes:
+            notionNotesProperty = propertyName
+        case .location:
+            notionLocationProperty = propertyName
+        case .url:
+            notionURLProperty = propertyName
+        }
+    }
+
+    private var notionPropertyHelpText: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !notionPropertyMessage.isEmpty {
+                Text(notionPropertyMessage)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("データベースIDを入力するとプロパティを取得します。Notionで対象データベースにインテグレーションを追加してください。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func calendarSection<Content: View>(
@@ -1918,17 +2576,6 @@ struct CalendarSettingsView: View {
                 .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func ruleRow(_ name: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(name)
-                .font(.body.weight(.semibold))
-
-            Text(detail)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.bottom, 8)
     }
 
     private func updateAppleCalendarName() {
@@ -1968,18 +2615,63 @@ struct CalendarSettingsView: View {
         "\(notionToken)|\(notionDataSourceID)"
     }
 
+    private func applyAutomaticNotionPropertySelections(
+        from properties: [NotionPropertyOption]
+    ) {
+        let allowAutomaticSelection = notionMetadataMappingVersion < 1
+        if allowAutomaticSelection {
+            notionLocationProperty = ""
+            notionMetadataMappingVersion = 1
+        }
+
+        let selection = NotionSchemaClient.automaticMetadataPropertySelection(
+            from: properties,
+            notes: notionNotesProperty,
+            location: notionLocationProperty,
+            url: notionURLProperty,
+            allowAutomaticSelection: allowAutomaticSelection
+        )
+        notionNotesProperty = selection.notes
+        notionLocationProperty = selection.location
+        notionURLProperty = selection.url
+    }
+
+    private func ensureNotionTagDefaultValue() {
+        guard !notionTagProperty.isEmpty,
+              !notionTagValue.isEmpty else {
+            return
+        }
+
+        var values = notionDefaultPropertyValues
+        guard values[notionTagProperty] == nil else { return }
+        values[notionTagProperty] = notionTagValue
+        notionDefaultPropertyValuesJSON = encodePropertyValues(values)
+    }
+
     private var calendarSettingsSyncKey: [String] {
         [
             calendarDestination,
             appleCalendarIdentifier,
+            restEventSourceTitle,
             appleRestEventTitle,
+            appleNotesEnabled.description,
+            appleLocationEnabled.description,
+            appleURLEnabled.description,
             googleCalendarID,
             googleRestEventTitle,
+            googleNotesEnabled.description,
+            googleLocationEnabled.description,
+            googleURLEnabled.description,
             notionDataSourceID,
             notionTitleProperty,
             notionDateProperty,
             notionTagProperty,
             notionTagValue,
+            notionNotesProperty,
+            notionLocationProperty,
+            notionURLProperty,
+            notionEnabledPropertyNamesJSON,
+            notionDefaultPropertyValuesJSON,
             notionRestEventTitle
         ]
     }
@@ -2013,16 +2705,55 @@ struct CalendarSettingsView: View {
             try Task.checkCancellation()
             notionDatabaseName = schema.title
             notionProperties = schema.properties
-            notionPropertyMessage = schema.properties.isEmpty
-                ? ShiftHubLocalization.string(
+            let tagProperties = schema.properties.filter { $0.type == "multi_select" }
+            if tagProperties.isEmpty {
+                notionTagProperty = ""
+                notionTagValue = ""
+            } else if tagProperties.count == 1 {
+                notionTagProperty = tagProperties[0].name
+                if !tagProperties[0].options.contains(notionTagValue) {
+                    notionTagValue = tagProperties[0].options.first ?? ""
+                }
+            } else if !tagProperties.contains(where: { $0.name == notionTagProperty }) {
+                notionTagProperty = ""
+                notionTagValue = ""
+            }
+            ensureNotionTagDefaultValue()
+            if let data = try? JSONEncoder().encode(schema.properties),
+               let json = String(data: data, encoding: .utf8) {
+                notionFetchedPropertiesJSON = json
+            }
+            applyAutomaticNotionPropertySelections(from: schema.properties)
+            if notionEnabledPropertyNames.isEmpty {
+                let legacyNames = [
+                    notionTagProperty,
+                    notionNotesProperty,
+                    notionLocationProperty,
+                    notionURLProperty
+                ]
+                let availableNames = schema.properties
+                    .filter { ["multi_select", "select", "rich_text", "url"].contains($0.type) }
+                    .map(\.name)
+                let migratedNames = legacyNames.filter { availableNames.contains($0) }
+                notionEnabledPropertyNamesJSON = encodePropertyNames(migratedNames)
+            }
+            if schema.properties.isEmpty {
+                notionPropertyMessage = ShiftHubLocalization.string(
                     "取得できる列がありませんでした。Notionの接続権限を確認してください。",
                     locale: locale
                 )
-                : ShiftHubLocalization.format(
-                    "%@個の列を取得しました。",
+            } else {
+                let configurablePropertyCount = schema.properties.filter {
+                    ["multi_select", "select", "rich_text", "url"].contains($0.type)
+                }.count
+                notionPropertyMessage = ShiftHubLocalization.format(
+                    "「%@」から%@件のプロパティを取得しました。\n設定可能なプロパティ: %@件",
                     locale: locale,
-                    arguments: String(schema.properties.count)
+                    arguments: schema.title,
+                    String(schema.properties.count),
+                    String(configurablePropertyCount)
                 )
+            }
         } catch is CancellationError {
             return
         } catch {

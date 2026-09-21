@@ -7,16 +7,149 @@ struct ShiftHubCloudSettings: Codable, Equatable {
     var shiftDefinitionsJSON: String
     var calendarDestination: String
     var appleCalendarIdentifier: String
+    var restEventSourceTitle: String
     var appleRestEventTitle: String
+    var appleNotesEnabled: Bool
+    var appleLocationEnabled: Bool
+    var appleURLEnabled: Bool
     var googleCalendarClientID: String
     var googleCalendarID: String
     var googleRestEventTitle: String
+    var googleShowJapaneseHolidays: Bool
+    var googleNotesEnabled: Bool
+    var googleLocationEnabled: Bool
+    var googleURLEnabled: Bool
     var notionDataSourceID: String
+    var notionDatabaseName: String
     var notionTitleProperty: String
     var notionDateProperty: String
     var notionTagProperty: String
     var notionTagValue: String
+    var notionNotesProperty: String
+    var notionLocationProperty: String
+    var notionURLProperty: String
+    var notionMetadataMappingVersion: Int
+    var notionFetchedPropertiesJSON: String
+    var notionEnabledPropertyNamesJSON: String
+    var notionDefaultPropertyValuesJSON: String
     var notionRestEventTitle: String
+
+    init(
+        appLanguage: String,
+        workerName: String,
+        shiftDefinitionsJSON: String,
+        calendarDestination: String,
+        appleCalendarIdentifier: String,
+        appleRestEventTitle: String,
+        googleCalendarClientID: String,
+        googleCalendarID: String,
+        googleRestEventTitle: String,
+        googleShowJapaneseHolidays: Bool = false,
+        notionDataSourceID: String,
+        notionDatabaseName: String = "",
+        notionTitleProperty: String,
+        notionDateProperty: String,
+        notionTagProperty: String,
+        notionTagValue: String,
+        notionNotesProperty: String = "",
+        notionLocationProperty: String = "",
+        notionURLProperty: String = "",
+        notionRestEventTitle: String,
+        restEventSourceTitle: String = "",
+        notionMetadataMappingVersion: Int = 0,
+        notionFetchedPropertiesJSON: String = "",
+        notionEnabledPropertyNamesJSON: String = "",
+        notionDefaultPropertyValuesJSON: String = "",
+        appleNotesEnabled: Bool = true,
+        appleLocationEnabled: Bool = true,
+        appleURLEnabled: Bool = true,
+        googleNotesEnabled: Bool = true,
+        googleLocationEnabled: Bool = true,
+        googleURLEnabled: Bool = true
+    ) {
+        self.appLanguage = appLanguage
+        self.workerName = workerName
+        self.shiftDefinitionsJSON = shiftDefinitionsJSON
+        self.calendarDestination = calendarDestination
+        self.appleCalendarIdentifier = appleCalendarIdentifier
+        self.restEventSourceTitle = restEventSourceTitle
+        self.appleRestEventTitle = appleRestEventTitle
+        self.appleNotesEnabled = appleNotesEnabled
+        self.appleLocationEnabled = appleLocationEnabled
+        self.appleURLEnabled = appleURLEnabled
+        self.googleCalendarClientID = googleCalendarClientID
+        self.googleCalendarID = googleCalendarID
+        self.googleRestEventTitle = googleRestEventTitle
+        self.googleShowJapaneseHolidays = googleShowJapaneseHolidays
+        self.googleNotesEnabled = googleNotesEnabled
+        self.googleLocationEnabled = googleLocationEnabled
+        self.googleURLEnabled = googleURLEnabled
+        self.notionDataSourceID = notionDataSourceID
+        self.notionDatabaseName = notionDatabaseName
+        self.notionTitleProperty = notionTitleProperty
+        self.notionDateProperty = notionDateProperty
+        self.notionTagProperty = notionTagProperty
+        self.notionTagValue = notionTagValue
+        self.notionNotesProperty = notionNotesProperty
+        self.notionLocationProperty = notionLocationProperty
+        self.notionURLProperty = notionURLProperty
+        self.notionMetadataMappingVersion = notionMetadataMappingVersion
+        self.notionFetchedPropertiesJSON = notionFetchedPropertiesJSON
+        self.notionEnabledPropertyNamesJSON = notionEnabledPropertyNamesJSON
+        self.notionDefaultPropertyValuesJSON = notionDefaultPropertyValuesJSON
+        self.notionRestEventTitle = notionRestEventTitle
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case appLanguage, workerName, shiftDefinitionsJSON, calendarDestination
+        case appleCalendarIdentifier, restEventSourceTitle, appleRestEventTitle
+        case appleNotesEnabled, appleLocationEnabled, appleURLEnabled, googleCalendarClientID
+        case googleCalendarID, googleRestEventTitle, googleShowJapaneseHolidays
+        case googleNotesEnabled, googleLocationEnabled, googleURLEnabled
+        case notionDataSourceID, notionDatabaseName
+        case notionTitleProperty, notionDateProperty, notionTagProperty, notionTagValue
+        case notionNotesProperty, notionLocationProperty, notionURLProperty
+        case notionMetadataMappingVersion, notionFetchedPropertiesJSON
+        case notionEnabledPropertyNamesJSON, notionDefaultPropertyValuesJSON
+        case notionRestEventTitle
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            appLanguage: try container.decode(String.self, forKey: .appLanguage),
+            workerName: try container.decode(String.self, forKey: .workerName),
+            shiftDefinitionsJSON: try container.decode(String.self, forKey: .shiftDefinitionsJSON),
+            calendarDestination: try container.decode(String.self, forKey: .calendarDestination),
+            appleCalendarIdentifier: try container.decode(String.self, forKey: .appleCalendarIdentifier),
+            appleRestEventTitle: try container.decode(String.self, forKey: .appleRestEventTitle),
+            googleCalendarClientID: try container.decode(String.self, forKey: .googleCalendarClientID),
+            googleCalendarID: try container.decode(String.self, forKey: .googleCalendarID),
+            googleRestEventTitle: try container.decode(String.self, forKey: .googleRestEventTitle),
+            googleShowJapaneseHolidays: try container.decodeIfPresent(Bool.self, forKey: .googleShowJapaneseHolidays) ?? false,
+            notionDataSourceID: try container.decode(String.self, forKey: .notionDataSourceID),
+            notionDatabaseName: try container.decodeIfPresent(String.self, forKey: .notionDatabaseName) ?? "",
+            notionTitleProperty: try container.decode(String.self, forKey: .notionTitleProperty),
+            notionDateProperty: try container.decode(String.self, forKey: .notionDateProperty),
+            notionTagProperty: try container.decode(String.self, forKey: .notionTagProperty),
+            notionTagValue: try container.decode(String.self, forKey: .notionTagValue),
+            notionNotesProperty: try container.decodeIfPresent(String.self, forKey: .notionNotesProperty) ?? "",
+            notionLocationProperty: try container.decodeIfPresent(String.self, forKey: .notionLocationProperty) ?? "",
+            notionURLProperty: try container.decodeIfPresent(String.self, forKey: .notionURLProperty) ?? "",
+            notionRestEventTitle: try container.decode(String.self, forKey: .notionRestEventTitle),
+            restEventSourceTitle: try container.decodeIfPresent(String.self, forKey: .restEventSourceTitle) ?? "",
+            notionMetadataMappingVersion: try container.decodeIfPresent(Int.self, forKey: .notionMetadataMappingVersion) ?? 0,
+            notionFetchedPropertiesJSON: try container.decodeIfPresent(String.self, forKey: .notionFetchedPropertiesJSON) ?? "",
+            notionEnabledPropertyNamesJSON: try container.decodeIfPresent(String.self, forKey: .notionEnabledPropertyNamesJSON) ?? "",
+            notionDefaultPropertyValuesJSON: try container.decodeIfPresent(String.self, forKey: .notionDefaultPropertyValuesJSON) ?? "",
+            appleNotesEnabled: try container.decodeIfPresent(Bool.self, forKey: .appleNotesEnabled) ?? true,
+            appleLocationEnabled: try container.decodeIfPresent(Bool.self, forKey: .appleLocationEnabled) ?? true,
+            appleURLEnabled: try container.decodeIfPresent(Bool.self, forKey: .appleURLEnabled) ?? true,
+            googleNotesEnabled: try container.decodeIfPresent(Bool.self, forKey: .googleNotesEnabled) ?? true,
+            googleLocationEnabled: try container.decodeIfPresent(Bool.self, forKey: .googleLocationEnabled) ?? true,
+            googleURLEnabled: try container.decodeIfPresent(Bool.self, forKey: .googleURLEnabled) ?? true
+        )
+    }
 }
 
 enum ShiftHubCloudSync {

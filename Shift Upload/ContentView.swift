@@ -107,17 +107,32 @@ struct ContentView: View {
     @AppStorage("calendarDestination") private var calendarDestination = CalendarDestination.apple.rawValue
     @AppStorage("appleCalendarIdentifier") private var appleCalendarIdentifier = ""
     @AppStorage("appleCalendarName") private var appleCalendarName = ""
-    @AppStorage("appleRestEventTitle") private var appleRestEventTitle = "休"
+    @AppStorage("restEventSourceTitle") private var restEventSourceTitle = ""
+    @AppStorage("appleRestEventTitle") private var appleRestEventTitle = ""
+    @AppStorage("appleNotesEnabled") private var appleNotesEnabled = true
+    @AppStorage("appleLocationEnabled") private var appleLocationEnabled = true
+    @AppStorage("appleURLEnabled") private var appleURLEnabled = true
     @AppStorage("googleCalendarID") private var googleCalendarID = "primary"
     @AppStorage("googleCalendarName") private var googleCalendarName = ""
-    @AppStorage("googleRestEventTitle") private var googleRestEventTitle = "休"
+    @AppStorage("googleRestEventTitle") private var googleRestEventTitle = ""
+    @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
+    @AppStorage("googleNotesEnabled") private var googleNotesEnabled = true
+    @AppStorage("googleLocationEnabled") private var googleLocationEnabled = true
+    @AppStorage("googleURLEnabled") private var googleURLEnabled = true
     @AppStorage("notionDataSourceID") private var notionDataSourceID = ""
     @AppStorage("notionDatabaseName") private var notionDatabaseName = ""
     @AppStorage("notionTitleProperty") private var notionTitleProperty = "tasks"
     @AppStorage("notionDateProperty") private var notionDateProperty = "due date"
     @AppStorage("notionTagProperty") private var notionTagProperty = "tag"
     @AppStorage("notionTagValue") private var notionTagValue = "shift"
-    @AppStorage("notionRestEventTitle") private var notionRestEventTitle = "休"
+    @AppStorage("notionNotesProperty") private var notionNotesProperty = ""
+    @AppStorage("notionLocationProperty") private var notionLocationProperty = ""
+    @AppStorage("notionURLProperty") private var notionURLProperty = ""
+    @AppStorage("notionMetadataMappingVersion") private var notionMetadataMappingVersion = 0
+    @AppStorage("notionFetchedPropertiesJSON") private var notionFetchedPropertiesJSON = ""
+    @AppStorage("notionEnabledPropertyNamesJSON") private var notionEnabledPropertyNamesJSON = ""
+    @AppStorage("notionDefaultPropertyValuesJSON") private var notionDefaultPropertyValuesJSON = ""
+    @AppStorage("notionRestEventTitle") private var notionRestEventTitle = ""
     @AppStorage("storedSchedulesJSON") private var storedSchedulesJSON = ""
     @AppStorage("iCloudSyncEnabled") private var isCloudSyncEnabled = true
 
@@ -263,6 +278,9 @@ struct ContentView: View {
                 syncCloudSettings()
             }
         }
+        .task(id: notionMetadataDiscoveryKey) {
+            await discoverNotionMetadataPropertiesIfNeeded()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .shiftHubScanStoredSchedule)) { notification in
             guard let schedule = notification.object as? StoredSchedule else { return }
             isSavedScheduleListPresented = false
@@ -282,6 +300,7 @@ struct ContentView: View {
             RegistrationPreviewView(
                 preview: preview,
                 locale: locale,
+                metadataFieldLabels: metadataFieldLabels,
                 onRegister: confirmPendingRegistration
             )
         }
@@ -312,6 +331,180 @@ struct ContentView: View {
         ShiftHubLocalization.format(key, locale: locale, arguments: arguments)
     }
 
+    private var metadataFieldLabels: CalendarEventMetadataFieldLabels {
+        let fallback = CalendarEventMetadataFieldLabels(
+            notes: localizedMessage("メモ・説明"),
+            location: localizedMessage("場所"),
+            url: localizedMessage("URL"),
+            tag: localizedMessage("タグ値"),
+            notesIsAvailable: CalendarDestination(rawValue: calendarDestination) == .apple
+                ? appleNotesEnabled
+                : googleNotesEnabled,
+            locationIsAvailable: CalendarDestination(rawValue: calendarDestination) == .apple
+                ? appleLocationEnabled
+                : googleLocationEnabled,
+            urlIsAvailable: CalendarDestination(rawValue: calendarDestination) == .apple
+                ? appleURLEnabled
+                : googleURLEnabled,
+            tagIsAvailable: false,
+            tagDefaultValue: "",
+            additionalProperties: [],
+            defaultPropertyValues: [:]
+        )
+
+        guard CalendarDestination(rawValue: calendarDestination) == .notion else {
+            return fallback
+        }
+
+        let dynamicProperties = notionRegistrationProperties
+        let usesDynamicProperties = !dynamicProperties.isEmpty || !notionFetchedPropertiesJSON.isEmpty
+        if usesDynamicProperties {
+            return CalendarEventMetadataFieldLabels(
+                notes: "",
+                location: "",
+                url: "",
+                tag: "",
+                notesIsAvailable: false,
+                locationIsAvailable: false,
+                urlIsAvailable: false,
+                tagIsAvailable: false,
+                tagDefaultValue: "",
+                additionalProperties: dynamicProperties,
+                defaultPropertyValues: notionDefaultPropertyValues
+            )
+        }
+
+        return CalendarEventMetadataFieldLabels(
+            notes: notionNotesProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? fallback.notes
+                : notionNotesProperty,
+            location: notionLocationProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? fallback.location
+                : notionLocationProperty,
+            url: notionURLProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? fallback.url
+                : notionURLProperty,
+            tag: notionTagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? fallback.tag
+                : notionTagProperty,
+            notesIsAvailable: !notionNotesProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            locationIsAvailable: !notionLocationProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            urlIsAvailable: !notionURLProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            tagIsAvailable: !notionTagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            tagDefaultValue: effectiveNotionTagValue,
+            additionalProperties: [],
+            defaultPropertyValues: notionDefaultPropertyValues
+        )
+    }
+
+    private var notionRegistrationProperties: [NotionPropertyOption] {
+        guard let data = notionFetchedPropertiesJSON.data(using: .utf8),
+              let properties = try? JSONDecoder().decode([NotionPropertyOption].self, from: data) else {
+            return []
+        }
+
+        let enabledNames = decodeNotionPropertyNames(notionEnabledPropertyNamesJSON)
+        return properties.filter {
+            enabledNames.contains($0.name)
+                && ["multi_select", "select", "rich_text", "url"].contains($0.type)
+        }
+    }
+
+    private func decodeNotionPropertyNames(_ json: String) -> [String] {
+        guard let data = json.data(using: .utf8),
+              let names = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return names
+    }
+
+    private var notionDefaultPropertyValues: [String: String] {
+        guard let data = notionDefaultPropertyValuesJSON.data(using: .utf8),
+              var values = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return notionTagProperty.isEmpty || notionTagValue.isEmpty
+                ? [:]
+                : [notionTagProperty: notionTagValue]
+        }
+
+        if !notionTagProperty.isEmpty,
+           !notionTagValue.isEmpty,
+           values[notionTagProperty] == nil {
+            values[notionTagProperty] = notionTagValue
+        }
+        return values
+    }
+
+    private var effectiveNotionTagValue: String {
+        notionDefaultPropertyValues[notionTagProperty] ?? notionTagValue
+    }
+
+    private var notionMetadataDiscoveryKey: String {
+        guard CalendarDestination(rawValue: calendarDestination) == .notion else {
+            return ""
+        }
+
+        return notionDataSourceID
+    }
+
+    private func discoverNotionMetadataPropertiesIfNeeded() async {
+        guard CalendarDestination(rawValue: calendarDestination) == .notion,
+              let token = KeychainStore.string(for: "notion-access-token") else {
+            return
+        }
+
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDataSourceID = notionDataSourceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedToken.count >= 8, trimmedDataSourceID.count >= 8 else { return }
+
+        do {
+            let schema = try await NotionSchemaClient().fetchSchema(
+                token: trimmedToken,
+                databaseID: trimmedDataSourceID,
+                localeIdentifier: locale.identifier
+            )
+            let allowAutomaticSelection = notionMetadataMappingVersion < 1
+            if allowAutomaticSelection {
+                notionLocationProperty = ""
+                notionMetadataMappingVersion = 1
+            }
+
+            let selection = NotionSchemaClient.automaticMetadataPropertySelection(
+                from: schema.properties,
+                notes: notionNotesProperty,
+                location: notionLocationProperty,
+                url: notionURLProperty,
+                allowAutomaticSelection: allowAutomaticSelection
+            )
+            notionNotesProperty = selection.notes
+            notionLocationProperty = selection.location
+            notionURLProperty = selection.url
+
+            if let data = try? JSONEncoder().encode(schema.properties),
+               let json = String(data: data, encoding: .utf8) {
+                notionFetchedPropertiesJSON = json
+            }
+
+            if decodeNotionPropertyNames(notionEnabledPropertyNamesJSON).isEmpty {
+                let legacyNames = [
+                    notionTagProperty,
+                    notionNotesProperty,
+                    notionLocationProperty,
+                    notionURLProperty
+                ]
+                let availableNames = schema.properties
+                    .filter { ["multi_select", "select", "rich_text", "url"].contains($0.type) }
+                    .map(\.name)
+                let migratedNames = legacyNames.filter { availableNames.contains($0) }
+                if let data = try? JSONEncoder().encode(migratedNames),
+                   let json = String(data: data, encoding: .utf8) {
+                    notionEnabledPropertyNamesJSON = json
+                }
+            }
+        } catch {
+            // Settings shows the detailed schema error; the home screen keeps its fallback labels.
+        }
+    }
+
     private var loadedScheduleClearedMessageKey: String? {
         let key = "勤務表の読み込みを解除しました。"
         let englishValue = ShiftHubLocalization.string(key, locale: Locale(identifier: "en"))
@@ -337,7 +530,12 @@ struct ContentView: View {
                 notionDateProperty: notionDateProperty,
                 notionTitleProperty: notionTitleProperty,
                 notionTagProperty: notionTagProperty,
-                notionTagValue: notionTagValue,
+                notionTagValue: effectiveNotionTagValue,
+                notionNotesProperty: notionNotesProperty,
+                notionLocationProperty: notionLocationProperty,
+                notionURLProperty: notionURLProperty,
+                notionMetadataProperties: notionRegistrationProperties,
+                metadataFieldLabels: metadataFieldLabels,
                 definitions: shiftDefinitions,
                 onRegisterShift: { yearMonth, day, title, completion in
                     registerSingleShift(
@@ -347,12 +545,9 @@ struct ContentView: View {
                         onComplete: completion.call
                     )
                 },
-                onRegisterDateTimeEvent: { title, startDate, endDate, isAllDay, completion in
+                onRegisterDateTimeEvent: { draft, completion in
                     registerDateTimeEvent(
-                        title: title,
-                        startDate: startDate,
-                        endDate: endDate,
-                        isAllDay: isAllDay,
+                        draft: draft,
                         onComplete: completion.call
                     )
                 },
@@ -1043,7 +1238,7 @@ struct ContentView: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(cell.valueText.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .foregroundStyle(cell.valueText == "休" ? .red : .primary)
+                    .foregroundStyle(isRestShiftTitle(cell.valueText) ? .red : .primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1181,7 +1376,7 @@ struct ContentView: View {
 #else
                     .font(.body)
 #endif
-                    .foregroundStyle(cell.valueText == "休" ? .red : .primary)
+                    .foregroundStyle(isRestShiftTitle(cell.valueText) ? .red : .primary)
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
                     .minimumScaleFactor(0.72)
@@ -1240,7 +1435,7 @@ struct ContentView: View {
 #else
                     .font(.body)
 #endif
-                    .foregroundStyle(cell.valueText == "休" ? .red : .primary)
+                    .foregroundStyle(isRestShiftTitle(cell.valueText) ? .red : .primary)
                     .lineLimit(3)
                     .minimumScaleFactor(0.55)
                     .allowsTightening(true)
@@ -1541,7 +1736,7 @@ struct ContentView: View {
         let normalizedTitle = normalizedShiftTitle(cell.valueText)
         guard !normalizedTitle.isEmpty else { return nil }
 
-        if normalizedTitle == "休" {
+        if isRestShiftTitle(cell.valueText) {
             return localizedMessage("終日")
         }
 
@@ -1908,7 +2103,7 @@ struct ContentView: View {
             return
         }
 
-        let hasRestDays = extractedCells.contains { normalizedShiftTitle($0.valueText) == "休" }
+        let hasRestDays = extractedCells.contains { isRestShiftTitle($0.valueText) }
         if hasRestDays {
             isRestRegistrationAlertPresented = true
         } else {
@@ -1929,38 +2124,46 @@ struct ContentView: View {
         )
     }
 
-    private func confirmPendingRegistration(_ preview: RegistrationPreview) {
+    private func confirmPendingRegistration(
+        _ preview: RegistrationPreview,
+        metadata: CalendarEventMetadata
+    ) {
         registrationPreview = nil
         performSelectedCalendarRegistration(
             cells: preview.cells,
             yearMonth: preview.yearMonth,
-            includeRest: preview.includeRest
+            includeRest: preview.includeRest,
+            metadata: metadata
         )
     }
 
     private func performSelectedCalendarRegistration(
         cells: [ExtractedShiftCell],
         yearMonth: YearMonth,
-        includeRest: Bool
+        includeRest: Bool,
+        metadata: CalendarEventMetadata = .empty
     ) {
         switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
         case .apple:
             registerAppleCalendarEvents(
                 cells: cells,
                 yearMonth: yearMonth,
-                includeRest: includeRest
+                includeRest: includeRest,
+                metadata: metadata
             )
         case .notion:
             registerNotionPages(
                 cells: cells,
                 yearMonth: yearMonth,
-                includeRest: includeRest
+                includeRest: includeRest,
+                metadata: metadata
             )
         case .google:
             registerGoogleCalendarEvents(
                 cells: cells,
                 yearMonth: yearMonth,
-                includeRest: includeRest
+                includeRest: includeRest,
+                metadata: metadata
             )
         }
     }
@@ -2018,7 +2221,7 @@ struct ContentView: View {
                 continue
             }
 
-            if title == "休" {
+            if isRestShiftTitle(cell.valueText) {
                 guard includeRest else {
                     excludedCount += 1
                     excludedEvents.append(
@@ -2109,7 +2312,10 @@ struct ContentView: View {
         }
 
         let trimmedTitle = configuredTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedTitle.isEmpty ? "休" : trimmedTitle
+        let sourceTitle = restEventSourceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTitle.isEmpty
+            ? (sourceTitle.isEmpty ? "休" : sourceTitle)
+            : trimmedTitle
     }
 
     private var restRegistrationMessage: String {
@@ -2132,6 +2338,7 @@ struct ContentView: View {
         cells: [ExtractedShiftCell]? = nil,
         yearMonth: YearMonth? = nil,
         includeRest: Bool,
+        metadata: CalendarEventMetadata = .empty,
         onComplete: (() -> Void)? = nil
     ) {
         guard let targetYearMonth = yearMonth ?? selectedYearMonth else {
@@ -2149,8 +2356,10 @@ struct ContentView: View {
                 yearMonth: targetYearMonth,
                 definitions: shiftDefinitions,
                 calendarIdentifier: appleCalendarIdentifier,
-                restTitle: appleRestEventTitle,
-                includeRest: includeRest
+                restTitle: registrationRestTitle(for: .apple),
+                includeRest: includeRest,
+                restSourceTitle: restEventSourceTitle,
+                metadata: metadata
             )
 
             let skippedMessage = result.skippedTitles.isEmpty
@@ -2175,6 +2384,7 @@ struct ContentView: View {
         cells: [ExtractedShiftCell]? = nil,
         yearMonth: YearMonth? = nil,
         includeRest: Bool,
+        metadata: CalendarEventMetadata = .empty,
         onComplete: (() -> Void)? = nil
     ) {
         guard let token = KeychainStore.string(for: "notion-access-token"),
@@ -2199,8 +2409,12 @@ struct ContentView: View {
         let titleProperty = notionTitleProperty
         let dateProperty = notionDateProperty
         let tagProperty = notionTagProperty
-        let tagValue = notionTagValue
-        let restTitle = notionRestEventTitle
+        let tagValue = effectiveNotionTagValue
+        let notesProperty = notionNotesProperty
+        let locationProperty = notionLocationProperty
+        let urlProperty = notionURLProperty
+        let metadataProperties = notionRegistrationProperties
+        let restTitle = registrationRestTitle(for: .notion)
 
         Task { @MainActor in
             do {
@@ -2215,7 +2429,13 @@ struct ContentView: View {
                     tagProperty: tagProperty,
                     tagValue: tagValue,
                     restTitle: restTitle,
-                    includeRest: includeRest
+                    includeRest: includeRest,
+                    restSourceTitle: restEventSourceTitle,
+                    notesProperty: notesProperty,
+                    locationProperty: locationProperty,
+                    urlProperty: urlProperty,
+                    metadataProperties: metadataProperties,
+                    metadata: metadata
                 )
 
                 let skippedMessage = result.skippedTitles.isEmpty
@@ -2241,6 +2461,7 @@ struct ContentView: View {
         cells: [ExtractedShiftCell]? = nil,
         yearMonth: YearMonth? = nil,
         includeRest: Bool,
+        metadata: CalendarEventMetadata = .empty,
         onComplete: (() -> Void)? = nil
     ) {
         guard GoogleTokenStore.load() != nil else {
@@ -2265,7 +2486,7 @@ struct ContentView: View {
         let yearMonth = targetYearMonth
         let definitions = shiftDefinitions
         let calendarID = googleCalendarID
-        let restTitle = googleRestEventTitle
+        let restTitle = registrationRestTitle(for: .google)
 
         Task { @MainActor in
             do {
@@ -2276,7 +2497,9 @@ struct ContentView: View {
                     definitions: definitions,
                     calendarID: calendarID,
                     restTitle: restTitle,
-                    includeRest: includeRest
+                    includeRest: includeRest,
+                    restSourceTitle: restEventSourceTitle,
+                    metadata: metadata
                 )
 
                 let skippedMessage = result.skippedTitles.isEmpty
@@ -2315,12 +2538,20 @@ struct ContentView: View {
             pageIndex: 0,
             boundingBox: .zero
         )
-        let includeRest = normalizedShiftTitle(title) == "休"
+        let includeRest = isRestShiftTitle(title) || normalizedShiftTitle(title) == "休"
+        let registrationTitle = normalizedShiftTitle(title) == "休"
+            ? restSourceTitleForRegistration()
+            : title
 
         switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
         case .apple:
             registerAppleCalendarEvents(
-                cells: [cell],
+                cells: [ExtractedShiftCell(
+                    dateText: cell.dateText,
+                    valueText: registrationTitle,
+                    pageIndex: cell.pageIndex,
+                    boundingBox: cell.boundingBox
+                )],
                 yearMonth: yearMonth,
                 includeRest: includeRest,
                 onComplete: onComplete
@@ -2343,21 +2574,18 @@ struct ContentView: View {
     }
 
     private func registerDateTimeEvent(
-        title: String,
-        startDate: Date,
-        endDate: Date,
-        isAllDay: Bool,
+        draft: CalendarEventDraft,
         onComplete: ((String) -> Void)? = nil
     ) {
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTitle = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else {
             statusMessage = localizedMessage("イベントタイトルを入力してください。")
             return
         }
 
         let calendar = Calendar.current
-        let normalizedStartDate = isAllDay ? calendar.startOfDay(for: startDate) : startDate
-        let normalizedEndDate = isAllDay ? calendar.startOfDay(for: endDate) : endDate
+        let normalizedStartDate = draft.isAllDay ? calendar.startOfDay(for: draft.startDate) : draft.startDate
+        let normalizedEndDate = draft.isAllDay ? calendar.startOfDay(for: draft.endDate) : draft.endDate
         guard normalizedEndDate >= normalizedStartDate else {
             statusMessage = localizedMessage("終了日時は開始日時以降にしてください。")
             return
@@ -2374,8 +2602,9 @@ struct ContentView: View {
                     title: trimmedTitle,
                     startDate: normalizedStartDate,
                     endDate: normalizedEndDate,
-                    isAllDay: isAllDay,
-                    calendarIdentifier: appleCalendarIdentifier
+                    isAllDay: draft.isAllDay,
+                    calendarIdentifier: appleCalendarIdentifier,
+                    metadata: draft.metadata
                 )
                 statusMessage = localizedMessage("Appleカレンダーへイベントを登録しました。")
                 onComplete?(eventID)
@@ -2406,7 +2635,8 @@ struct ContentView: View {
                         title: trimmedTitle,
                         startDate: normalizedStartDate,
                         endDate: normalizedEndDate,
-                        isAllDay: isAllDay
+                        isAllDay: draft.isAllDay,
+                        metadata: draft.metadata
                     )
                     statusMessage = localizedMessage("Googleカレンダーへイベントを登録しました。")
                     onComplete?(eventID)
@@ -2431,20 +2661,29 @@ struct ContentView: View {
             let titleProperty = notionTitleProperty
             let dateProperty = notionDateProperty
             let tagProperty = notionTagProperty
-            let tagValue = notionTagValue
+            let tagValue = effectiveNotionTagValue
+            let notesProperty = notionNotesProperty
+            let locationProperty = notionLocationProperty
+            let urlProperty = notionURLProperty
+            let metadataProperties = notionRegistrationProperties
             Task { @MainActor in
                 do {
                     let eventID = try await writer.registerDateTimeEvent(
                         title: trimmedTitle,
                         startDate: normalizedStartDate,
                         endDate: normalizedEndDate,
-                        isAllDay: isAllDay,
+                        isAllDay: draft.isAllDay,
                         token: token,
                         dataSourceID: dataSourceID,
                         titleProperty: titleProperty,
                         dateProperty: dateProperty,
                         tagProperty: tagProperty,
-                        tagValue: tagValue
+                        tagValue: tagValue,
+                        metadata: draft.metadata,
+                        notesProperty: notesProperty,
+                        locationProperty: locationProperty,
+                        urlProperty: urlProperty,
+                        metadataProperties: metadataProperties
                     )
                     statusMessage = localizedMessage("Notionへイベントを登録しました。")
                     onComplete?(eventID)
@@ -2492,29 +2731,41 @@ struct ContentView: View {
                     boundingBox: .zero
                 )
             }
-            let includeRest = normalizedShiftTitle(title) == "休"
+            let includeRest = isRestShiftTitle(title) || normalizedShiftTitle(title) == "休"
+            let registrationTitle = normalizedShiftTitle(title) == "休"
+                ? restSourceTitleForRegistration()
+                : title
             let next = RegistrationCompletion {
                 registerGroup(at: index + 1)
+            }
+
+            let registrationCells = cells.map { cell in
+                ExtractedShiftCell(
+                    dateText: cell.dateText,
+                    valueText: registrationTitle,
+                    pageIndex: cell.pageIndex,
+                    boundingBox: cell.boundingBox
+                )
             }
 
             switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
             case .apple:
                 registerAppleCalendarEvents(
-                    cells: cells,
+                    cells: registrationCells,
                     yearMonth: yearMonth,
                     includeRest: includeRest,
                     onComplete: next.call
                 )
             case .notion:
                 registerNotionPages(
-                    cells: cells,
+                    cells: registrationCells,
                     yearMonth: yearMonth,
                     includeRest: includeRest,
                     onComplete: next.call
                 )
             case .google:
                 registerGoogleCalendarEvents(
-                    cells: cells,
+                    cells: registrationCells,
                     yearMonth: yearMonth,
                     includeRest: includeRest,
                     onComplete: next.call
@@ -2534,14 +2785,14 @@ struct ContentView: View {
                 let fullTitle = normalizedShiftTitle(value.valueText)
 
                 // スラッシュを含む勤務も、分割せず1つのタイトルとして照合する。
-                if isSavedShiftTitle(fullTitle, in: savedTitles) || fullTitle == "" || fullTitle == "休" {
+                if isSavedShiftTitle(fullTitle, in: savedTitles) || fullTitle == "" || isRestShiftTitle(value.valueText) {
                     return []
                 }
 
                 return [fullTitle]
             }
             .map(normalizedShiftTitle)
-            .filter { !$0.isEmpty && $0 != "休" }
+            .filter { !$0.isEmpty && !isRestShiftTitle($0) }
             .filter { !isSavedShiftTitle($0, in: savedTitles) }
             .filter { !ignoredMissingShiftTitles.contains($0) }
 
@@ -2605,6 +2856,16 @@ struct ContentView: View {
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "　", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isRestShiftTitle(_ value: String) -> Bool {
+        let sourceTitle = normalizedShiftTitle(restEventSourceTitle)
+        return !sourceTitle.isEmpty && normalizedShiftTitle(value) == sourceTitle
+    }
+
+    private func restSourceTitleForRegistration() -> String {
+        let sourceTitle = restEventSourceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sourceTitle.isEmpty ? "休" : sourceTitle
     }
 
     private func isSavedShiftTitle(_ title: String, in savedTitles: Set<String>) -> Bool {
@@ -2673,12 +2934,28 @@ struct ContentView: View {
             googleCalendarClientID: GoogleOAuthConfiguration.clientID,
             googleCalendarID: googleCalendarID,
             googleRestEventTitle: googleRestEventTitle,
+            googleShowJapaneseHolidays: googleShowJapaneseHolidays,
             notionDataSourceID: notionDataSourceID,
+            notionDatabaseName: notionDatabaseName,
             notionTitleProperty: notionTitleProperty,
             notionDateProperty: notionDateProperty,
             notionTagProperty: notionTagProperty,
             notionTagValue: notionTagValue,
-            notionRestEventTitle: notionRestEventTitle
+            notionNotesProperty: notionNotesProperty,
+            notionLocationProperty: notionLocationProperty,
+            notionURLProperty: notionURLProperty,
+            notionRestEventTitle: notionRestEventTitle,
+            restEventSourceTitle: restEventSourceTitle,
+            notionMetadataMappingVersion: notionMetadataMappingVersion,
+            notionFetchedPropertiesJSON: notionFetchedPropertiesJSON,
+            notionEnabledPropertyNamesJSON: notionEnabledPropertyNamesJSON,
+            notionDefaultPropertyValuesJSON: notionDefaultPropertyValuesJSON,
+            appleNotesEnabled: appleNotesEnabled,
+            appleLocationEnabled: appleLocationEnabled,
+            appleURLEnabled: appleURLEnabled,
+            googleNotesEnabled: googleNotesEnabled,
+            googleLocationEnabled: googleLocationEnabled,
+            googleURLEnabled: googleURLEnabled
         )
     }
 
@@ -2691,14 +2968,30 @@ struct ContentView: View {
         calendarDestination = settings.calendarDestination
         // EventKit calendar identifiers are local to the device and must not be
         // restored from another Mac or iPhone through iCloud.
+        restEventSourceTitle = settings.restEventSourceTitle
         appleRestEventTitle = settings.appleRestEventTitle
+        appleNotesEnabled = settings.appleNotesEnabled
+        appleLocationEnabled = settings.appleLocationEnabled
+        appleURLEnabled = settings.appleURLEnabled
         googleCalendarID = settings.googleCalendarID
         googleRestEventTitle = settings.googleRestEventTitle
+        googleShowJapaneseHolidays = settings.googleShowJapaneseHolidays
+        googleNotesEnabled = settings.googleNotesEnabled
+        googleLocationEnabled = settings.googleLocationEnabled
+        googleURLEnabled = settings.googleURLEnabled
         notionDataSourceID = settings.notionDataSourceID
+        notionDatabaseName = settings.notionDatabaseName
         notionTitleProperty = settings.notionTitleProperty
         notionDateProperty = settings.notionDateProperty
         notionTagProperty = settings.notionTagProperty
         notionTagValue = settings.notionTagValue
+        notionNotesProperty = settings.notionNotesProperty
+        notionLocationProperty = settings.notionLocationProperty
+        notionURLProperty = settings.notionURLProperty
+        notionMetadataMappingVersion = settings.notionMetadataMappingVersion
+        notionFetchedPropertiesJSON = settings.notionFetchedPropertiesJSON
+        notionEnabledPropertyNamesJSON = settings.notionEnabledPropertyNamesJSON
+        notionDefaultPropertyValuesJSON = settings.notionDefaultPropertyValuesJSON
         notionRestEventTitle = settings.notionRestEventTitle
     }
 

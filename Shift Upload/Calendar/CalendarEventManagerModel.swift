@@ -12,6 +12,7 @@ final class CalendarEventManagerModel: ObservableObject {
     @Published private(set) var calendarColor: CalendarDisplayColor? = nil
     @Published private(set) var isLoading = false
     @Published private(set) var isDeleting = false
+    @Published private(set) var isUpdating = false
     @Published var isDeleteConfirmationPresented = false
     @Published private(set) var pendingDeletion: CalendarEventRecord?
     @Published private(set) var message = ""
@@ -28,6 +29,10 @@ final class CalendarEventManagerModel: ObservableObject {
     private var notionTitleProperty: String
     private var notionTagProperty: String
     private var notionTagValue: String
+    private var notionNotesProperty: String
+    private var notionLocationProperty: String
+    private var notionURLProperty: String
+    private var notionMetadataProperties: [NotionPropertyOption]
     private var localeIdentifier = "ja"
     private var loadTask: Task<Void, Never>?
     private var prefetchKickoffTask: Task<Void, Never>?
@@ -53,7 +58,11 @@ final class CalendarEventManagerModel: ObservableObject {
         notionDateProperty: String,
         notionTitleProperty: String,
         notionTagProperty: String,
-        notionTagValue: String
+        notionTagValue: String,
+        notionNotesProperty: String,
+        notionLocationProperty: String,
+        notionURLProperty: String,
+        notionMetadataProperties: [NotionPropertyOption] = []
     ) {
         self.destination = destination
         self.yearMonth = yearMonth
@@ -65,6 +74,10 @@ final class CalendarEventManagerModel: ObservableObject {
         self.notionTitleProperty = notionTitleProperty
         self.notionTagProperty = notionTagProperty
         self.notionTagValue = notionTagValue
+        self.notionNotesProperty = notionNotesProperty
+        self.notionLocationProperty = notionLocationProperty
+        self.notionURLProperty = notionURLProperty
+        self.notionMetadataProperties = notionMetadataProperties
     }
 
     func updateYearMonth(_ yearMonth: YearMonth) {
@@ -105,7 +118,11 @@ final class CalendarEventManagerModel: ObservableObject {
         notionDateProperty: String,
         notionTitleProperty: String,
         notionTagProperty: String,
-        notionTagValue: String
+        notionTagValue: String,
+        notionNotesProperty: String,
+        notionLocationProperty: String,
+        notionURLProperty: String,
+        notionMetadataProperties: [NotionPropertyOption]
     ) {
         let hasChanged = self.destination != destination
             || self.appleCalendarIdentifier != appleCalendarIdentifier
@@ -116,6 +133,10 @@ final class CalendarEventManagerModel: ObservableObject {
             || self.notionTitleProperty != notionTitleProperty
             || self.notionTagProperty != notionTagProperty
             || self.notionTagValue != notionTagValue
+            || self.notionNotesProperty != notionNotesProperty
+            || self.notionLocationProperty != notionLocationProperty
+            || self.notionURLProperty != notionURLProperty
+            || self.notionMetadataProperties != notionMetadataProperties
 
         self.destination = destination
         self.appleCalendarIdentifier = appleCalendarIdentifier
@@ -126,6 +147,10 @@ final class CalendarEventManagerModel: ObservableObject {
         self.notionTitleProperty = notionTitleProperty
         self.notionTagProperty = notionTagProperty
         self.notionTagValue = notionTagValue
+        self.notionNotesProperty = notionNotesProperty
+        self.notionLocationProperty = notionLocationProperty
+        self.notionURLProperty = notionURLProperty
+        self.notionMetadataProperties = notionMetadataProperties
 
         if hasChanged {
             invalidateMonthCache()
@@ -163,6 +188,13 @@ final class CalendarEventManagerModel: ObservableObject {
         Array(Set(events.map(\.day))).sorted()
     }
 
+    var displayedMonthText: String {
+        let locale = Locale(identifier: localeIdentifier)
+        return localeIdentifier.hasPrefix("en")
+            ? yearMonth.displayText(for: locale)
+            : String(format: "%04d-%02d", yearMonth.year, yearMonth.month)
+    }
+
     func events(for day: Int) -> [CalendarEventRecord] {
         events
             .filter { $0.starts(on: day, in: yearMonth) }
@@ -171,14 +203,11 @@ final class CalendarEventManagerModel: ObservableObject {
 
     func applyRegisteredDateTimeEvent(
         id: String,
-        title: String,
-        startDate: Date,
-        endDate: Date,
-        isAllDay: Bool
+        draft: CalendarEventDraft
     ) {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
-        let startComponents = calendar.dateComponents([.year, .month, .day], from: startDate)
+        let startComponents = calendar.dateComponents([.year, .month, .day], from: draft.startDate)
         guard let eventYear = startComponents.year,
               let eventMonth = startComponents.month,
               let day = startComponents.day,
@@ -191,13 +220,14 @@ final class CalendarEventManagerModel: ObservableObject {
         let event = CalendarEventRecord(
             id: id,
             day: day,
-            title: title,
-            detail: isAllDay
+            title: draft.title,
+            detail: draft.isAllDay
                 ? ShiftHubLocalization.string("終日", locale: displayLocale)
-                : registeredTimeRangeText(start: startDate, end: endDate),
-            isAllDay: isAllDay,
-            startDate: startDate,
-            endDate: endDate,
+                : registeredTimeRangeText(start: draft.startDate, end: draft.endDate),
+            isAllDay: draft.isAllDay,
+            startDate: draft.startDate,
+            endDate: draft.endDate,
+            metadata: draft.metadata,
             calendarColor: calendarColor
         )
 
@@ -222,6 +252,170 @@ final class CalendarEventManagerModel: ObservableObject {
         } else {
             message = message(for: events)
         }
+    }
+
+    func updateEvent(
+        _ target: CalendarEventRecord,
+        draft: CalendarEventDraft
+    ) {
+        guard !target.isReadOnly, !isUpdating else { return }
+
+        let trimmedTitle = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            message = ShiftHubLocalization.string(
+                "イベントタイトルを入力してください。",
+                locale: Locale(identifier: localeIdentifier)
+            )
+            return
+        }
+
+        let calendar = Calendar.current
+        let normalizedStartDate = draft.isAllDay ? calendar.startOfDay(for: draft.startDate) : draft.startDate
+        let normalizedEndDate = draft.isAllDay ? calendar.startOfDay(for: draft.endDate) : draft.endDate
+        guard normalizedEndDate >= normalizedStartDate else {
+            message = ShiftHubLocalization.string(
+                "終了日時は開始日時以降にしてください。",
+                locale: Locale(identifier: localeIdentifier)
+            )
+            return
+        }
+
+        isUpdating = true
+        message = ""
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            do {
+                switch destination {
+                case .apple:
+                    try AppleCalendarEventClient(
+                        calendarIdentifier: appleCalendarIdentifier
+                    ).updateEvent(
+                        identifier: target.id,
+                        title: trimmedTitle,
+                        startDate: normalizedStartDate,
+                        endDate: normalizedEndDate,
+                        isAllDay: draft.isAllDay,
+                        metadata: draft.metadata
+                    )
+                case .google:
+                    guard GoogleTokenStore.load() != nil else {
+                        throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
+                    }
+
+                    try await GoogleCalendarAPIClient(
+                        clientID: GoogleOAuthConfiguration.clientID
+                    ).updateEvent(
+                        calendarID: googleCalendarID,
+                        eventID: target.id,
+                        title: trimmedTitle,
+                        startDate: normalizedStartDate,
+                        endDate: normalizedEndDate,
+                        isAllDay: draft.isAllDay,
+                        metadata: draft.metadata
+                    )
+                case .notion:
+                    guard let token = KeychainStore.string(for: "notion-access-token") else {
+                        throw CalendarEventManagementError.invalidSettings("Notionのアクセストークンを設定してください。")
+                    }
+
+                    try await NotionCalendarEventClient(
+                        token: token,
+                        dataSourceID: notionDataSourceID,
+                        dateProperty: notionDateProperty,
+                        titleProperty: notionTitleProperty,
+                        tagProperty: notionTagProperty,
+                        tagValue: notionTagValue,
+                        notesProperty: notionNotesProperty,
+                        locationProperty: notionLocationProperty,
+                        urlProperty: notionURLProperty,
+                        metadataProperties: notionMetadataProperties
+                    ).updatePage(
+                        identifier: target.id,
+                        title: trimmedTitle,
+                        startDate: normalizedStartDate,
+                        endDate: normalizedEndDate,
+                        isAllDay: draft.isAllDay,
+                        metadata: draft.metadata
+                    )
+                }
+
+                if self.destination == .notion {
+                    self.events.removeAll { $0.id == target.id }
+                    self.loadedDays = Set(self.events.map(\.day))
+                    self.invalidateMonthCache()
+                    self.load(forceRefresh: true)
+                } else {
+                    self.applyUpdatedDateTimeEvent(
+                        id: target.id,
+                        title: trimmedTitle,
+                        startDate: normalizedStartDate,
+                        endDate: normalizedEndDate,
+                        isAllDay: draft.isAllDay,
+                        metadata: draft.metadata
+                    )
+                }
+                self.message = ShiftHubLocalization.string(
+                    "イベントを更新しました。",
+                    locale: Locale(identifier: self.localeIdentifier)
+                )
+            } catch {
+                self.message = ShiftHubLocalization.format(
+                    "イベントの更新に失敗しました: %@",
+                    locale: Locale(identifier: self.localeIdentifier),
+                    arguments: error.localizedDescription
+                )
+            }
+
+            self.isUpdating = false
+        }
+    }
+
+    private func applyUpdatedDateTimeEvent(
+        id: String,
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool,
+        metadata: CalendarEventMetadata
+    ) {
+        guard let existingEvent = events.first(where: { $0.id == id }) else { return }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = calendar.dateComponents([.year, .month, .day], from: startDate)
+        let isInDisplayedMonth = components.year == yearMonth.year
+            && components.month == yearMonth.month
+        let updatedEvent: CalendarEventRecord?
+        if isInDisplayedMonth, let day = components.day {
+            let displayLocale = Locale(identifier: localeIdentifier)
+            updatedEvent = CalendarEventRecord(
+                id: id,
+                day: day,
+                title: title,
+                detail: isAllDay
+                    ? ShiftHubLocalization.string("終日", locale: displayLocale)
+                    : registeredTimeRangeText(start: startDate, end: endDate),
+                isAllDay: isAllDay,
+                startDate: startDate,
+                endDate: endDate,
+                metadata: metadata,
+                calendarColor: existingEvent.calendarColor,
+                isReadOnly: existingEvent.isReadOnly
+            )
+        } else {
+            updatedEvent = nil
+        }
+
+        shouldAnimateEventBandReveal = false
+        events.removeAll { $0.id == id }
+        if let updatedEvent {
+            events.append(updatedEvent)
+            events.sort(by: calendarEventComesBefore)
+        }
+        loadedDays = Set(events.map(\.day))
+        updateCachedDisplayedMonth()
     }
 
     func dayHeader(for day: Int, locale: Locale) -> String {
@@ -356,7 +550,11 @@ final class CalendarEventManagerModel: ObservableObject {
                 dateProperty: notionDateProperty,
                 titleProperty: notionTitleProperty,
                 tagProperty: notionTagProperty,
-                tagValue: notionTagValue
+                tagValue: notionTagValue,
+                notesProperty: notionNotesProperty,
+                locationProperty: notionLocationProperty,
+                urlProperty: notionURLProperty,
+                metadataProperties: notionMetadataProperties
             ).fetchEvents(yearMonth: yearMonth)
             fetchedCalendarColor = nil
         }
@@ -376,6 +574,7 @@ final class CalendarEventManagerModel: ObservableObject {
                     isAllDay: event.isAllDay,
                     startDate: event.startDate,
                     endDate: event.endDate,
+                    metadata: event.metadata,
                     calendarColor: event.calendarColor,
                     isReadOnly: event.isReadOnly
                 )

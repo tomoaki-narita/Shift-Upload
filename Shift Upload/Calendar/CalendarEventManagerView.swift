@@ -237,12 +237,17 @@ struct CalendarEventManagerView: View {
     let notionTitleProperty: String
     let notionTagProperty: String
     let notionTagValue: String
+    let notionNotesProperty: String
+    let notionLocationProperty: String
+    let notionURLProperty: String
+    let notionMetadataProperties: [NotionPropertyOption]
+    let metadataFieldLabels: CalendarEventMetadataFieldLabels
     let appleCalendarName: String
     let googleCalendarName: String
     let notionDatabaseName: String
     let definitions: [ShiftDefinition]
     let onRegisterShift: (YearMonth, Int, String, RegistrationCompletion) -> Void
-    let onRegisterDateTimeEvent: (String, Date, Date, Bool, DateTimeEventRegistrationCompletion) -> Void
+    let onRegisterDateTimeEvent: (CalendarEventDraft, DateTimeEventRegistrationCompletion) -> Void
     let onRegisterShifts: ([CalendarDaySelection], String, RegistrationCompletion) -> Void
     let onCalendarDestinationChange: (CalendarDestination) -> Void
     let onCalendarColorChange: (CalendarDisplayColor?) -> Void
@@ -271,6 +276,7 @@ struct CalendarEventManagerView: View {
     @State private var isDaySelectionMode = false
     @State private var selectedCalendarDays: Set<CalendarDaySelection> = []
     @State private var selectedEventForActions: CalendarEventRecord?
+    @State private var eventBeingEdited: CalendarEventRecord?
     @State private var selectedBandEventForActions: CalendarBandEventSelection?
     @State private var pendingBandEventForActions: CalendarBandEventSelection?
 #if os(iOS)
@@ -305,9 +311,14 @@ struct CalendarEventManagerView: View {
         notionTitleProperty: String,
         notionTagProperty: String,
         notionTagValue: String,
+        notionNotesProperty: String,
+        notionLocationProperty: String,
+        notionURLProperty: String,
+        notionMetadataProperties: [NotionPropertyOption],
+        metadataFieldLabels: CalendarEventMetadataFieldLabels,
         definitions: [ShiftDefinition],
         onRegisterShift: @escaping (YearMonth, Int, String, RegistrationCompletion) -> Void,
-        onRegisterDateTimeEvent: @escaping (String, Date, Date, Bool, DateTimeEventRegistrationCompletion) -> Void,
+        onRegisterDateTimeEvent: @escaping (CalendarEventDraft, DateTimeEventRegistrationCompletion) -> Void,
         onRegisterShifts: @escaping ([CalendarDaySelection], String, RegistrationCompletion) -> Void,
         onCalendarDestinationChange: @escaping (CalendarDestination) -> Void,
         onCalendarColorChange: @escaping (CalendarDisplayColor?) -> Void,
@@ -327,6 +338,11 @@ struct CalendarEventManagerView: View {
         self.notionTitleProperty = notionTitleProperty
         self.notionTagProperty = notionTagProperty
         self.notionTagValue = notionTagValue
+        self.notionNotesProperty = notionNotesProperty
+        self.notionLocationProperty = notionLocationProperty
+        self.notionURLProperty = notionURLProperty
+        self.notionMetadataProperties = notionMetadataProperties
+        self.metadataFieldLabels = metadataFieldLabels
         self.appleCalendarName = appleCalendarName
         self.googleCalendarName = googleCalendarName
         self.notionDatabaseName = notionDatabaseName
@@ -359,7 +375,11 @@ struct CalendarEventManagerView: View {
             notionDateProperty: notionDateProperty,
             notionTitleProperty: notionTitleProperty,
             notionTagProperty: notionTagProperty,
-            notionTagValue: notionTagValue
+            notionTagValue: notionTagValue,
+            notionNotesProperty: notionNotesProperty,
+            notionLocationProperty: notionLocationProperty,
+            notionURLProperty: notionURLProperty,
+            notionMetadataProperties: notionMetadataProperties
         ))
     }
 
@@ -369,6 +389,37 @@ struct CalendarEventManagerView: View {
 
     private func localized(_ key: String) -> String {
         ShiftHubLocalization.string(key, locale: locale)
+    }
+
+    private func beginEditing(_ event: CalendarEventRecord) {
+        guard !event.isReadOnly else { return }
+        selectedEventForActions = nil
+        selectedBandEventForActions = nil
+        eventBeingEdited = event
+    }
+
+    private func editingStartDate(for event: CalendarEventRecord) -> Date {
+        if let startDate = event.startDate {
+            return startDate
+        }
+
+        return Calendar.current.date(from: DateComponents(
+            year: model.yearMonth.year,
+            month: model.yearMonth.month,
+            day: event.day
+        )) ?? Date()
+    }
+
+    private func editingEndDate(for event: CalendarEventRecord, startDate: Date) -> Date {
+        if let endDate = event.endDate {
+            return endDate
+        }
+
+        if event.isAllDay {
+            return startDate
+        }
+
+        return Calendar.current.date(byAdding: .hour, value: 1, to: startDate) ?? startDate
     }
 
     private var calendarEventManagerConfigurationKey: String {
@@ -381,7 +432,11 @@ struct CalendarEventManagerView: View {
             notionDateProperty,
             notionTitleProperty,
             notionTagProperty,
-            notionTagValue
+            notionTagValue,
+            notionNotesProperty,
+            notionLocationProperty,
+            notionURLProperty,
+            notionMetadataProperties.map { "\($0.name):\($0.type)" }.joined(separator: ",")
         ].joined(separator: "|")
     }
 
@@ -515,11 +570,20 @@ struct CalendarEventManagerView: View {
 #if os(iOS)
             ZStack(alignment: .topLeading) {
                 if !model.message.isEmpty && !model.isLoading {
-                    Text(LocalizedStringKey(model.message))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(verbatim: model.displayedMonthText)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+
+                        Spacer(minLength: 12)
+
+                        Text(verbatim: model.message)
+                            .multilineTextAlignment(.trailing)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -528,11 +592,20 @@ struct CalendarEventManagerView: View {
             .padding(.bottom, 12)
 #else
             if !model.message.isEmpty && !model.isLoading {
-                Text(LocalizedStringKey(model.message))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(verbatim: model.displayedMonthText)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+
+                    Spacer(minLength: 12)
+
+                    Text(verbatim: model.message)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 12)
             }
@@ -746,7 +819,11 @@ struct CalendarEventManagerView: View {
                 notionDateProperty: notionDateProperty,
                 notionTitleProperty: notionTitleProperty,
                 notionTagProperty: notionTagProperty,
-                notionTagValue: notionTagValue
+                notionTagValue: notionTagValue,
+                notionNotesProperty: notionNotesProperty,
+                notionLocationProperty: notionLocationProperty,
+                notionURLProperty: notionURLProperty,
+                notionMetadataProperties: notionMetadataProperties
             )
         }
         .onChange(of: model.yearMonth) {
@@ -867,23 +944,38 @@ struct CalendarEventManagerView: View {
         .sheet(isPresented: $isDateTimeEventRegistrationPresented) {
             DateTimeEventRegistrationView(
                 initialStartDate: dateTimeEventRegistrationStartDate,
-                locale: locale
-            ) { title, startDate, endDate, isAllDay in
+                locale: locale,
+                metadataFieldLabels: metadataFieldLabels
+            ) { draft in
                 isDateTimeEventRegistrationPresented = false
                 onRegisterDateTimeEvent(
-                    title,
-                    startDate,
-                    endDate,
-                    isAllDay,
+                    draft,
                     DateTimeEventRegistrationCompletion { eventID in
                         model.applyRegisteredDateTimeEvent(
                             id: eventID,
-                            title: title,
-                            startDate: startDate,
-                            endDate: endDate,
-                            isAllDay: isAllDay
+                            draft: draft
                         )
                     }
+                )
+            }
+            .environment(\.locale, locale)
+        }
+        .sheet(item: $eventBeingEdited) { event in
+            let startDate = editingStartDate(for: event)
+            DateTimeEventRegistrationView(
+                initialStartDate: startDate,
+                locale: locale,
+                initialTitle: event.title,
+                initialEndDate: editingEndDate(for: event, startDate: startDate),
+                initialIsAllDay: event.isAllDay,
+                initialMetadata: event.metadata,
+                metadataFieldLabels: metadataFieldLabels,
+                isEditing: true
+            ) { draft in
+                eventBeingEdited = nil
+                model.updateEvent(
+                    event,
+                    draft: draft
                 )
             }
             .environment(\.locale, locale)
@@ -1269,6 +1361,25 @@ struct CalendarEventManagerView: View {
         }
     }
 
+    private func presentEventActions(for event: CalendarEventRecord, day: Int) {
+        let selection = CalendarBandEventSelection(
+            event: event,
+            yearMonth: model.yearMonth,
+            day: day
+        )
+
+        selectedDayForActions = nil
+        selectedEventForActions = nil
+        selectedBandEventForActions = nil
+#if os(macOS)
+        isDayActionsPopoverPresented = false
+#endif
+        Task { @MainActor in
+            await Task.yield()
+            selectedBandEventForActions = selection
+        }
+    }
+
     private func reloadSelectedMonth() {
         guard selectedYearMonth != model.yearMonth else { return }
         pendingMonthPageID = nil
@@ -1498,7 +1609,6 @@ struct CalendarEventManagerView: View {
                 }
             }
             .sorted(by: calendarEventComesBefore)
-            .prefix(3)
 
             for event in displayEvents {
                 result.append(CalendarEventDisplaySegment(
@@ -1531,18 +1641,14 @@ struct CalendarEventManagerView: View {
             ).values
         )
         .sorted {
-            if $0.startDay != $1.startDay {
-                return $0.startDay < $1.startDay
-            }
-            if $0.endDay != $1.endDay {
-                // Keep a longer band above an event that starts on the same day.
-                return $0.endDay > $1.endDay
-            }
             if calendarEventComesBefore($0.event, $1.event) {
                 return true
             }
             if calendarEventComesBefore($1.event, $0.event) {
                 return false
+            }
+            if $0.startDay != $1.startDay {
+                return $0.startDay < $1.startDay
             }
             return $0.event.id < $1.event.id
         }
@@ -1833,7 +1939,7 @@ struct CalendarEventManagerView: View {
 #endif
         let bandMetrics = calendarEventBandMetrics(cardHeight: cardHeight)
 #if os(macOS)
-        let bandTitleFontSize = min(12, max(5, bandMetrics.height * 0.9))
+        let bandTitleFontSize = min(11, max(5, bandMetrics.height * 0.9))
 #endif
         // Keep adjacent pages on the same band renderer while they are being
         // swiped into view; only the current page remains interactive.
@@ -2333,7 +2439,12 @@ struct CalendarEventManagerView: View {
                 .padding(.bottom, 10)
 
             ForEach(displayOnlyEvents) { event in
-                eventListRowContent(for: event)
+                Button {
+                    presentEventActions(for: event, day: day)
+                } label: {
+                    eventListRowContent(for: event)
+                }
+                .buttonStyle(.plain)
                     .padding(.top, 12)
             }
 
@@ -2344,6 +2455,7 @@ struct CalendarEventManagerView: View {
                     eventListRowContent(for: event)
                         .padding(.top, 11)
                         .padding(.bottom, 6)
+                    eventMetadataDetails(for: event)
                 }
 
                 dateTimeEventRegistrationButton(forDay: day)
@@ -2389,10 +2501,10 @@ struct CalendarEventManagerView: View {
                     eventSelectionList(for: day, events: actionableEvents)
                 }
 
-                eventRegistrationButton(forDay: day)
+                dateTimeEventRegistrationButton(forDay: day)
                     .padding(.top, 12)
 
-                dateTimeEventRegistrationButton(forDay: day)
+                eventRegistrationButton(forDay: day)
                     .padding(.top, 8)
             }
 #else
@@ -2402,6 +2514,7 @@ struct CalendarEventManagerView: View {
                         Divider()
                         VStack(alignment: .leading, spacing: 8) {
                             eventListRowContent(for: event)
+                            eventMetadataDetails(for: event)
                             dateTimeEventRegistrationButton(forDay: day)
                             eventRegistrationButton(forDay: day)
                             eventActions(for: event)
@@ -2481,6 +2594,73 @@ struct CalendarEventManagerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private struct CalendarEventMetadataDisplayItem: Identifiable {
+        let id: String
+        let label: String
+        let value: String
+    }
+
+    private func metadataDisplayItems(
+        for event: CalendarEventRecord
+    ) -> [CalendarEventMetadataDisplayItem] {
+        let metadata = event.metadata.normalized
+        var items: [CalendarEventMetadataDisplayItem] = []
+
+        func append(_ id: String, label: String, value: String) {
+            guard !value.isEmpty else { return }
+            items.append(CalendarEventMetadataDisplayItem(id: id, label: label, value: value))
+        }
+
+        if metadataFieldLabels.tagIsAvailable {
+            append("tag", label: metadataFieldLabels.tag, value: metadata.tagValue)
+        }
+        if metadataFieldLabels.locationIsAvailable {
+            append("location", label: metadataFieldLabels.location, value: metadata.location)
+        }
+        if metadataFieldLabels.urlIsAvailable {
+            append("url", label: metadataFieldLabels.url, value: metadata.url)
+        }
+        if metadataFieldLabels.notesIsAvailable {
+            append("notes", label: metadataFieldLabels.notes, value: metadata.notes)
+        }
+        for property in metadataFieldLabels.additionalProperties {
+            append(
+                property.name,
+                label: property.displayName(for: locale),
+                value: metadata.propertyValues[property.name] ?? ""
+            )
+        }
+
+        return items
+    }
+
+    @ViewBuilder
+    private func eventMetadataDetails(for event: CalendarEventRecord) -> some View {
+        let items = metadataDisplayItems(for: event)
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                    .padding(.vertical, 4)
+
+                Text(localized("詳細"))
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                ForEach(items) { item in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.label)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(item.value)
+                            .font(.body)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(.bottom, 12)
+        }
+    }
+
     @ViewBuilder
     private func eventSelectionList(
         for day: Int,
@@ -2508,8 +2688,15 @@ struct CalendarEventManagerView: View {
                 Divider()
 #if os(macOS)
                 HStack(spacing: 8) {
-                    eventListRowContent(for: event)
-                        .frame(width: 180, alignment: .leading)
+                    Button {
+                        presentEventActions(for: event, day: day)
+                    } label: {
+                        eventListRowContent(for: event)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     Button(role: .destructive) {
                         selectedEventForActions = nil
@@ -2533,7 +2720,15 @@ struct CalendarEventManagerView: View {
                 .contentShape(Rectangle())
 #else
                 HStack(spacing: 8) {
-                    eventListRowContent(for: event)
+                    Button {
+                        presentEventActions(for: event, day: day)
+                    } label: {
+                        eventListRowContent(for: event)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     Button(role: .destructive) {
                         selectedEventForActions = nil
@@ -2581,6 +2776,8 @@ struct CalendarEventManagerView: View {
                     .padding(.top, 2)
                     .padding(.bottom, 12)
             }
+
+            eventMetadataDetails(for: event)
 
             if pendingInlineDeletion?.id == event.id {
                 VStack(alignment: .leading, spacing: 10) {
@@ -2663,6 +2860,7 @@ struct CalendarEventManagerView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     eventListRowContent(for: event)
+                    eventMetadataDetails(for: event)
                     eventActions(for: event)
                 }
                 .padding(.top, 12)
@@ -2675,6 +2873,14 @@ struct CalendarEventManagerView: View {
     private func eventActions(for event: CalendarEventRecord) -> some View {
 #if os(iOS)
         VStack(spacing: 8) {
+            Button {
+                beginEditing(event)
+            } label: {
+                Label(localized("編集"), systemImage: "pencil")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .disabled(event.isReadOnly)
+
             Button {
                 selectedEventForActions = nil
                 selectedBandEventForActions = nil
@@ -2697,6 +2903,14 @@ struct CalendarEventManagerView: View {
         .controlSize(.large)
 #else
         VStack(alignment: .leading, spacing: 8) {
+            Button {
+                beginEditing(event)
+            } label: {
+                Label(localized("編集"), systemImage: "pencil")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .disabled(event.isReadOnly)
+
             Button {
                 selectedEventForActions = nil
                 selectedBandEventForActions = nil

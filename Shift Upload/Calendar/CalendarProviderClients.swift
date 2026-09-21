@@ -17,7 +17,7 @@ struct NotionRegistrationResult {
     let skippedTitles: [String]
 }
 
-struct NotionPropertyOption: Identifiable, Hashable {
+struct NotionPropertyOption: Identifiable, Hashable, Codable {
     let name: String
     let type: String
     let options: [String]
@@ -25,11 +25,11 @@ struct NotionPropertyOption: Identifiable, Hashable {
     var id: String { "\(name)|\(type)" }
 
     var displayName: String {
-        "\(name)（\(type)）"
+        name
     }
 
     func displayName(for locale: Locale) -> String {
-        ShiftHubLocalization.isEnglish(locale) ? "\(name) (\(type))" : displayName
+        displayName
     }
 }
 
@@ -38,7 +38,236 @@ struct NotionDatabaseSchema {
     let properties: [NotionPropertyOption]
 }
 
+struct NotionMetadataPropertySelection {
+    let notes: String
+    let location: String
+    let url: String
+}
+
+private struct OrderedJSONPropertyKeyParser {
+    private enum ParseError: Error {
+        case invalidJSON
+        case missingObject
+    }
+
+    private let bytes: [UInt8]
+    private var index = 0
+
+    init(data: Data) {
+        bytes = Array(data)
+    }
+
+    mutating func propertyNames(for objectKey: String) throws -> [String] {
+        skipWhitespace()
+        guard consume(123) else { throw ParseError.invalidJSON } // {
+
+        while true {
+            skipWhitespace()
+            if consume(125) { break } // }
+
+            let key = try parseString()
+            skipWhitespace()
+            guard consume(58) else { throw ParseError.invalidJSON } // :
+
+            if key == objectKey {
+                return try parseObjectKeys()
+            }
+
+            try skipValue()
+            skipWhitespace()
+            if consume(125) { break } // }
+            guard consume(44) else { throw ParseError.invalidJSON } // ,
+        }
+
+        throw ParseError.missingObject
+    }
+
+    private mutating func parseObjectKeys() throws -> [String] {
+        skipWhitespace()
+        guard consume(123) else { throw ParseError.invalidJSON } // {
+
+        var keys: [String] = []
+        while true {
+            skipWhitespace()
+            if consume(125) { return keys } // }
+
+            keys.append(try parseString())
+            skipWhitespace()
+            guard consume(58) else { throw ParseError.invalidJSON } // :
+            try skipValue()
+
+            skipWhitespace()
+            if consume(125) { return keys } // }
+            guard consume(44) else { throw ParseError.invalidJSON } // ,
+        }
+    }
+
+    private mutating func skipValue() throws {
+        skipWhitespace()
+        guard index < bytes.count else { throw ParseError.invalidJSON }
+
+        switch bytes[index] {
+        case 34:
+            _ = try parseString()
+        case 123:
+            try skipObject()
+        case 91:
+            try skipArray()
+        default:
+            while index < bytes.count,
+                  ![44, 93, 125].contains(bytes[index]) { // , ] }
+                index += 1
+            }
+        }
+    }
+
+    private mutating func skipObject() throws {
+        guard consume(123) else { throw ParseError.invalidJSON } // {
+        while true {
+            skipWhitespace()
+            if consume(125) { return } // }
+            _ = try parseString()
+            skipWhitespace()
+            guard consume(58) else { throw ParseError.invalidJSON } // :
+            try skipValue()
+            skipWhitespace()
+            if consume(125) { return } // }
+            guard consume(44) else { throw ParseError.invalidJSON } // ,
+        }
+    }
+
+    private mutating func skipArray() throws {
+        guard consume(91) else { throw ParseError.invalidJSON } // [
+        while true {
+            skipWhitespace()
+            if consume(93) { return } // ]
+            try skipValue()
+            skipWhitespace()
+            if consume(93) { return } // ]
+            guard consume(44) else { throw ParseError.invalidJSON } // ,
+        }
+    }
+
+    private mutating func parseString() throws -> String {
+        skipWhitespace()
+        guard index < bytes.count, bytes[index] == 34 else {
+            throw ParseError.invalidJSON
+        }
+
+        let start = index
+        index += 1
+        var escaped = false
+        while index < bytes.count {
+            let byte = bytes[index]
+            index += 1
+
+            if escaped {
+                escaped = false
+            } else if byte == 92 { // \\
+                escaped = true
+            } else if byte == 34 { // "
+                let data = Data(bytes[start..<index])
+                guard let value = try? JSONSerialization.jsonObject(with: data) as? String else {
+                    throw ParseError.invalidJSON
+                }
+                return value
+            }
+        }
+
+        throw ParseError.invalidJSON
+    }
+
+    private mutating func consume(_ byte: UInt8) -> Bool {
+        guard index < bytes.count, bytes[index] == byte else { return false }
+        index += 1
+        return true
+    }
+
+    private mutating func skipWhitespace() {
+        while index < bytes.count,
+              [9, 10, 13, 32].contains(bytes[index]) {
+            index += 1
+        }
+    }
+}
+
 struct NotionSchemaClient {
+    static func automaticMetadataPropertySelection(
+        from properties: [NotionPropertyOption],
+        notes: String,
+        location: String,
+        url: String,
+        allowAutomaticSelection: Bool = true
+    ) -> NotionMetadataPropertySelection {
+        let selectedURL = automaticProperty(
+            from: properties,
+            type: "url",
+            current: url,
+            keywords: ["url", "リンク", "リンク先"],
+            allowAutomaticSelection: allowAutomaticSelection
+        )
+        let selectedNotes = automaticProperty(
+            from: properties,
+            type: "rich_text",
+            current: notes,
+            keywords: ["info", "note", "notes", "description", "memo", "メモ", "説明", "備考", "情報"],
+            allowAutomaticSelection: allowAutomaticSelection
+        )
+        let selectedLocation = automaticProperty(
+            from: properties,
+            type: "rich_text",
+            current: location,
+            keywords: ["place", "location", "venue", "address", "場所", "会場", "勤務地"],
+            excluding: selectedNotes.isEmpty ? Set<String>() : Set([selectedNotes]),
+            allowSingleFallback: false,
+            allowAutomaticSelection: allowAutomaticSelection
+        )
+
+        return NotionMetadataPropertySelection(
+            notes: selectedNotes,
+            location: selectedLocation,
+            url: selectedURL
+        )
+    }
+
+    nonisolated private static func normalizedPropertyName(_ name: String) -> String {
+        name.folding(options: [.caseInsensitive, .widthInsensitive], locale: .current)
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "　", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func automaticProperty(
+        from properties: [NotionPropertyOption],
+        type: String,
+        current: String,
+        keywords: [String],
+        excluding: Set<String> = [],
+        allowSingleFallback: Bool = true,
+        allowAutomaticSelection: Bool = true
+    ) -> String {
+        let candidates = properties.filter {
+            $0.type == type && !excluding.contains($0.name)
+        }
+        guard !candidates.isEmpty else { return "" }
+
+        if candidates.contains(where: { $0.name == current }) {
+            return current
+        }
+
+        guard allowAutomaticSelection else { return "" }
+
+        let normalizedKeywords = keywords.map(normalizedPropertyName)
+        if let matching = candidates.first(where: { property in
+            let normalizedName = normalizedPropertyName(property.name)
+            return normalizedKeywords.contains { normalizedName.contains($0) }
+        }) {
+            return matching.name
+        }
+
+        return allowSingleFallback && candidates.count == 1 ? candidates[0].name : ""
+    }
+
     func fetchSchema(
         token: String,
         databaseID: String,
@@ -80,15 +309,20 @@ struct NotionSchemaClient {
             }
             .joined()
 
-        let propertyOptions: [NotionPropertyOption] = properties.compactMap { name, value in
+        var orderedPropertyKeys = OrderedJSONPropertyKeyParser(data: data)
+        let propertyNames = (try? orderedPropertyKeys.propertyNames(for: "properties"))
+            ?? Array(properties.keys)
+
+        let propertyOptions: [NotionPropertyOption] = propertyNames.compactMap { name in
+            guard let value = properties[name] else { return nil }
             guard let property = value as? [String: Any],
                   let type = property["type"] as? String else {
                 return nil
             }
 
             let options: [String]
-            if type == "multi_select",
-               let configuration = property["multi_select"] as? [String: Any],
+            if ["multi_select", "select"].contains(type),
+               let configuration = property[type] as? [String: Any],
                let rawOptions = configuration["options"] as? [[String: Any]] {
                 options = rawOptions.compactMap { $0["name"] as? String }
             } else {
@@ -96,9 +330,6 @@ struct NotionSchemaClient {
             }
 
             return NotionPropertyOption(name: name, type: type, options: options)
-        }
-        .sorted { lhs, rhs in
-            lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
 
         return NotionDatabaseSchema(
@@ -155,14 +386,18 @@ final class NotionPageWriter {
         tagProperty: String,
         tagValue: String,
         restTitle: String,
-        includeRest: Bool
+        includeRest: Bool,
+        restSourceTitle: String = "休",
+        notesProperty: String = "",
+        locationProperty: String = "",
+        urlProperty: String = "",
+        metadataProperties: [NotionPropertyOption] = [],
+        metadata: CalendarEventMetadata = .empty
     ) async throws -> NotionRegistrationResult {
         guard let yearMonth,
               !dataSourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !titleProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !dateProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !tagValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+              !dateProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NotionAPIError.invalidSettings
         }
 
@@ -172,6 +407,9 @@ final class NotionPageWriter {
         let registeredRestTitle = restTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "休"
             : restTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let registeredRestSourceTitle = normalizedTitle(restSourceTitle).isEmpty
+            ? "休"
+            : normalizedTitle(restSourceTitle)
         var skippedTitles: [String] = []
         var savedCount = 0
 
@@ -183,7 +421,7 @@ final class NotionPageWriter {
             let title = normalizedTitle(cell.valueText)
             guard !title.isEmpty else { continue }
 
-            if title == "休" {
+            if title == registeredRestSourceTitle {
                 guard includeRest else { continue }
                 try await createPage(
                     title: registeredRestTitle,
@@ -196,7 +434,12 @@ final class NotionPageWriter {
                     titleProperty: titleProperty,
                     dateProperty: dateProperty,
                     tagProperty: tagProperty,
-                    tagValue: tagValue
+                    tagValue: tagValue,
+                    notesProperty: notesProperty,
+                    locationProperty: locationProperty,
+                    urlProperty: urlProperty,
+                    metadataProperties: metadataProperties,
+                    metadata: metadata
                 )
                 savedCount += 1
                 continue
@@ -220,7 +463,12 @@ final class NotionPageWriter {
                 titleProperty: titleProperty,
                 dateProperty: dateProperty,
                 tagProperty: tagProperty,
-                tagValue: tagValue
+                tagValue: tagValue,
+                notesProperty: notesProperty,
+                locationProperty: locationProperty,
+                urlProperty: urlProperty,
+                metadataProperties: metadataProperties,
+                metadata: metadata
             )
             savedCount += 1
         }
@@ -240,7 +488,12 @@ final class NotionPageWriter {
         titleProperty: String,
         dateProperty: String,
         tagProperty: String,
-        tagValue: String
+        tagValue: String,
+        notesProperty: String,
+        locationProperty: String,
+        urlProperty: String,
+        metadataProperties: [NotionPropertyOption],
+        metadata: CalendarEventMetadata
     ) async throws {
         guard let day = Int(dayText), (1...yearMonth.numberOfDays).contains(day) else {
             throw NotionAPIError.invalidDate(dayText)
@@ -261,22 +514,35 @@ final class NotionPageWriter {
             throw NotionAPIError.invalidDate(dayText)
         }
 
-        let properties: [String: Any] = [
+        let effectiveTagValue = effectiveTagValue(metadata: metadata, fallback: tagValue)
+        var properties: [String: Any] = [
             titleProperty: [
                 "title": [[
                     "type": "text",
                     "text": ["content": title]
                 ]]
             ],
-            dateProperty: ["date": dateValue],
-            tagProperty: [
-                "multi_select": [["name": tagValue]]
-            ]
+            dateProperty: ["date": dateValue]
         ]
+        if !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !effectiveTagValue.isEmpty {
+            properties[tagProperty] = [
+                "multi_select": [["name": effectiveTagValue]]
+            ]
+        }
+        var eventProperties = properties
+        addMetadataProperties(
+            to: &eventProperties,
+            metadata: metadata,
+            notesProperty: notesProperty,
+            locationProperty: locationProperty,
+            urlProperty: urlProperty,
+            metadataProperties: metadataProperties
+        )
 
         _ = try await sendCreatePageRequest(
             parent: ["database_id": dataSourceID],
-            properties: properties,
+            properties: eventProperties,
             token: token
         )
     }
@@ -291,13 +557,16 @@ final class NotionPageWriter {
         titleProperty: String,
         dateProperty: String,
         tagProperty: String,
-        tagValue: String
+        tagValue: String,
+        metadata: CalendarEventMetadata = .empty,
+        notesProperty: String = "",
+        locationProperty: String = "",
+        urlProperty: String = "",
+        metadataProperties: [NotionPropertyOption] = []
     ) async throws -> String {
         guard !dataSourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !titleProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !dateProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !tagValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+              !dateProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NotionAPIError.invalidSettings
         }
 
@@ -330,24 +599,113 @@ final class NotionPageWriter {
             ]
         }
 
-        let properties: [String: Any] = [
+        let effectiveTagValue = effectiveTagValue(metadata: metadata, fallback: tagValue)
+        var properties: [String: Any] = [
             titleProperty: [
                 "title": [[
                     "type": "text",
                     "text": ["content": title]
                 ]]
             ],
-            dateProperty: ["date": dateValue],
-            tagProperty: [
-                "multi_select": [["name": tagValue]]
-            ]
+            dateProperty: ["date": dateValue]
         ]
+        if !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !effectiveTagValue.isEmpty {
+            properties[tagProperty] = [
+                "multi_select": [["name": effectiveTagValue]]
+            ]
+        }
+        var eventProperties = properties
+        addMetadataProperties(
+            to: &eventProperties,
+            metadata: metadata,
+            notesProperty: notesProperty,
+            locationProperty: locationProperty,
+            urlProperty: urlProperty,
+            metadataProperties: metadataProperties
+        )
 
         return try await sendCreatePageRequest(
             parent: ["database_id": dataSourceID],
-            properties: properties,
+            properties: eventProperties,
             token: token
         )
+    }
+
+    private func addMetadataProperties(
+        to properties: inout [String: Any],
+        metadata: CalendarEventMetadata,
+        notesProperty: String,
+        locationProperty: String,
+        urlProperty: String,
+        metadataProperties: [NotionPropertyOption]
+    ) {
+        let normalizedMetadata = metadata.normalized
+        if !notesProperty.isEmpty {
+            properties[notesProperty] = [
+                "rich_text": normalizedMetadata.notes.isEmpty
+                    ? []
+                    : [["type": "text", "text": ["content": normalizedMetadata.notes]]]
+            ]
+        }
+        if !locationProperty.isEmpty {
+            properties[locationProperty] = [
+                "rich_text": normalizedMetadata.location.isEmpty
+                    ? []
+                    : [["type": "text", "text": ["content": normalizedMetadata.location]]]
+            ]
+        }
+        if !urlProperty.isEmpty {
+            if normalizedMetadata.url.isEmpty {
+                properties[urlProperty] = ["url": NSNull()]
+            } else {
+                properties[urlProperty] = ["url": normalizedMetadata.url]
+            }
+        }
+
+        for property in metadataProperties {
+            let value = normalizedMetadata.propertyValues[property.name] ?? ""
+            switch property.type {
+            case "rich_text":
+                properties[property.name] = [
+                    "rich_text": value.isEmpty
+                        ? []
+                        : [["type": "text", "text": ["content": value]]]
+                ]
+            case "url":
+                if value.isEmpty {
+                    properties[property.name] = ["url": NSNull()]
+                } else {
+                    properties[property.name] = ["url": value]
+                }
+            case "multi_select":
+                let values = value
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                properties[property.name] = [
+                    "multi_select": values.map { ["name": $0] }
+                ]
+            case "select":
+                if value.isEmpty {
+                    properties[property.name] = ["select": NSNull()]
+                } else {
+                    properties[property.name] = ["select": ["name": value]]
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    private func effectiveTagValue(
+        metadata: CalendarEventMetadata,
+        fallback: String
+    ) -> String {
+        let metadataValue = metadata.normalized.tagValue
+        return metadataValue.isEmpty
+            ? fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+            : metadataValue
     }
 
     private func sendCreatePageRequest(
@@ -479,6 +837,11 @@ nonisolated final class AppleCalendarEventClient {
                 isAllDay: event.isAllDay,
                 startDate: event.startDate,
                 endDate: event.isAllDay ? nil : event.endDate,
+                metadata: CalendarEventMetadata(
+                    notes: event.notes ?? "",
+                    location: event.location ?? "",
+                    url: event.url?.absoluteString ?? ""
+                ),
                 calendarColor: calendarColor
             )
         }
@@ -506,6 +869,53 @@ nonisolated final class AppleCalendarEventClient {
         }
 
         try eventStore.remove(event, span: .thisEvent, commit: true)
+    }
+
+    func updateEvent(
+        identifier: String,
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool,
+        metadata: CalendarEventMetadata = .empty
+    ) throws {
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
+            throw CalendarEventManagementError.accessDenied
+        }
+
+        guard let event = eventStore.event(withIdentifier: identifier),
+              let calendar = event.calendar,
+              calendar.allowsContentModifications else {
+            throw CalendarEventManagementError.invalidResponse
+        }
+
+        guard endDate >= startDate else {
+            throw CalendarEventManagementError.invalidDate
+        }
+
+        event.title = title
+        let normalizedMetadata = metadata.normalized
+        event.notes = normalizedMetadata.notes.isEmpty ? nil : normalizedMetadata.notes
+        event.location = normalizedMetadata.location.isEmpty ? nil : normalizedMetadata.location
+        event.url = normalizedMetadata.url.isEmpty ? nil : URL(string: normalizedMetadata.url)
+        event.isAllDay = isAllDay
+
+        if isAllDay {
+            let calendar = Calendar.current
+            let normalizedStartDate = calendar.startOfDay(for: startDate)
+            let normalizedEndDate = calendar.startOfDay(for: endDate)
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: normalizedEndDate),
+                  let inclusiveEndDate = calendar.date(byAdding: .second, value: -1, to: nextDay) else {
+                throw CalendarEventManagementError.invalidDate
+            }
+            event.startDate = normalizedStartDate
+            event.endDate = inclusiveEndDate
+        } else {
+            event.startDate = startDate
+            event.endDate = endDate
+        }
+
+        try eventStore.save(event, span: .thisEvent, commit: true)
     }
 
     private func selectedCalendar() -> EKCalendar? {
@@ -538,6 +948,34 @@ struct NotionCalendarEventClient {
     let titleProperty: String
     let tagProperty: String
     let tagValue: String
+    let notesProperty: String
+    let locationProperty: String
+    let urlProperty: String
+    let metadataProperties: [NotionPropertyOption]
+
+    init(
+        token: String,
+        dataSourceID: String,
+        dateProperty: String,
+        titleProperty: String,
+        tagProperty: String,
+        tagValue: String,
+        notesProperty: String = "",
+        locationProperty: String = "",
+        urlProperty: String = "",
+        metadataProperties: [NotionPropertyOption] = []
+    ) {
+        self.token = token
+        self.dataSourceID = dataSourceID
+        self.dateProperty = dateProperty
+        self.titleProperty = titleProperty
+        self.tagProperty = tagProperty
+        self.tagValue = tagValue
+        self.notesProperty = notesProperty
+        self.locationProperty = locationProperty
+        self.urlProperty = urlProperty
+        self.metadataProperties = metadataProperties
+    }
 
     func fetchEvents(yearMonth: YearMonth) async throws -> [CalendarEventRecord] {
         var cursor: String?
@@ -573,24 +1011,29 @@ struct NotionCalendarEventClient {
             pageCount += 1
             guard pageCount <= 100 else { break }
 
-            var body: [String: Any] = [
-                "page_size": 100,
-                "filter": [
+            let dateFilter: [String: Any] = [
+                "property": dateProperty,
+                "date": [
+                    "on_or_after": dateText(from: queryStart),
+                    "before": dateText(yearMonth: yearMonth.nextMonth, day: 1)
+                ]
+            ]
+            let shouldFilterByTag = !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !tagValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            var body: [String: Any] = ["page_size": 100]
+            if shouldFilterByTag {
+                body["filter"] = [
                     "and": [
-                        [
-                            "property": dateProperty,
-                            "date": [
-                                "on_or_after": dateText(from: queryStart),
-                                "before": dateText(yearMonth: yearMonth.nextMonth, day: 1)
-                            ]
-                        ],
+                        dateFilter,
                         [
                             "property": tagProperty,
                             "multi_select": ["contains": tagValue]
                         ]
                     ]
                 ]
-            ]
+            } else {
+                body["filter"] = dateFilter
+            }
             if let cursor {
                 body["start_cursor"] = cursor
             }
@@ -615,12 +1058,31 @@ struct NotionCalendarEventClient {
                       let properties = page["properties"] as? [String: Any],
                       let dateData = properties[dateProperty] as? [String: Any],
                       let dateValue = dateData["date"] as? [String: Any],
-                      let start = dateValue["start"] as? String,
-                      hasConfiguredTag(in: properties[tagProperty]) else {
+                      let start = dateValue["start"] as? String else {
+                    continue
+                }
+
+                guard !shouldFilterByTag
+                    || hasConfiguredTag(in: properties[tagProperty]) else {
                     continue
                 }
 
                 let title = title(from: properties[titleProperty])
+                let dynamicValues = Dictionary(uniqueKeysWithValues: metadataProperties.map { property in
+                    (
+                        property.name,
+                        metadataValue(from: properties[property.name], property: property)
+                    )
+                })
+                let metadata = CalendarEventMetadata(
+                    notes: richText(from: properties[notesProperty] as? [String: Any]),
+                    location: richText(from: properties[locationProperty] as? [String: Any]),
+                    url: url(from: properties[urlProperty] as? [String: Any]),
+                    tagValue: metadataProperties.isEmpty
+                        ? legacyTagValue(from: properties[tagProperty])
+                        : "",
+                    propertyValues: dynamicValues
+                )
                 let isAllDay = !start.contains("T")
                 let startDate = isAllDay ? dateOnlyDate(from: start) : parseISO8601Date(start)
                 guard let startDate else { continue }
@@ -654,6 +1116,7 @@ struct NotionCalendarEventClient {
                     isAllDay: isAllDay,
                     startDate: startDate,
                     endDate: endDate,
+                    metadata: metadata,
                     calendarColor: nil
                 ))
             }
@@ -677,6 +1140,185 @@ struct NotionCalendarEventClient {
         guard (payload["in_trash"] as? Bool) == true else {
             throw CalendarEventManagementError.invalidResponse
         }
+    }
+
+    func updatePage(
+        identifier: String,
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool,
+        metadata: CalendarEventMetadata = .empty
+    ) async throws {
+        guard !titleProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !dateProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw CalendarEventManagementError.invalidSettings("Notionのプロパティ設定を確認してください。")
+        }
+
+        guard endDate >= startDate else {
+            throw CalendarEventManagementError.invalidDate
+        }
+
+        var dateValue: [String: Any]
+        if isAllDay {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "yyyy-MM-dd"
+
+            let calendar = Calendar.current
+            let normalizedStartDate = calendar.startOfDay(for: startDate)
+            let normalizedEndDate = calendar.startOfDay(for: endDate)
+            dateValue = ["start": formatter.string(from: normalizedStartDate)]
+            if normalizedEndDate > normalizedStartDate {
+                dateValue["end"] = formatter.string(from: normalizedEndDate)
+            }
+        } else {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+            formatter.timeZone = .current
+            dateValue = [
+                "start": formatter.string(from: startDate),
+                "end": formatter.string(from: endDate)
+            ]
+        }
+
+        var properties: [String: Any] = [
+            titleProperty: [
+                "title": [[
+                    "type": "text",
+                    "text": ["content": title]
+                ]]
+            ],
+            dateProperty: ["date": dateValue]
+        ]
+        if !metadataProperties.contains(where: { $0.name == tagProperty }) {
+            let effectiveTagValue = effectiveTagValue(metadata: metadata)
+            if !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !effectiveTagValue.isEmpty {
+                properties[tagProperty] = [
+                    "multi_select": [["name": effectiveTagValue]]
+                ]
+            }
+        }
+        var updatedProperties = properties
+        addMetadataProperties(to: &updatedProperties, metadata: metadata)
+
+        _ = try await sendRequest(
+            url: URL(string: "https://api.notion.com/v1/pages/\(identifier)")!,
+            method: "PATCH",
+            body: ["properties": updatedProperties]
+        )
+    }
+
+    private func addMetadataProperties(
+        to properties: inout [String: Any],
+        metadata: CalendarEventMetadata
+    ) {
+        let normalizedMetadata = metadata.normalized
+        if !notesProperty.isEmpty {
+            properties[notesProperty] = [
+                "rich_text": normalizedMetadata.notes.isEmpty
+                    ? []
+                    : [["type": "text", "text": ["content": normalizedMetadata.notes]]]
+            ]
+        }
+        if !locationProperty.isEmpty {
+            properties[locationProperty] = [
+                "rich_text": normalizedMetadata.location.isEmpty
+                    ? []
+                    : [["type": "text", "text": ["content": normalizedMetadata.location]]]
+            ]
+        }
+        if !urlProperty.isEmpty {
+            if normalizedMetadata.url.isEmpty {
+                properties[urlProperty] = ["url": NSNull()]
+            } else {
+                properties[urlProperty] = ["url": normalizedMetadata.url]
+            }
+        }
+
+        for property in metadataProperties {
+            let value = normalizedMetadata.propertyValues[property.name] ?? ""
+            switch property.type {
+            case "rich_text":
+                properties[property.name] = [
+                    "rich_text": value.isEmpty
+                        ? []
+                        : [["type": "text", "text": ["content": value]]]
+                ]
+            case "url":
+                if value.isEmpty {
+                    properties[property.name] = ["url": NSNull()]
+                } else {
+                    properties[property.name] = ["url": value]
+                }
+            case "multi_select":
+                let values = value
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                properties[property.name] = [
+                    "multi_select": values.map { ["name": $0] }
+                ]
+            case "select":
+                properties[property.name] = value.isEmpty
+                    ? ["select": NSNull()]
+                    : ["select": ["name": value]]
+            default:
+                break
+            }
+        }
+    }
+
+    private func effectiveTagValue(metadata: CalendarEventMetadata) -> String {
+        if let dynamicValue = metadata.normalized.propertyValues[tagProperty] {
+            return dynamicValue
+        }
+        let metadataValue = metadata.normalized.tagValue
+        return metadataValue.isEmpty
+            ? tagValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            : metadataValue
+    }
+
+    private func richText(from property: [String: Any]?) -> String {
+        guard let items = property?["rich_text"] as? [[String: Any]] else { return "" }
+        return items.compactMap { item in
+            if let plainText = item["plain_text"] as? String { return plainText }
+            return (item["text"] as? [String: Any])?["content"] as? String
+        }.joined()
+    }
+
+    private func url(from property: [String: Any]?) -> String {
+        property?["url"] as? String ?? ""
+    }
+
+    private func metadataValue(from property: Any?, property option: NotionPropertyOption) -> String {
+        guard let property = property as? [String: Any] else { return "" }
+        switch option.type {
+        case "rich_text":
+            return richText(from: property)
+        case "url":
+            return url(from: property)
+        case "select":
+            return (property["select"] as? [String: Any])?["name"] as? String ?? ""
+        case "multi_select":
+            let values = (property["multi_select"] as? [[String: Any]])?
+                .compactMap { $0["name"] as? String } ?? []
+            guard option.name == tagProperty else { return values.first ?? "" }
+            let identifier = tagValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            return values.first(where: { $0 != identifier }) ?? values.first ?? ""
+        default:
+            return ""
+        }
+    }
+
+    private func legacyTagValue(from property: Any?) -> String {
+        let values = (property as? [String: Any])?["multi_select"] as? [[String: Any]] ?? []
+        let names = values.compactMap { $0["name"] as? String }
+        let configuredValue = tagValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return names.first(where: { $0 == configuredValue }) ?? names.first ?? ""
     }
 
     private func sendRequest(
@@ -1427,7 +2069,8 @@ struct GoogleCalendarAPIClient {
         title: String,
         startDate: Date,
         endDate: Date,
-        isAllDay: Bool
+        isAllDay: Bool,
+        metadata: CalendarEventMetadata = .empty
     ) async throws -> String {
         guard endDate >= startDate else {
             throw GoogleCalendarError.invalidDate
@@ -1471,7 +2114,14 @@ struct GoogleCalendarAPIClient {
             "start": start,
             "end": end
         ]
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let normalizedMetadata = metadata.normalized
+        var eventBody = body
+        if !normalizedMetadata.notes.isEmpty { eventBody["description"] = normalizedMetadata.notes }
+        if !normalizedMetadata.location.isEmpty { eventBody["location"] = normalizedMetadata.location }
+        if !normalizedMetadata.url.isEmpty {
+            eventBody["source"] = ["title": "CalHub", "url": normalizedMetadata.url]
+        }
+        let bodyData = try JSONSerialization.data(withJSONObject: eventBody)
         let responseData = try await sendRequest(url: url, method: "POST", body: bodyData)
         guard let responseObject = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
               let identifier = responseObject["id"] as? String else {
@@ -1487,7 +2137,8 @@ struct GoogleCalendarAPIClient {
         yearMonth: YearMonth,
         day: Int,
         startMinutes: Int?,
-        endMinutes: Int?
+        endMinutes: Int?,
+        metadata: CalendarEventMetadata = .empty
     ) async throws {
         let start: [String: Any]
         let end: [String: Any]
@@ -1530,7 +2181,14 @@ struct GoogleCalendarAPIClient {
             "start": start,
             "end": end
         ]
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let normalizedMetadata = metadata.normalized
+        var eventBody = body
+        if !normalizedMetadata.notes.isEmpty { eventBody["description"] = normalizedMetadata.notes }
+        if !normalizedMetadata.location.isEmpty { eventBody["location"] = normalizedMetadata.location }
+        if !normalizedMetadata.url.isEmpty {
+            eventBody["source"] = ["title": "CalHub", "url": normalizedMetadata.url]
+        }
+        let bodyData = try JSONSerialization.data(withJSONObject: eventBody)
         _ = try await sendRequest(url: url, method: "POST", body: bodyData)
     }
 
@@ -1590,6 +2248,11 @@ struct GoogleCalendarAPIClient {
                     endDate: endDate.map { date in
                         Calendar.current.date(byAdding: .day, value: -1, to: date)
                     } ?? nil,
+                    metadata: CalendarEventMetadata(
+                        notes: item["description"] as? String ?? "",
+                        location: item["location"] as? String ?? "",
+                        url: ((item["source"] as? [String: Any])?["url"] as? String) ?? ""
+                    ),
                     calendarColor: calendarColor ?? nil,
                     isReadOnly: isReadOnly
                 )
@@ -1611,6 +2274,11 @@ struct GoogleCalendarAPIClient {
                 isAllDay: false,
                 startDate: dateTime,
                 endDate: endDate,
+                metadata: CalendarEventMetadata(
+                    notes: item["description"] as? String ?? "",
+                    location: item["location"] as? String ?? "",
+                    url: ((item["source"] as? [String: Any])?["url"] as? String) ?? ""
+                ),
                 calendarColor: calendarColor ?? nil,
                 isReadOnly: isReadOnly
             )
@@ -1642,6 +2310,69 @@ struct GoogleCalendarAPIClient {
     func deleteEvent(calendarID: String, eventID: String) async throws {
         let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID(calendarID))/events/\(eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID)")!
         _ = try await sendRequest(url: url, method: "DELETE")
+    }
+
+    func updateEvent(
+        calendarID: String,
+        eventID: String,
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool,
+        metadata: CalendarEventMetadata = .empty
+    ) async throws {
+        guard endDate >= startDate else {
+            throw GoogleCalendarError.invalidDate
+        }
+
+        let start: [String: Any]
+        let end: [String: Any]
+        if isAllDay {
+            let calendar = Calendar.current
+            let normalizedStartDate = calendar.startOfDay(for: startDate)
+            let normalizedEndDate = calendar.startOfDay(for: endDate)
+            guard let endExclusive = calendar.date(byAdding: .day, value: 1, to: normalizedEndDate) else {
+                throw GoogleCalendarError.invalidDate
+            }
+
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "yyyy-MM-dd"
+            start = ["date": formatter.string(from: normalizedStartDate)]
+            end = ["date": formatter.string(from: endExclusive)]
+        } else {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+            formatter.timeZone = .current
+            start = [
+                "dateTime": formatter.string(from: startDate),
+                "timeZone": TimeZone.current.identifier
+            ]
+            end = [
+                "dateTime": formatter.string(from: endDate),
+                "timeZone": TimeZone.current.identifier
+            ]
+        }
+
+        let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID(calendarID))/events/\(eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID)")!
+        let body: [String: Any] = [
+            "summary": title,
+            "start": start,
+            "end": end
+        ]
+        let normalizedMetadata = metadata.normalized
+        var eventBody = body
+        eventBody["description"] = normalizedMetadata.notes
+        eventBody["location"] = normalizedMetadata.location
+        if normalizedMetadata.url.isEmpty {
+            eventBody["source"] = NSNull()
+        } else {
+            eventBody["source"] = ["title": "CalHub", "url": normalizedMetadata.url]
+        }
+        let bodyData = try JSONSerialization.data(withJSONObject: eventBody)
+        _ = try await sendRequest(url: url, method: "PATCH", body: bodyData)
     }
 
     private func monthStart(_ yearMonth: YearMonth) -> Date? {
@@ -1810,7 +2541,9 @@ struct GoogleCalendarEventWriter {
         definitions: [ShiftDefinition],
         calendarID: String,
         restTitle: String,
-        includeRest: Bool
+        includeRest: Bool,
+        restSourceTitle: String = "休",
+        metadata: CalendarEventMetadata = .empty
     ) async throws -> GoogleCalendarRegistrationResult {
         guard let yearMonth else {
             throw GoogleCalendarError.missingYearMonth
@@ -1823,6 +2556,9 @@ struct GoogleCalendarEventWriter {
         let registeredRestTitle = restTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "休"
             : restTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let registeredRestSourceTitle = normalizedTitle(restSourceTitle).isEmpty
+            ? "休"
+            : normalizedTitle(restSourceTitle)
         var skippedTitles: [String] = []
         var savedCount = 0
 
@@ -1834,7 +2570,7 @@ struct GoogleCalendarEventWriter {
             let title = normalizedTitle(cell.valueText)
             guard !title.isEmpty else { continue }
 
-            if title == "休" {
+            if title == registeredRestSourceTitle {
                 guard includeRest else { continue }
                 try await client.createEvent(
                     calendarID: calendarID,
@@ -1842,7 +2578,8 @@ struct GoogleCalendarEventWriter {
                     yearMonth: yearMonth,
                     day: day,
                     startMinutes: nil,
-                    endMinutes: nil
+                    endMinutes: nil,
+                    metadata: metadata
                 )
                 savedCount += 1
                 continue
@@ -1861,7 +2598,8 @@ struct GoogleCalendarEventWriter {
                 yearMonth: yearMonth,
                 day: day,
                 startMinutes: definition.startMinutes,
-                endMinutes: definition.endMinutes
+                endMinutes: definition.endMinutes,
+                metadata: metadata
             )
             savedCount += 1
         }
@@ -2025,7 +2763,9 @@ final class AppleCalendarEventWriter {
         definitions: [ShiftDefinition],
         calendarIdentifier: String,
         restTitle: String,
-        includeRest: Bool
+        includeRest: Bool,
+        restSourceTitle: String = "休",
+        metadata: CalendarEventMetadata = .empty
     ) throws -> AppleCalendarRegistrationResult {
         guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
             throw AppleCalendarRegistrationError.accessDenied
@@ -2052,6 +2792,9 @@ final class AppleCalendarEventWriter {
         let registeredRestTitle = restTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "休"
             : restTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let registeredRestSourceTitle = normalizedTitle(restSourceTitle).isEmpty
+            ? "休"
+            : normalizedTitle(restSourceTitle)
         var skippedTitles: [String] = []
         var savedCount = 0
 
@@ -2059,9 +2802,15 @@ final class AppleCalendarEventWriter {
             let title = normalizedTitle(cell.valueText)
             guard !title.isEmpty else { continue }
 
-            if title == "休" {
+            if title == registeredRestSourceTitle {
                 guard includeRest else { continue }
-                try saveAllDayEvent(title: registeredRestTitle, yearMonth: yearMonth, dayText: cell.dateText, calendar: calendar)
+                try saveAllDayEvent(
+                    title: registeredRestTitle,
+                    yearMonth: yearMonth,
+                    dayText: cell.dateText,
+                    calendar: calendar,
+                    metadata: metadata
+                )
                 savedCount += 1
                 continue
             }
@@ -2079,7 +2828,8 @@ final class AppleCalendarEventWriter {
                 dayText: cell.dateText,
                 startMinutes: definition.startMinutes,
                 endMinutes: definition.endMinutes,
-                calendar: calendar
+                calendar: calendar,
+                metadata: metadata
             )
             savedCount += 1
         }
@@ -2096,7 +2846,8 @@ final class AppleCalendarEventWriter {
         startDate: Date,
         endDate: Date,
         isAllDay: Bool,
-        calendarIdentifier: String
+        calendarIdentifier: String,
+        metadata: CalendarEventMetadata = .empty
     ) throws -> String {
         guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
             throw AppleCalendarRegistrationError.accessDenied
@@ -2119,6 +2870,10 @@ final class AppleCalendarEventWriter {
 
         let event = EKEvent(eventStore: eventStore)
         event.title = title
+        let normalizedMetadata = metadata.normalized
+        event.notes = normalizedMetadata.notes.isEmpty ? nil : normalizedMetadata.notes
+        event.location = normalizedMetadata.location.isEmpty ? nil : normalizedMetadata.location
+        event.url = normalizedMetadata.url.isEmpty ? nil : URL(string: normalizedMetadata.url)
         event.calendar = calendar
         event.isAllDay = isAllDay
 
@@ -2145,7 +2900,13 @@ final class AppleCalendarEventWriter {
         return identifier
     }
 
-    private func saveAllDayEvent(title: String, yearMonth: YearMonth, dayText: String, calendar: EKCalendar) throws {
+    private func saveAllDayEvent(
+        title: String,
+        yearMonth: YearMonth,
+        dayText: String,
+        calendar: EKCalendar,
+        metadata: CalendarEventMetadata
+    ) throws {
         guard let eventDate = date(yearMonth: yearMonth, dayText: dayText, minutes: 0),
               let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: eventDate),
               let endDate = Calendar.current.date(byAdding: .second, value: -1, to: nextDay) else {
@@ -2154,6 +2915,10 @@ final class AppleCalendarEventWriter {
 
         let event = EKEvent(eventStore: eventStore)
         event.title = title
+        let normalizedMetadata = metadata.normalized
+        event.notes = normalizedMetadata.notes.isEmpty ? nil : normalizedMetadata.notes
+        event.location = normalizedMetadata.location.isEmpty ? nil : normalizedMetadata.location
+        event.url = normalizedMetadata.url.isEmpty ? nil : URL(string: normalizedMetadata.url)
         event.calendar = calendar
         event.isAllDay = true
         event.startDate = eventDate
@@ -2167,7 +2932,8 @@ final class AppleCalendarEventWriter {
         dayText: String,
         startMinutes: Int,
         endMinutes: Int,
-        calendar: EKCalendar
+        calendar: EKCalendar,
+        metadata: CalendarEventMetadata
     ) throws {
         guard let startDate = date(yearMonth: yearMonth, dayText: dayText, minutes: startMinutes),
               let endDate = date(yearMonth: yearMonth, dayText: dayText, minutes: endMinutes) else {
@@ -2176,6 +2942,10 @@ final class AppleCalendarEventWriter {
 
         let event = EKEvent(eventStore: eventStore)
         event.title = title
+        let normalizedMetadata = metadata.normalized
+        event.notes = normalizedMetadata.notes.isEmpty ? nil : normalizedMetadata.notes
+        event.location = normalizedMetadata.location.isEmpty ? nil : normalizedMetadata.location
+        event.url = normalizedMetadata.url.isEmpty ? nil : URL(string: normalizedMetadata.url)
         event.calendar = calendar
         event.startDate = startDate
         event.endDate = endDate

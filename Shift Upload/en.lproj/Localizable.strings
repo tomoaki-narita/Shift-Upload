@@ -75,6 +75,9 @@
 "時間未設定" = "Time not set";
 "日付不明" = "Date unknown";
 "タイトル未設定" = "Title not set";
+"使用しない" = "Do not use";
+"未設定" = "Not set";
+"利用可能な列がありません" = "No compatible properties available";
 "日付を判定できませんでした" = "The date could not be determined";
 "タイトルが空です" = "The title is empty";
 "休の登録が無効です" = "Day-off registration is disabled";
@@ -89,6 +92,13 @@
 "イベントタイトルと時間を編集します。" = "Edit the event title and time.";
 "イベントタイトルを入力してください。" = "Enter an event title.";
 "保存できません" = "Cannot save";
+"詳細" = "Details";
+"場所" = "Location";
+"URL" = "URL";
+"メモ・説明" = "Notes / Description";
+"登録時に入力するプロパティ" = "Properties to enter when registering";
+"ONにした項目を登録・編集画面で入力できます。" = "Enabled properties are available in the registration and edit screens.";
+"URLを確認してください。" = "Please check the URL.";
 "終了日時は開始日時以降にしてください。" = "The end date and time must be after the start date and time.";
 "終了時刻は開始時刻以降にしてください。" = "The end time must be at or after the start time.";
 "開始日時" = "Start date and time";
@@ -103,7 +113,7 @@
 "完了" = "Done";
 "イベントを取得中です..." = "Fetching events...";
 "イベントがありません" = "No events";
-"この月に登録されたイベントはありません。" = "There are no registered events in this month.";
+"この月に登録されたイベントはありません。" = "No events found.";
 "イベントを削除しますか？" = "Delete this event?";
 "削除してイベントを登録しますか？" = "Delete this event and register it again?";
 "削除して登録" = "Delete and register";
@@ -137,7 +147,18 @@
 "保存済みPDF" = "Saved PDFs";
 "読み込んだPDFをアプリ内に保存し、一覧から再解析・削除できます。同じ内容のPDFは重複保存しません。保存したPDFのプレビュー、ページ移動、拡大縮小にも対応します。" = "Save imported PDFs in the app and re-analyze or delete them from the list. PDFs with the same contents are not saved more than once. Preview saved PDFs, move between pages, and zoom in or out.";
 "カレンダー登録" = "Calendar Registration";
+"取得したプロパティ設定" = "Fetched Property Settings";
+"イベントに紐付けるタグ" = "Event tag";
+"選択肢から選択" = "Choose an option";
+"テキストを入力" = "Enter text";
+"URLを入力" = "Enter a URL";
+"選択肢がありません" = "No options available";
+"デフォルト値" = "Default value";
+"データベースIDを入力するとプロパティを取得します。Notionで対象データベースにインテグレーションを追加してください。" = "Enter a database ID to fetch properties. Add an integration to the target database in Notion.";
 "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。勤務イベントは保存済みの開始・終了時刻で登録できます。" = "Choose Apple Calendar, Google Calendar, or a Notion database as the destination. Work events use the saved start and end times.";
+"Notionプロパティ設定" = "Notion Property Settings";
+"Notionのタイトル列・日時列を選択し、編集可能なプロパティを登録画面に追加できます。セレクト系のデフォルト値は設定画面で指定でき、複数日登録にも使用されます。" = "Choose the Notion title and date properties, then add editable properties to the registration screen. Default values for select properties can be set in Settings and are also used for multiple-day registration.";
+"任意の文字列を、登録時に別の文字列へ変換できます。勤務表の休み表示などに利用できます。" = "Convert any text to another text when registering, such as converting a day-off label in a work schedule.";
 "月を移動し、日付ごとの通常イベントを確認、変更、削除できます。空の日付への新規登録、既存イベントの置き換えにも対応します。" = "Move between months and review, change, or delete regular events by date. You can add events to empty dates or replace existing events.";
 "祝日表示" = "Holiday Display";
 "Googleカレンダーの「日本の祝日」を登録先と一緒に表示できます。祝日は表示専用で、イベント件数には含まれません。" = "Show Google's Japanese holiday calendar alongside the destination. Holidays are display-only and are excluded from the event count.";
@@ -157,15 +178,15 @@
 "PDFから年月を取得できない場合は、ファイル名を「2026-01.pdf」のようなYYYY-MM形式にしてください。" = "If the year and month cannot be read from the PDF, use a filename in YYYY-MM form, such as 2026-01.pdf.";
 "イベント名の照合" = "Event name matching";
 "PDFから抽出した勤務名がイベント設定にない場合は、登録前に保存するか、登録時にスキップされます。新しく保存したイベントの初期時間は8:30-17:30です。" = "If an extracted shift name is not in Event Settings, save it before registration or it will be skipped. Newly saved events start with 8:30-17:30.";
-"休の登録" = "Day-off registration";
-"「休」は登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。" = "You can choose whether to include \"休\" at registration. Apple Calendar and Google Calendar use an all-day event; Notion uses a timed 00:00-23:59 value.";
+"休みデータの登録" = "Day-off data";
+"設定した変換元の文字列は、登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。" = "You can choose whether to include the configured source text at registration. Apple Calendar and Google Calendar use an all-day event; Notion uses a timed 00:00-23:59 value.";
 "日付カードの表示" = "Date card display";
 "日付カードには時間順に最大3件を表示します。3件以上の場合、カード内の時間は省略され、日付メニューで全件を確認できます。" = "Date cards show up to three events in time order. When there are three or more, times are hidden on the card and all events can be checked from the date menu.";
 "日をまたぐイベントには対応していません。" = "Events that cross midnight are not supported.";
 "接続の準備" = "Connection Setup";
 "用意するもの: Apple IDでiCloudにサインインし、カレンダーを有効にした端末。クライアントIDやトークンは不要です。\n設定方法: 端末のカレンダーへのアクセスを許可し、カレンダー設定で「カレンダー一覧を取得」から登録先カレンダーを選択します。" = "What you need: A device signed in to iCloud with Calendar enabled. No client ID or token is required.\nSetup: Allow Cal Hub to access your calendars, then open Calendar Settings, choose Fetch Calendar List, and select a destination calendar.";
 "用意するもの: Googleアカウント。\n設定方法: Googleログインを選択し、カレンダーへのアクセスを許可して登録先を選択してください。OAuthクライアントの設定はアプリ側で管理します。" = "What you need: A Google account.\nSetup: Choose Sign in with Google, allow calendar access, and choose a destination calendar. OAuth client settings are managed by the app.";
-"用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型・複数選択型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列・タグ列・タグ値を選択してください。" = "What you need: A Notion internal integration, its access token, and the target database ID. The database must have title, date, and multi-select properties.\nSetup: Create an internal integration in Notion's My integrations and copy its token. Add the integration to the target database's connections, get the database ID from its URL, and enter it in Settings. Fetch the properties, then choose the title, date, tag, and tag value.";
+"用意するもの: Notionの内部インテグレーション、アクセストークン、対象データベースのID。データベースにはタイトル型・日付型のプロパティが必要です。\n設定方法: NotionのMy integrationsで内部インテグレーションを作成してトークンを取得し、対象データベースの接続にそのインテグレーションを追加します。データベースURLからIDを確認して入力し、列を取得後にタイトル列・日付列を選択してください。必要に応じて、イベントに紐付けるタグ列とタグ値を設定します。" = "What you need: A Notion internal integration, its access token, and the target database ID. The database must have title and date properties.\nSetup: Create an internal integration in Notion's My integrations and copy its token. Add the integration to the target database's connections, get the database ID from its URL, and enter it in Settings. Fetch the properties, then choose the title and date properties. Optionally, configure a tag property and tag value to associate with events.";
 "プライバシーポリシー" = "Privacy Policy";
 "このアプリは、ユーザーが選択したPDFと、カレンダー登録に必要な設定を使用します。" = "This app uses the PDFs you choose and the settings required to register calendar events.";
 "Appleカレンダーを使用する場合、カレンダーへのアクセスはイベントの読み取りと登録のためにのみ使用します。" = "When you use Apple Calendar, calendar access is used only to read and register events.";
@@ -222,16 +243,16 @@
 "例: due date" = "Example: due date";
 "例: tag" = "Example: tag";
 "例: shift" = "Example: shift";
-"登録名（例: off）" = "Registered name (e.g. off)";
+"任意の文字列を、登録時に別の文字列へ変換できます。" = "You can convert any text to another text when registering.";
+"登録時の文字変換" = "Text conversion at registration";
 "取得した列から選択" = "Choose from fetched properties";
 "タイトル列" = "Title property";
 "日付列" = "Date property";
 "タグ列" = "Tag property";
 "タグ値を選択" = "Choose tag value";
-"データベースID、列名、タグ値はNotion側の設定に合わせて入力してください。Bearer、プロパティの種類、JSON構造はアプリが補完します。対象データベースをNotionの接続に共有し、ページ追加権限を付与してください。" = "Enter the database ID, property names, and tag value to match Notion. The app supplies Bearer, property types, and JSON structure. Share the database with the Notion connection and grant permission to add pages.";
+"データベースIDを入力すると列を取得します。タイトル・日時・タグ列はNotionへの登録に使用します。メモ・場所・URLは登録時に入力できます。Notionで対象データベースにインテグレーションを追加してください。" = "Enter the database ID to fetch its properties. Title, date, and tag properties are used when registering with Notion. Notes, location, and URL can be entered during registration. In Notion, add the integration to the target database.";
 
 /* Registration rules */
-"登録ルール" = "Registration rules";
 "時間を指定しない終日イベントとして登録" = "Register as an all-day event without specifying a time";
 "開始・終了時刻を指定して登録" = "Register with start and end times";
 "日付プロパティに開始・終了時刻を登録" = "Register start and end times in the date property";
@@ -263,11 +284,15 @@
 "利用できるカレンダーが見つかりませんでした。" = "No available calendars were found.";
 "OAuthクライアントIDとシークレットを入力してください。" = "Enter the OAuth client ID and secret.";
 "イベントを削除しました。" = "The event was deleted.";
+"イベントを更新しました。" = "The event was updated.";
+"イベントの更新に失敗しました: %@" = "Could not update the event: %@";
 "イベントの削除に失敗しました: %@" = "Could not delete the event: %@";
 
 /* Additional UI and dynamic messages */
 "今すぐ同期" = "Sync now";
 "イベント名" = "Event name";
+"タグ" = "Tag";
+"メモ" = "Notes";
 "イベントを選択" = "Choose event";
 "イベント一覧から選択" = "Choose from event list";
 "変更を適用" = "Apply changes";
@@ -309,9 +334,14 @@
 "Notionから無効な応答が返されました。" = "Notion returned an invalid response.";
 "Notion APIエラー（%@）: %@" = "Notion API error (%@): %@";
 "Notionの列を取得中です..." = "Fetching Notion properties...";
+"Notionの場所情報" = "Notion location information";
+"場所情報をNotionに保存する場合は、データベースにリッチテキスト型のプロパティを作成してください。" = "To save location information in Notion, create a rich-text property in the database.";
+"メモ列" = "Notes property";
+"場所列" = "Location property";
+"URL列" = "URL property";
 "トークンとデータベースIDを入力すると、列を自動取得します。" = "Enter the token and database ID to fetch properties automatically.";
 "取得できる列がありませんでした。Notionの接続権限を確認してください。" = "No properties were available. Check the Notion connection permissions.";
-"%@個の列を取得しました。" = "Fetched %@ properties.";
+"「%@」から%@件のプロパティを取得しました。\n設定可能なプロパティ: %@件" = "From \"%@\", fetched %@ properties.\nConfigurable properties: %@";
 "ファイルを選択できませんでした: %@" = "Could not choose the file: %@";
 "解析に失敗しました: %@" = "Analysis failed: %@";
 "Appleカレンダーへ登録中です。" = "Registering in Apple Calendar...";

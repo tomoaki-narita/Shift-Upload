@@ -2,6 +2,152 @@ import Foundation
 import SwiftUI
 
 // Registration sheets and preview UI.
+private struct CalHubMetadataTextFieldStyle: ViewModifier {
+    let lineLimit: ClosedRange<Int>
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .lineLimit(lineLimit)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+#if os(iOS)
+            .background(
+                Color(uiColor: .tertiarySystemFill),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+#else
+            .frame(maxWidth: .infinity)
+            .background(
+                Color(nsColor: .controlBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            }
+#endif
+    }
+}
+
+private extension View {
+    func calHubMetadataTextFieldStyle(lineLimit: ClosedRange<Int> = 1...4) -> some View {
+        modifier(CalHubMetadataTextFieldStyle(lineLimit: lineLimit))
+    }
+}
+
+private struct CalHubSegmentLayout: Layout {
+    let selectedIndex: Int?
+
+    init(selectedIndex: Int?) {
+        self.selectedIndex = selectedIndex
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let sizes = subviews.dropFirst().map { $0.sizeThatFits(.unspecified) }
+        let naturalWidth = sizes.reduce(CGFloat.zero) { $0 + $1.width }
+        let naturalHeight = sizes.map(\.height).max() ?? 24
+
+        return CGSize(
+            width: proposal.width ?? naturalWidth,
+            height: proposal.height ?? naturalHeight
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let buttonSubviews = subviews.dropFirst()
+        guard !buttonSubviews.isEmpty else { return }
+
+        let sizes = buttonSubviews.map { $0.sizeThatFits(.unspecified) }
+        let naturalWidth = sizes.reduce(CGFloat.zero) { $0 + $1.width }
+        let extraWidth = max(bounds.width - naturalWidth, 0) / CGFloat(buttonSubviews.count)
+        let widths = sizes.map { $0.width + extraWidth }
+
+        if let selectedIndex,
+           widths.indices.contains(selectedIndex) {
+            let selectedX = widths.prefix(selectedIndex).reduce(CGFloat.zero, +)
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX + selectedX, y: bounds.midY),
+                anchor: .leading,
+                proposal: ProposedViewSize(
+                    width: widths[selectedIndex],
+                    height: bounds.height
+                )
+            )
+        }
+
+        var x = bounds.minX
+
+        for (index, subview) in buttonSubviews.enumerated() {
+            let width = widths[index]
+            subview.place(
+                at: CGPoint(x: x, y: bounds.midY),
+                anchor: .leading,
+                proposal: ProposedViewSize(width: width, height: bounds.height)
+            )
+            x += width
+        }
+    }
+}
+
+struct CalHubSegmentedControl: View {
+    let options: [String]
+    let animationDuration: Double
+    @Binding var selection: String
+
+    init(
+        options: [String],
+        selection: Binding<String>,
+        animationDuration: Double = 0.16
+    ) {
+        self.options = options
+        self.animationDuration = animationDuration
+        _selection = selection
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            CalHubSegmentLayout(selectedIndex: options.firstIndex(of: selection)) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.55))
+                    .allowsHitTesting(false)
+
+                ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                    Button {
+                        withAnimation(.easeOut(duration: animationDuration)) {
+                            selection = option
+                        }
+                    } label: {
+                        Text(option.isEmpty ? "未選択" : option)
+                            .font(.system(size: 9))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
+                            .padding(.horizontal, 8)
+                            .frame(maxWidth: .infinity, minHeight: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                }
+            }
+            .frame(width: max(proxy.size.width - 6, 0), height: 24, alignment: .leading)
+            .animation(.easeOut(duration: animationDuration), value: selection)
+            .padding(3)
+        }
+        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
+        .background(Color.secondary.opacity(0.22), in: Capsule())
+    }
+}
+
 struct SingleShiftRegistrationView: View {
     let definitions: [ShiftDefinition]
     let onRegister: (YearMonth, Int, String) -> Void
@@ -128,7 +274,13 @@ struct SingleShiftRegistrationView: View {
 struct DateTimeEventRegistrationView: View {
     let initialStartDate: Date
     let locale: Locale
-    let onRegister: (String, Date, Date, Bool) -> Void
+    let initialTitle: String
+    let initialEndDate: Date?
+    let initialIsAllDay: Bool
+    let initialMetadata: CalendarEventMetadata
+    let metadataFieldLabels: CalendarEventMetadataFieldLabels
+    let isEditing: Bool
+    let onRegister: (CalendarEventDraft) -> Void
 
     @Environment(\.dismiss) private var dismiss
 #if os(iOS)
@@ -138,18 +290,52 @@ struct DateTimeEventRegistrationView: View {
     @State private var startDate: Date
     @State private var endDate: Date
     @State private var isAllDay = false
+    @State private var notes = ""
+    @State private var location = ""
+    @State private var url = ""
+    @State private var tagValue = ""
+    @State private var propertyValues: [String: String] = [:]
     @State private var validationMessage: String?
 
     init(
         initialStartDate: Date,
         locale: Locale,
-        onRegister: @escaping (String, Date, Date, Bool) -> Void
+        initialTitle: String = "",
+        initialEndDate: Date? = nil,
+        initialIsAllDay: Bool = false,
+        initialMetadata: CalendarEventMetadata = .empty,
+        metadataFieldLabels: CalendarEventMetadataFieldLabels,
+        isEditing: Bool = false,
+        onRegister: @escaping (CalendarEventDraft) -> Void
     ) {
         self.initialStartDate = initialStartDate
         self.locale = locale
+        self.initialTitle = initialTitle
+        self.initialEndDate = initialEndDate
+        self.initialIsAllDay = initialIsAllDay
+        self.initialMetadata = initialMetadata
+        self.metadataFieldLabels = metadataFieldLabels
+        self.isEditing = isEditing
         self.onRegister = onRegister
+        _title = State(initialValue: initialTitle)
         _startDate = State(initialValue: initialStartDate)
-        _endDate = State(initialValue: Calendar.current.date(byAdding: .hour, value: 1, to: initialStartDate) ?? initialStartDate)
+        _endDate = State(
+            initialValue: initialEndDate
+                ?? Calendar.current.date(byAdding: .hour, value: 1, to: initialStartDate)
+                ?? initialStartDate
+        )
+        _isAllDay = State(initialValue: initialIsAllDay)
+        _notes = State(initialValue: initialMetadata.notes)
+        _location = State(initialValue: initialMetadata.location)
+        _url = State(initialValue: initialMetadata.url)
+        _tagValue = State(initialValue: initialMetadata.tagValue.isEmpty
+            ? metadataFieldLabels.tagDefaultValue
+            : initialMetadata.tagValue)
+        var propertyValues = metadataFieldLabels.defaultPropertyValues
+        for (name, value) in initialMetadata.propertyValues where !value.isEmpty {
+            propertyValues[name] = value
+        }
+        _propertyValues = State(initialValue: propertyValues)
     }
 
     private var isValidationAlertPresented: Binding<Bool> {
@@ -175,14 +361,40 @@ struct DateTimeEventRegistrationView: View {
             return
         }
 
+        let metadata = CalendarEventMetadata(
+            notes: metadataFieldLabels.notesIsAvailable ? notes : "",
+            location: metadataFieldLabels.locationIsAvailable ? location : "",
+            url: metadataFieldLabels.urlIsAvailable ? url : "",
+            tagValue: metadataFieldLabels.tagIsAvailable ? tagValue : "",
+            propertyValues: propertyValues
+        ).normalized
+        if !metadata.url.isEmpty {
+            guard let components = URLComponents(string: metadata.url),
+                  (components.scheme?.lowercased() == "http" || components.scheme?.lowercased() == "https"),
+                  components.host?.isEmpty == false else {
+                validationMessage = localized("URLを確認してください。")
+                return
+            }
+        }
+        for property in metadataFieldLabels.additionalProperties where property.type == "url" {
+            let value = metadata.propertyValues[property.name] ?? ""
+            guard value.isEmpty || isValidMetadataURL(value) else {
+                validationMessage = localized("URLを確認してください。")
+                return
+            }
+        }
+
         let calendar = Calendar.current
         let normalizedStartDate = isAllDay ? calendar.startOfDay(for: startDate) : startDate
         let normalizedEndDate = isAllDay ? calendar.startOfDay(for: endDate) : endDate
         onRegister(
-            trimmedTitle,
-            normalizedStartDate,
-            normalizedEndDate,
-            isAllDay
+            CalendarEventDraft(
+                title: trimmedTitle,
+                startDate: normalizedStartDate,
+                endDate: normalizedEndDate,
+                isAllDay: isAllDay,
+                metadata: metadata
+            )
         )
         dismiss()
     }
@@ -216,10 +428,14 @@ struct DateTimeEventRegistrationView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(localized("イベントを登録"))
+                    Text(localized(isEditing ? "イベントを編集" : "イベントを登録"))
                         .font(.title.bold())
 
-                    Text(localized("タイトルと日時を指定して登録します。"))
+                    Text(localized(
+                        isEditing
+                            ? "イベントタイトルと時間を編集します。"
+                            : "タイトルと日時を指定して登録します。"
+                    ))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -232,7 +448,7 @@ struct DateTimeEventRegistrationView: View {
                 .buttonStyle(.bordered)
 
 #if os(macOS)
-                Button(localized("登録")) {
+                Button(localized(isEditing ? "保存" : "登録")) {
                     registerEvent()
                 }
                 .buttonStyle(.borderedProminent)
@@ -289,6 +505,22 @@ struct DateTimeEventRegistrationView: View {
                     Text(localized("終了日時は開始日時以降にしてください。"))
                         .font(.callout)
                         .foregroundStyle(.red)
+                }
+
+                if metadataFieldLabels.hasAvailableFields {
+                    Text(localized("詳細"))
+                        .font(.headline)
+
+                    eventMetadataFields
+                        .padding(16)
+                        .background(
+                            Color(nsColor: .controlBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                        }
                 }
             }
             .padding(24)
@@ -354,11 +586,26 @@ struct DateTimeEventRegistrationView: View {
                 }
 
                 Section {
+                    if metadataFieldLabels.hasAvailableFields {
+                        eventMetadataFields
+                        .padding(16)
+                        .background(
+                            registrationSectionBackground,
+                            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                    }
+                } header: {
+                    Text(localized("詳細"))
+                }
+
+                Section {
                     VStack {
                         Button {
                             registerEvent()
                         } label: {
-                            Text(localized("登録"))
+                            Text(localized(isEditing ? "保存" : "登録"))
                                 .foregroundStyle(Color.accentColor)
                                 .frame(maxWidth: .infinity, minHeight: 24)
                                 .contentShape(Rectangle())
@@ -407,6 +654,103 @@ struct DateTimeEventRegistrationView: View {
                 endDate = calendar.startOfDay(for: endDate)
             }
         }
+    }
+
+    @ViewBuilder
+    private var eventMetadataFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if metadataFieldLabels.tagIsAvailable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(metadataFieldLabels.tag)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField(metadataFieldLabels.tag, text: $tagValue, axis: .vertical)
+                        .calHubMetadataTextFieldStyle(lineLimit: 1...2)
+                }
+            }
+
+            if metadataFieldLabels.locationIsAvailable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(metadataFieldLabels.location)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField(metadataFieldLabels.location, text: $location, axis: .vertical)
+                        .calHubMetadataTextFieldStyle()
+                }
+            }
+
+            if metadataFieldLabels.urlIsAvailable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(metadataFieldLabels.url)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField(metadataFieldLabels.url, text: $url, axis: .vertical)
+                        .calHubMetadataTextFieldStyle(lineLimit: 1...3)
+#if os(iOS)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+#endif
+                }
+            }
+
+            if metadataFieldLabels.notesIsAvailable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(metadataFieldLabels.notes)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField(metadataFieldLabels.notes, text: $notes, axis: .vertical)
+                        .calHubMetadataTextFieldStyle(lineLimit: 1...6)
+                }
+            }
+
+            dynamicMetadataFields
+        }
+    }
+
+    @ViewBuilder
+    private var dynamicMetadataFields: some View {
+        ForEach(metadataFieldLabels.additionalProperties) { property in
+            VStack(alignment: .leading, spacing: 6) {
+                Text(property.displayName(for: locale))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                if ["multi_select", "select"].contains(property.type) {
+                    if property.options.isEmpty {
+                        Text("選択肢がありません")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        CalHubSegmentedControl(
+                            options: [""] + property.options,
+                            selection: metadataPropertyBinding(for: property)
+                        )
+                    }
+                } else {
+                    TextField(property.displayName(for: locale), text: metadataPropertyBinding(for: property), axis: .vertical)
+                        .calHubMetadataTextFieldStyle(lineLimit: property.type == "url" ? 1...3 : 1...6)
+#if os(iOS)
+                        .keyboardType(property.type == "url" ? .URL : .default)
+                        .textInputAutocapitalization(property.type == "url" ? .never : .sentences)
+                        .autocorrectionDisabled(property.type == "url")
+#endif
+                }
+            }
+        }
+    }
+
+    private func metadataPropertyBinding(for property: NotionPropertyOption) -> Binding<String> {
+        Binding(
+            get: { propertyValues[property.name] ?? "" },
+            set: { propertyValues[property.name] = $0 }
+        )
+    }
+
+    private func isValidMetadataURL(_ value: String) -> Bool {
+        guard let components = URLComponents(string: value) else { return false }
+        return (components.scheme?.lowercased() == "http" || components.scheme?.lowercased() == "https")
+            && components.host?.isEmpty == false
     }
 }
 
@@ -584,12 +928,32 @@ struct RegistrationPreviewDay: Identifiable {
 struct RegistrationPreviewView: View {
     let preview: RegistrationPreview
     let locale: Locale
-    let onRegister: (RegistrationPreview) -> Void
+    let metadataFieldLabels: CalendarEventMetadataFieldLabels
+    let onRegister: (RegistrationPreview, CalendarEventMetadata) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var isExcludedEventsExpanded = false
     @State private var excludedEventsContentOpacity = 0.0
     @State private var excludedEventsAnimationID = 0
+    @State private var notes = ""
+    @State private var location = ""
+    @State private var url = ""
+    @State private var tagValue = ""
+    @State private var propertyValues: [String: String] = [:]
+    @State private var validationMessage: String?
+
+    init(
+        preview: RegistrationPreview,
+        locale: Locale,
+        metadataFieldLabels: CalendarEventMetadataFieldLabels,
+        onRegister: @escaping (RegistrationPreview, CalendarEventMetadata) -> Void
+    ) {
+        self.preview = preview
+        self.locale = locale
+        self.metadataFieldLabels = metadataFieldLabels
+        self.onRegister = onRegister
+        _propertyValues = State(initialValue: metadataFieldLabels.defaultPropertyValues)
+    }
 
     private var groupedEvents: [RegistrationPreviewDay] {
         let grouped = Dictionary(grouping: preview.events) { event in
@@ -652,6 +1016,131 @@ struct RegistrationPreviewView: View {
         return "\(Self.minuteText(startMinutes))-\(Self.minuteText(endMinutes))"
     }
 
+    private func register() {
+        let metadata = CalendarEventMetadata(
+            notes: metadataFieldLabels.notesIsAvailable ? notes : "",
+            location: metadataFieldLabels.locationIsAvailable ? location : "",
+            url: metadataFieldLabels.urlIsAvailable ? url : "",
+            tagValue: metadataFieldLabels.tagIsAvailable ? tagValue : "",
+            propertyValues: propertyValues
+        ).normalized
+
+        if !metadata.url.isEmpty {
+            guard let components = URLComponents(string: metadata.url),
+                  (components.scheme?.lowercased() == "http" || components.scheme?.lowercased() == "https"),
+                  components.host?.isEmpty == false else {
+                validationMessage = localized("URLを確認してください。")
+                return
+            }
+        }
+        for property in metadataFieldLabels.additionalProperties where property.type == "url" {
+            let value = metadata.propertyValues[property.name] ?? ""
+            guard value.isEmpty || isValidMetadataURL(value) else {
+                validationMessage = localized("URLを確認してください。")
+                return
+            }
+        }
+
+        onRegister(preview, metadata)
+    }
+
+    @ViewBuilder
+    private var eventMetadataFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if metadataFieldLabels.tagIsAvailable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(metadataFieldLabels.tag)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField(metadataFieldLabels.tag, text: $tagValue, axis: .vertical)
+                        .calHubMetadataTextFieldStyle(lineLimit: 1...2)
+                }
+            }
+
+            if metadataFieldLabels.locationIsAvailable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(metadataFieldLabels.location)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField(metadataFieldLabels.location, text: $location, axis: .vertical)
+                        .calHubMetadataTextFieldStyle()
+                }
+            }
+
+            if metadataFieldLabels.urlIsAvailable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(metadataFieldLabels.url)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField(metadataFieldLabels.url, text: $url, axis: .vertical)
+                        .calHubMetadataTextFieldStyle(lineLimit: 1...3)
+#if os(iOS)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+#endif
+                }
+            }
+
+            if metadataFieldLabels.notesIsAvailable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(metadataFieldLabels.notes)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField(metadataFieldLabels.notes, text: $notes, axis: .vertical)
+                        .calHubMetadataTextFieldStyle(lineLimit: 1...6)
+                }
+            }
+
+            dynamicMetadataFields
+        }
+    }
+
+    @ViewBuilder
+    private var dynamicMetadataFields: some View {
+        ForEach(metadataFieldLabels.additionalProperties) { property in
+            VStack(alignment: .leading, spacing: 6) {
+                Text(property.displayName(for: locale))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                if ["multi_select", "select"].contains(property.type) {
+                    if property.options.isEmpty {
+                        Text("選択肢がありません")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        CalHubSegmentedControl(
+                            options: [""] + property.options,
+                            selection: metadataPropertyBinding(for: property)
+                        )
+                    }
+                } else {
+                    TextField(property.displayName(for: locale), text: metadataPropertyBinding(for: property), axis: .vertical)
+                        .calHubMetadataTextFieldStyle(lineLimit: property.type == "url" ? 1...3 : 1...6)
+#if os(iOS)
+                        .keyboardType(property.type == "url" ? .URL : .default)
+                        .textInputAutocapitalization(property.type == "url" ? .never : .sentences)
+                        .autocorrectionDisabled(property.type == "url")
+#endif
+                }
+            }
+        }
+    }
+
+    private func metadataPropertyBinding(for property: NotionPropertyOption) -> Binding<String> {
+        Binding(
+            get: { propertyValues[property.name] ?? "" },
+            set: { propertyValues[property.name] = $0 }
+        )
+    }
+
+    private func isValidMetadataURL(_ value: String) -> Bool {
+        guard let components = URLComponents(string: value) else { return false }
+        return (components.scheme?.lowercased() == "http" || components.scheme?.lowercased() == "https")
+            && components.host?.isEmpty == false
+    }
+
     private static func minuteText(_ minutes: Int) -> String {
         let clampedMinutes = min(max(minutes, 0), 1_439)
         return String(format: "%d:%02d", clampedMinutes / 60, clampedMinutes % 60)
@@ -687,6 +1176,20 @@ struct RegistrationPreviewView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    if metadataFieldLabels.hasAvailableFields {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(localized("詳細"))
+                                .font(.headline)
+
+                            eventMetadataFields
+                                .padding(16)
+                                .background(
+                                    .background.secondary.opacity(0.32),
+                                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                )
+                        }
+                    }
+
                     if !preview.invalidItems.isEmpty || !preview.skippedTitles.isEmpty || preview.excludedCount > 0 {
                         Button {
                             guard preview.excludedCount > 0 else { return }
@@ -808,7 +1311,7 @@ struct RegistrationPreviewView: View {
                 .buttonStyle(.bordered)
 
                 Button(localized("登録")) {
-                    onRegister(preview)
+                    register()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!preview.canRegister)
@@ -822,6 +1325,22 @@ struct RegistrationPreviewView: View {
         .frame(width: 560, height: 640)
 #endif
         .environment(\.locale, locale)
+        .onAppear {
+            if tagValue.isEmpty {
+                tagValue = metadataFieldLabels.tagDefaultValue
+            }
+        }
+        .alert(
+            Text(localized("保存できません")),
+            isPresented: Binding(
+                get: { validationMessage != nil },
+                set: { if !$0 { validationMessage = nil } }
+            )
+        ) {
+            Button(localized("OK"), role: .cancel) {}
+        } message: {
+            Text(validationMessage ?? "")
+        }
     }
 
     private func toggleExcludedEvents() {
