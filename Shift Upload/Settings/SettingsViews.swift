@@ -1663,7 +1663,9 @@ private struct NotionPropertySelectionView: View {
             }
         }
         .navigationTitle(role.title)
+#if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+#endif
     }
 }
 
@@ -1697,7 +1699,9 @@ private struct NotionTagValueSelectionView: View {
             }
         }
         .navigationTitle("タグ値")
+#if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+#endif
     }
 }
 

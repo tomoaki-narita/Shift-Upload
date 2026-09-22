@@ -21,6 +21,42 @@ struct NotionPropertyOption: Identifiable, Hashable, Codable {
     let name: String
     let type: String
     let options: [String]
+    let optionColors: [String: String]
+
+    init(
+        name: String,
+        type: String,
+        options: [String],
+        optionColors: [String: String] = [:]
+    ) {
+        self.name = name
+        self.type = type
+        self.options = options
+        self.optionColors = optionColors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case type
+        case options
+        case optionColors
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decode(String.self, forKey: .type)
+        options = try container.decodeIfPresent([String].self, forKey: .options) ?? []
+        optionColors = try container.decodeIfPresent([String: String].self, forKey: .optionColors) ?? [:]
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(type, forKey: .type)
+        try container.encode(options, forKey: .options)
+        try container.encode(optionColors, forKey: .optionColors)
+    }
 
     var id: String { "\(name)|\(type)" }
 
@@ -30,6 +66,10 @@ struct NotionPropertyOption: Identifiable, Hashable, Codable {
 
     func displayName(for locale: Locale) -> String {
         displayName
+    }
+
+    func optionColor(for value: String) -> String? {
+        optionColors[value]
     }
 }
 
@@ -321,15 +361,27 @@ struct NotionSchemaClient {
             }
 
             let options: [String]
+            var optionColors: [String: String] = [:]
             if ["multi_select", "select"].contains(type),
                let configuration = property[type] as? [String: Any],
                let rawOptions = configuration["options"] as? [[String: Any]] {
-                options = rawOptions.compactMap { $0["name"] as? String }
+                options = rawOptions.compactMap { rawOption in
+                    guard let optionName = rawOption["name"] as? String else { return nil }
+                    if let color = rawOption["color"] as? String {
+                        optionColors[optionName] = color
+                    }
+                    return optionName
+                }
             } else {
                 options = []
             }
 
-            return NotionPropertyOption(name: name, type: type, options: options)
+            return NotionPropertyOption(
+                name: name,
+                type: type,
+                options: options,
+                optionColors: optionColors
+            )
         }
 
         return NotionDatabaseSchema(
@@ -1307,8 +1359,7 @@ struct NotionCalendarEventClient {
             let values = (property["multi_select"] as? [[String: Any]])?
                 .compactMap { $0["name"] as? String } ?? []
             guard option.name == tagProperty else { return values.first ?? "" }
-            let identifier = tagValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            return values.first(where: { $0 != identifier }) ?? values.first ?? ""
+            return values.joined(separator: ", ")
         default:
             return ""
         }

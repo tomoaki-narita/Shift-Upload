@@ -128,7 +128,7 @@ struct CalHubSegmentedControl: View {
                         }
                     } label: {
                         Text(option.isEmpty ? "未選択" : option)
-                            .font(.system(size: 9))
+                            .font(.system(size: 11))
                             .lineLimit(1)
                             .minimumScaleFactor(0.65)
                             .padding(.horizontal, 8)
@@ -328,12 +328,19 @@ struct DateTimeEventRegistrationView: View {
         _notes = State(initialValue: initialMetadata.notes)
         _location = State(initialValue: initialMetadata.location)
         _url = State(initialValue: initialMetadata.url)
-        _tagValue = State(initialValue: initialMetadata.tagValue.isEmpty
-            ? metadataFieldLabels.tagDefaultValue
-            : initialMetadata.tagValue)
-        var propertyValues = metadataFieldLabels.defaultPropertyValues
-        for (name, value) in initialMetadata.propertyValues where !value.isEmpty {
-            propertyValues[name] = value
+        _tagValue = State(initialValue: isEditing
+            ? initialMetadata.tagValue
+            : (initialMetadata.tagValue.isEmpty
+                ? metadataFieldLabels.tagDefaultValue
+                : initialMetadata.tagValue))
+        var propertyValues: [String: String]
+        if isEditing {
+            propertyValues = initialMetadata.propertyValues
+        } else {
+            propertyValues = metadataFieldLabels.defaultPropertyValues
+            for (name, value) in initialMetadata.propertyValues where !value.isEmpty {
+                propertyValues[name] = value
+            }
         }
         _propertyValues = State(initialValue: propertyValues)
     }
@@ -459,60 +466,17 @@ struct DateTimeEventRegistrationView: View {
             Divider()
 
 #if os(macOS)
-            VStack(alignment: .leading, spacing: 12) {
-                Text(localized("イベントタイトル"))
-                    .font(.headline)
-
-                TextField(localized("タイトル"), text: $title, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        Color(nsColor: .controlBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-                    }
-
-                Text(localized("日時"))
-                    .font(.headline)
-                    .padding(.top, 8)
-
-                Toggle(localized("終日"), isOn: $isAllDay)
-
-                HStack(alignment: .center, spacing: 8) {
-                    DatePicker(
-                        localized("開始"),
-                        selection: $startDate,
-                        displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
-                    )
-                    .environment(\.locale, timePickerLocale)
-                    Text("-")
-                        .foregroundStyle(.secondary)
-                    DatePicker(
-                        localized("終了"),
-                        selection: $endDate,
-                        displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
-                    )
-                    .environment(\.locale, timePickerLocale)
-                }
-
-                if endDate < startDate {
-                    Text(localized("終了日時は開始日時以降にしてください。"))
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                }
-
-                if metadataFieldLabels.hasAvailableFields {
-                    Text(localized("詳細"))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(localized("イベントタイトル"))
                         .font(.headline)
 
-                    eventMetadataFields
-                        .padding(16)
+                    TextField(localized("タイトル"), text: $title, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...5)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
                         .background(
                             Color(nsColor: .controlBackgroundColor),
                             in: RoundedRectangle(cornerRadius: 6)
@@ -521,9 +485,54 @@ struct DateTimeEventRegistrationView: View {
                             RoundedRectangle(cornerRadius: 6)
                                 .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                         }
+
+                    Text(localized("日時"))
+                        .font(.headline)
+                        .padding(.top, 8)
+
+                    Toggle(localized("終日"), isOn: $isAllDay)
+
+                    HStack(alignment: .center, spacing: 8) {
+                        DatePicker(
+                            localized("開始"),
+                            selection: $startDate,
+                            displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
+                        )
+                        .environment(\.locale, timePickerLocale)
+                        Text("-")
+                            .foregroundStyle(.secondary)
+                        DatePicker(
+                            localized("終了"),
+                            selection: $endDate,
+                            displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
+                        )
+                        .environment(\.locale, timePickerLocale)
+                    }
+
+                    if endDate < startDate {
+                        Text(localized("終了日時は開始日時以降にしてください。"))
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
+
+                    if metadataFieldLabels.hasAvailableFields {
+                        Text(localized("詳細"))
+                            .font(.headline)
+
+                        eventMetadataFields
+                            .padding(16)
+                            .background(
+                                Color(nsColor: .controlBackgroundColor),
+                                in: RoundedRectangle(cornerRadius: 6)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                            }
+                    }
                 }
+                .padding(24)
             }
-            .padding(24)
 #else
             Form {
                 Section {
@@ -638,7 +647,13 @@ struct DateTimeEventRegistrationView: View {
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 #else
-        .frame(width: 560, height: 420)
+        .frame(
+            minWidth: 560,
+            idealWidth: 640,
+            minHeight: 420,
+            idealHeight: 680,
+            alignment: .topLeading
+        )
 #endif
 #if os(iOS)
         .background(
@@ -1261,37 +1276,51 @@ struct RegistrationPreviewView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 20)
                     } else {
-                        ForEach(groupedEvents) { day in
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(dateTitle(for: day))
+                        VStack(alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(localized(
+                                    "登録するイベント: %@件",
+                                    arguments: String(preview.events.count)
+                                ))
                                     .font(.headline)
+
+                                Text(localized("このイベントリストを一括で登録します"))
+                                    .font(.callout)
                                     .foregroundStyle(.secondary)
+                            }
 
-                                VStack(spacing: 0) {
-                                    ForEach(day.events) { event in
-                                        HStack(spacing: 12) {
-                                            Text(event.title)
-                                                .lineLimit(2)
+                            ForEach(groupedEvents) { day in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(dateTitle(for: day))
+                                        .font(.headline)
+                                        .foregroundStyle(.secondary)
 
-                                            Spacer(minLength: 12)
+                                    VStack(spacing: 0) {
+                                        ForEach(day.events) { event in
+                                            HStack(spacing: 12) {
+                                                Text(event.title)
+                                                    .lineLimit(2)
 
-                                            Text(timeText(for: event))
-                                                .font(.callout.monospacedDigit())
-                                                .foregroundStyle(.secondary)
-                                                .fixedSize(horizontal: true, vertical: false)
-                                        }
-                                        .padding(.horizontal, 14)
-                                        .frame(minHeight: 44)
+                                                Spacer(minLength: 12)
 
-                                        if event.id != day.events.last?.id {
-                                            Divider()
+                                                Text(timeText(for: event))
+                                                    .font(.callout.monospacedDigit())
+                                                    .foregroundStyle(.secondary)
+                                                    .fixedSize(horizontal: true, vertical: false)
+                                            }
+                                            .padding(.horizontal, 14)
+                                            .frame(minHeight: 44)
+
+                                            if event.id != day.events.last?.id {
+                                                Divider()
+                                            }
                                         }
                                     }
+                                    .background(
+                                        .background.secondary.opacity(0.45),
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    )
                                 }
-                                .background(
-                                    .background.secondary.opacity(0.45),
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                )
                             }
                         }
                     }

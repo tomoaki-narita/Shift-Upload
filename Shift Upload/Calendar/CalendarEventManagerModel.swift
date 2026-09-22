@@ -810,7 +810,9 @@ final class CalendarEventManagerModel: ObservableObject {
 
                 shouldAnimateEventBandReveal = false
                 events.removeAll { $0.id == target.id }
-                updateCachedDisplayedMonth()
+                loadedDays = Set(events.map(\.day))
+                invalidateMonthCache()
+                load(forceRefresh: true)
                 message = ShiftHubLocalization.string(
                     "イベントを削除しました。",
                     locale: Locale(identifier: localeIdentifier)

@@ -66,6 +66,8 @@
 "登録" = "Register";
 "登録内容を確認" = "Review registration";
 "登録前に内容を確認してください。" = "Review these events before registering them.";
+"登録するイベント: %@件" = "Events to register: %@";
+"このイベントリストを一括で登録します" = "Register all events in this list.";
 "登録件数: %@" = "Events to register: %@";
 "登録できるイベントがありません。" = "There are no events to register.";
 "登録されないイベント" = "Events not registered";

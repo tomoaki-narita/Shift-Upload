@@ -591,24 +591,27 @@ struct CalendarEventManagerView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 12)
 #else
-            if !model.message.isEmpty && !model.isLoading {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(verbatim: model.displayedMonthText)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+            ZStack(alignment: .topLeading) {
+                if !model.message.isEmpty && !model.isLoading {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(verbatim: model.displayedMonthText)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
 
-                    Spacer(minLength: 12)
+                        Spacer(minLength: 12)
 
-                    Text(verbatim: model.message)
-                        .multilineTextAlignment(.trailing)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
+                        Text(verbatim: model.message)
+                            .multilineTextAlignment(.trailing)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 12)
             }
+            .frame(maxWidth: .infinity, minHeight: 20, alignment: .topLeading)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
 #endif
         }
 #if os(macOS)
@@ -2452,10 +2455,8 @@ struct CalendarEventManagerView: View {
             if actionableEvents.count == 1, let event = actionableEvents.first {
                 VStack(alignment: .leading, spacing: 0) {
                     Divider()
-                    eventListRowContent(for: event)
+                    eventInformationCard(for: event)
                         .padding(.top, 11)
-                        .padding(.bottom, 6)
-                    eventMetadataDetails(for: event)
                 }
 
                 dateTimeEventRegistrationButton(forDay: day)
@@ -2513,8 +2514,7 @@ struct CalendarEventManagerView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Divider()
                         VStack(alignment: .leading, spacing: 8) {
-                            eventListRowContent(for: event)
-                            eventMetadataDetails(for: event)
+                            eventInformationCard(for: event)
                             dateTimeEventRegistrationButton(forDay: day)
                             eventRegistrationButton(forDay: day)
                             eventActions(for: event)
@@ -2594,10 +2594,75 @@ struct CalendarEventManagerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func eventSummaryContent(for event: CalendarEventRecord) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(event.title)
+                .font(.body.weight(.medium))
+                .foregroundStyle(.primary)
+
+            let menuDetail = event.menuDetail(locale: locale)
+            if !menuDetail.isEmpty {
+                Text(menuDetail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func eventInformationCard(for event: CalendarEventRecord) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            eventSummaryContent(for: event)
+            eventMetadataDetails(for: event, showsBackground: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            .background.secondary.opacity(0.45),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+    }
+
     private struct CalendarEventMetadataDisplayItem: Identifiable {
         let id: String
         let label: String
         let value: String
+        let optionValues: [String]
+        let optionColors: [String: String]
+    }
+
+    private func notionTagBackgroundColor(for colorName: String) -> Color {
+        switch colorName.lowercased() {
+        case "blue":
+            return Color(red: 0.20, green: 0.47, blue: 0.66)
+        case "brown":
+            return Color(red: 0.56, green: 0.34, blue: 0.20)
+        case "green":
+            return Color(red: 0.22, green: 0.55, blue: 0.34)
+        case "orange":
+            return Color(red: 0.73, green: 0.42, blue: 0.16)
+        case "pink":
+            return Color(red: 0.72, green: 0.35, blue: 0.53)
+        case "purple":
+            return Color(red: 0.48, green: 0.33, blue: 0.62)
+        case "red":
+            return Color(red: 0.70, green: 0.25, blue: 0.25)
+        case "yellow":
+            return Color(red: 0.68, green: 0.54, blue: 0.16)
+        case "gray", "default":
+            return Color.secondary.opacity(0.55)
+        default:
+            return Color.secondary.opacity(0.55)
+        }
+    }
+
+    private func notionTagForegroundColor(for colorName: String) -> Color {
+        switch colorName.lowercased() {
+        case "gray", "default", "yellow":
+            return .primary
+        default:
+            return .white
+        }
     }
 
     private func metadataDisplayItems(
@@ -2606,13 +2671,38 @@ struct CalendarEventManagerView: View {
         let metadata = event.metadata.normalized
         var items: [CalendarEventMetadataDisplayItem] = []
 
-        func append(_ id: String, label: String, value: String) {
+        func append(
+            _ id: String,
+            label: String,
+            value: String,
+            optionValues: [String] = [],
+            optionColors: [String: String] = [:]
+        ) {
             guard !value.isEmpty else { return }
-            items.append(CalendarEventMetadataDisplayItem(id: id, label: label, value: value))
+            items.append(
+                CalendarEventMetadataDisplayItem(
+                    id: id,
+                    label: label,
+                    value: value,
+                    optionValues: optionValues,
+                    optionColors: optionColors
+                )
+            )
         }
 
         if metadataFieldLabels.tagIsAvailable {
-            append("tag", label: metadataFieldLabels.tag, value: metadata.tagValue)
+            let tagProperty = notionMetadataProperties.first { $0.name == notionTagProperty }
+            let optionValues = metadata.tagValue
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            append(
+                "tag",
+                label: metadataFieldLabels.tag,
+                value: metadata.tagValue,
+                optionValues: optionValues,
+                optionColors: tagProperty?.optionColors ?? [:]
+            )
         }
         if metadataFieldLabels.locationIsAvailable {
             append("location", label: metadataFieldLabels.location, value: metadata.location)
@@ -2624,10 +2714,20 @@ struct CalendarEventManagerView: View {
             append("notes", label: metadataFieldLabels.notes, value: metadata.notes)
         }
         for property in metadataFieldLabels.additionalProperties {
+            let value = metadata.propertyValues[property.name] ?? ""
+            let isOptionProperty = ["multi_select", "select"].contains(property.type)
+            let optionValues = isOptionProperty
+                ? value
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                : []
             append(
                 property.name,
                 label: property.displayName(for: locale),
-                value: metadata.propertyValues[property.name] ?? ""
+                value: value,
+                optionValues: optionValues,
+                optionColors: isOptionProperty ? property.optionColors : [:]
             )
         }
 
@@ -2635,10 +2735,13 @@ struct CalendarEventManagerView: View {
     }
 
     @ViewBuilder
-    private func eventMetadataDetails(for event: CalendarEventRecord) -> some View {
+    private func eventMetadataDetails(
+        for event: CalendarEventRecord,
+        showsBackground: Bool = true
+    ) -> some View {
         let items = metadataDisplayItems(for: event)
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
+            let content = VStack(alignment: .leading, spacing: 8) {
                 Divider()
                     .padding(.vertical, 4)
 
@@ -2647,17 +2750,47 @@ struct CalendarEventManagerView: View {
                     .foregroundStyle(.secondary)
 
                 ForEach(items) { item in
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: item.optionValues.isEmpty ? 2 : 6) {
                         Text(item.label)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(item.value)
-                            .font(.body)
+                        if !item.optionValues.isEmpty {
+                            HStack(spacing: 4) {
+                                ForEach(item.optionValues, id: \.self) { optionValue in
+                                    let colorName = item.optionColors[optionValue] ?? "gray"
+                                    Text(optionValue)
+                                        .font(.body)
+                                        .foregroundStyle(notionTagForegroundColor(for: colorName))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            notionTagBackgroundColor(for: colorName),
+                                            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        )
+                                }
+                            }
                             .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Text(item.value)
+                                .font(.body)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             }
-            .padding(.bottom, 12)
+
+            if showsBackground {
+                content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(
+                        .background.secondary.opacity(0.45),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                    .padding(.bottom, 12)
+            } else {
+                content
+            }
         }
     }
 
@@ -2716,6 +2849,7 @@ struct CalendarEventManagerView: View {
                     .accessibilityLabel(localized("削除"))
                 }
                 .padding(.vertical, 6)
+                .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
 #else
@@ -2746,6 +2880,7 @@ struct CalendarEventManagerView: View {
                     .accessibilityLabel(localized("削除"))
                 }
                 .padding(.vertical, 6)
+                .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
 #endif
@@ -2763,21 +2898,8 @@ struct CalendarEventManagerView: View {
 
             Divider()
 
-            Text(event.title)
-                .font(.body.weight(.medium))
-                .foregroundStyle(.primary)
+            eventInformationCard(for: event)
                 .padding(.top, 12)
-
-            let menuDetail = event.menuDetail(locale: locale)
-            if !menuDetail.isEmpty {
-                Text(menuDetail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 2)
-                    .padding(.bottom, 12)
-            }
-
-            eventMetadataDetails(for: event)
 
             if pendingInlineDeletion?.id == event.id {
                 VStack(alignment: .leading, spacing: 10) {
@@ -2808,6 +2930,7 @@ struct CalendarEventManagerView: View {
                 .controlSize(.large)
             } else {
                 eventActions(for: event)
+                    .padding(.top, 12)
             }
         }
         .padding(16)
@@ -2859,8 +2982,7 @@ struct CalendarEventManagerView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 8) {
-                    eventListRowContent(for: event)
-                    eventMetadataDetails(for: event)
+                    eventInformationCard(for: event)
                     eventActions(for: event)
                 }
                 .padding(.top, 12)
