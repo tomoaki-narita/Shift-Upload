@@ -109,7 +109,25 @@ struct YearMonth: Hashable {
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.locale = locale
-        formatter.dateFormat = "MMMM yyyy"
+        formatter.dateFormat = "MMM yyyy"
+        return formatter.string(from: date)
+    }
+
+    func displayText(for day: Int, locale: Locale) -> String {
+        guard locale.identifier.hasPrefix("en") else {
+            return "\(year)年\(month)月\(day)日"
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
+            return "\(year)-\(month)-\(day)"
+        }
+
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.dateFormat = "MMM d, yyyy"
         return formatter.string(from: date)
     }
 

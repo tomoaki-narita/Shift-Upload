@@ -566,7 +566,11 @@ final class NotionPageWriter {
             throw NotionAPIError.invalidDate(dayText)
         }
 
-        let effectiveTagValue = effectiveTagValue(metadata: metadata, fallback: tagValue)
+        let effectiveTagValue = effectiveTagValue(
+            metadata: metadata,
+            tagProperty: tagProperty,
+            fallback: tagValue
+        )
         var properties: [String: Any] = [
             titleProperty: [
                 "title": [[
@@ -589,7 +593,8 @@ final class NotionPageWriter {
             notesProperty: notesProperty,
             locationProperty: locationProperty,
             urlProperty: urlProperty,
-            metadataProperties: metadataProperties
+            metadataProperties: metadataProperties,
+            tagProperty: tagProperty
         )
 
         _ = try await sendCreatePageRequest(
@@ -651,7 +656,11 @@ final class NotionPageWriter {
             ]
         }
 
-        let effectiveTagValue = effectiveTagValue(metadata: metadata, fallback: tagValue)
+        let effectiveTagValue = effectiveTagValue(
+            metadata: metadata,
+            tagProperty: tagProperty,
+            fallback: tagValue
+        )
         var properties: [String: Any] = [
             titleProperty: [
                 "title": [[
@@ -674,7 +683,8 @@ final class NotionPageWriter {
             notesProperty: notesProperty,
             locationProperty: locationProperty,
             urlProperty: urlProperty,
-            metadataProperties: metadataProperties
+            metadataProperties: metadataProperties,
+            tagProperty: tagProperty
         )
 
         return try await sendCreatePageRequest(
@@ -690,7 +700,8 @@ final class NotionPageWriter {
         notesProperty: String,
         locationProperty: String,
         urlProperty: String,
-        metadataProperties: [NotionPropertyOption]
+        metadataProperties: [NotionPropertyOption],
+        tagProperty: String
     ) {
         let normalizedMetadata = metadata.normalized
         if !notesProperty.isEmpty {
@@ -716,6 +727,7 @@ final class NotionPageWriter {
         }
 
         for property in metadataProperties {
+            guard property.name != tagProperty else { continue }
             let value = normalizedMetadata.propertyValues[property.name] ?? ""
             switch property.type {
             case "rich_text":
@@ -752,12 +764,17 @@ final class NotionPageWriter {
 
     private func effectiveTagValue(
         metadata: CalendarEventMetadata,
+        tagProperty: String,
         fallback: String
     ) -> String {
-        let metadataValue = metadata.normalized.tagValue
-        return metadataValue.isEmpty
-            ? fallback.trimmingCharacters(in: .whitespacesAndNewlines)
-            : metadataValue
+        let normalizedMetadata = metadata.normalized
+        if let dynamicValue = normalizedMetadata.propertyValues[tagProperty], !dynamicValue.isEmpty {
+            return dynamicValue
+        }
+        if !normalizedMetadata.tagValue.isEmpty {
+            return normalizedMetadata.tagValue
+        }
+        return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func sendCreatePageRequest(
@@ -1126,13 +1143,13 @@ struct NotionCalendarEventClient {
                         metadataValue(from: properties[property.name], property: property)
                     )
                 })
+                let parsedTagValue = dynamicValues[tagProperty]
+                    ?? legacyTagValue(from: properties[tagProperty])
                 let metadata = CalendarEventMetadata(
                     notes: richText(from: properties[notesProperty] as? [String: Any]),
                     location: richText(from: properties[locationProperty] as? [String: Any]),
                     url: url(from: properties[urlProperty] as? [String: Any]),
-                    tagValue: metadataProperties.isEmpty
-                        ? legacyTagValue(from: properties[tagProperty])
-                        : "",
+                    tagValue: parsedTagValue,
                     propertyValues: dynamicValues
                 )
                 let isAllDay = !start.contains("T")
@@ -1292,6 +1309,7 @@ struct NotionCalendarEventClient {
         }
 
         for property in metadataProperties {
+            guard property.name != tagProperty else { continue }
             let value = normalizedMetadata.propertyValues[property.name] ?? ""
             switch property.type {
             case "rich_text":
@@ -1325,7 +1343,7 @@ struct NotionCalendarEventClient {
     }
 
     private func effectiveTagValue(metadata: CalendarEventMetadata) -> String {
-        if let dynamicValue = metadata.normalized.propertyValues[tagProperty] {
+        if let dynamicValue = metadata.normalized.propertyValues[tagProperty], !dynamicValue.isEmpty {
             return dynamicValue
         }
         let metadataValue = metadata.normalized.tagValue
@@ -1556,16 +1574,16 @@ struct GoogleCalendarOption: Identifiable, Hashable {
     }
 }
 
-struct GoogleOAuthTokens: Codable {
+nonisolated struct GoogleOAuthTokens: Codable {
     let accessToken: String
     let refreshToken: String
     let expiresAt: Date
 }
 
 enum GoogleTokenStore {
-    private static let account = "google-calendar-oauth-tokens"
+    nonisolated private static let account = "google-calendar-oauth-tokens"
 
-    static func load() -> GoogleOAuthTokens? {
+    nonisolated static func load() -> GoogleOAuthTokens? {
         guard let value = KeychainStore.string(for: account),
               let data = value.data(using: .utf8) else {
             return nil
@@ -1574,7 +1592,7 @@ enum GoogleTokenStore {
         return try? JSONDecoder().decode(GoogleOAuthTokens.self, from: data)
     }
 
-    static func save(_ tokens: GoogleOAuthTokens) {
+    nonisolated static func save(_ tokens: GoogleOAuthTokens) {
         guard let data = try? JSONEncoder().encode(tokens),
               let value = String(data: data, encoding: .utf8) else {
             return
@@ -1583,7 +1601,7 @@ enum GoogleTokenStore {
         KeychainStore.set(value, for: account)
     }
 
-    static func clear() {
+    nonisolated static func clear() {
         KeychainStore.set("", for: account)
     }
 }

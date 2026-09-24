@@ -18,6 +18,17 @@ enum CalendarDestination: String, CaseIterable, Identifiable, Equatable {
         }
     }
 
+    var systemImage: String {
+        switch self {
+        case .apple:
+            return "apple.logo"
+        case .google:
+            return "g.circle"
+        case .notion:
+            return "n.square"
+        }
+    }
+
     var registrationTitleKey: LocalizedStringKey {
         switch self {
         case .apple:

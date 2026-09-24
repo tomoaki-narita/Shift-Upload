@@ -2,9 +2,9 @@ import Foundation
 import Security
 
 enum KeychainStore {
-    private static let service = "net.unwraps.Shift-Upload"
+    nonisolated private static let service = "net.unwraps.Shift-Upload"
 
-    static func string(for account: String) -> String? {
+    nonisolated static func string(for account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -22,7 +22,7 @@ enum KeychainStore {
         return String(data: data, encoding: .utf8)
     }
 
-    static func set(_ value: String, for account: String) {
+    nonisolated static func set(_ value: String, for account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

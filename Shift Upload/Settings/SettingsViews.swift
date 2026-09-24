@@ -1932,7 +1932,7 @@ struct CalendarSettingsView: View {
                         }
 
                     case .notion:
-                        calendarSection("Notion DB", systemImage: "square.grid.2x2") {
+                        calendarSection("Notion DB", systemImage: "n.square") {
                             HStack(spacing: 8) {
                                 Text("Bearer")
                                     .foregroundStyle(.secondary)

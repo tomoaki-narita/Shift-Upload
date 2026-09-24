@@ -23,7 +23,7 @@ import AppKit
 import UIKit
 #endif
 
-struct CalHubDateActionSheetHeightPreferenceKey: PreferenceKey {
+private struct CalHubDateActionSheetHeightPreferenceKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -44,31 +44,34 @@ struct CalHubDateActionSheetContainer<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             content
+#if os(iOS)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+#endif
         }
 #if os(iOS)
-            .padding(.horizontal, 20)
-            .padding(.top, 30)
-            .padding(.bottom, 20)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear
-                        .preference(
-                            key: CalHubDateActionSheetHeightPreferenceKey.self,
-                            value: proxy.size.height
-                        )
-                }
+        .padding(.horizontal, 20)
+        .padding(.top, 30)
+        .padding(.bottom, 20)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(
+                        key: CalHubDateActionSheetHeightPreferenceKey.self,
+                        value: proxy.size.height
+                    )
             }
-            .onPreferenceChange(CalHubDateActionSheetHeightPreferenceKey.self) { height in
-                guard height > 0, abs(measuredHeight - height) > 0.5 else { return }
-                var transaction = Transaction()
-                transaction.animation = nil
-                withTransaction(transaction) {
-                    measuredHeight = ceil(height)
-                }
+        }
+        .onPreferenceChange(CalHubDateActionSheetHeightPreferenceKey.self) { height in
+            guard height > 0, abs(measuredHeight - height) > 0.5 else { return }
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                measuredHeight = ceil(height)
             }
-            .presentationDetents([.height(measuredHeight)])
+        }
+        .presentationDetents([.height(measuredHeight)])
 #else
         .padding(.horizontal, 14)
         .padding(.top, 14)
@@ -86,12 +89,12 @@ extension Notification.Name {
 enum GoogleOAuthConfiguration {
 #if os(iOS)
     // Native iOS OAuth clients use PKCE and must not send the macOS client secret.
-    static let clientSecret: String? = nil
-    static let clientID = "286738733463-lihm8melqntpfekgp9npr2i16b5dlv8p.apps.googleusercontent.com"
-    static let callbackURLScheme = "com.googleusercontent.apps.286738733463-lihm8melqntpfekgp9npr2i16b5dlv8p"
+    nonisolated static let clientSecret: String? = nil
+    nonisolated static let clientID = "286738733463-lihm8melqntpfekgp9npr2i16b5dlv8p.apps.googleusercontent.com"
+    nonisolated static let callbackURLScheme = "com.googleusercontent.apps.286738733463-lihm8melqntpfekgp9npr2i16b5dlv8p"
 #else
-    static let clientSecret = GoogleOAuthSecrets.macOSClientSecret
-    static let clientID = "286738733463-tr3gh0ou1akkgvkiag0j47v3pj6sk0cu.apps.googleusercontent.com"
+    nonisolated static let clientSecret = GoogleOAuthSecrets.macOSClientSecret
+    nonisolated static let clientID = "286738733463-tr3gh0ou1akkgvkiag0j47v3pj6sk0cu.apps.googleusercontent.com"
 #endif
 }
 
@@ -565,12 +568,18 @@ struct ContentView: View {
                     selectedCalendarDisplayColor = color
                 },
                 onOpenShiftUpload: {
+#if os(macOS)
+                    CalHubTitlebarLogoAccessory.removeFromCurrentWindow()
+#endif
                     isShiftUploadPresented = true
                 },
                 onOpenPDFList: {
                     isPDFListPresented = true
                 },
                 onOpenSettings: {
+#if os(macOS)
+                    CalHubTitlebarLogoAccessory.removeFromCurrentWindow()
+#endif
                     isSettingsPresented = true
                 },
                 isSynchronizing: isSynchronizing,
@@ -579,7 +588,8 @@ struct ContentView: View {
                     Task { @MainActor in
                         await synchronizeWithCloudKit()
                     }
-                }
+                },
+                isTitlebarLogoVisible: !isShiftUploadPresented && !isSettingsPresented
             )
         }
     }
@@ -1865,9 +1875,10 @@ struct ContentView: View {
             ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
             : ["日", "月", "火", "水", "木", "金", "土"]
         let weekday = weekdays[weekdayIndex - 1]
+        let dateText = selectedYearMonth.displayText(for: day, locale: locale)
         return locale.identifier.hasPrefix("en")
-            ? "\(day) (\(weekday))"
-            : "\(day)日（\(weekday)）"
+            ? "\(dateText) (\(weekday))"
+            : "\(dateText)（\(weekday)）"
     }
 
     private func handleImportResult(_ result: Result<[URL], Error>) {
@@ -2561,6 +2572,10 @@ struct ContentView: View {
                 cells: [cell],
                 yearMonth: yearMonth,
                 includeRest: includeRest,
+                metadata: CalendarEventMetadata(
+                    tagValue: effectiveNotionTagValue,
+                    propertyValues: notionDefaultPropertyValues
+                ),
                 onComplete: onComplete
             )
         case .google:
@@ -3147,10 +3162,16 @@ struct ToolbarSelectorButtonStyleD: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     let fillsAvailableWidth: Bool
     let buttonHeight: CGFloat
+    let minimumWidth: CGFloat?
 
-    init(fillsAvailableWidth: Bool = false, buttonHeight: CGFloat = 40) {
+    init(
+        fillsAvailableWidth: Bool = false,
+        buttonHeight: CGFloat = 40,
+        minimumWidth: CGFloat? = nil
+    ) {
         self.fillsAvailableWidth = fillsAvailableWidth
         self.buttonHeight = buttonHeight
+        self.minimumWidth = minimumWidth
     }
 
     func makeBody(configuration: Configuration) -> some View {
@@ -3161,7 +3182,7 @@ struct ToolbarSelectorButtonStyleD: ButtonStyle {
             .foregroundStyle(Color.primary.opacity(configuration.isPressed ? 1 : 0.9))
             .padding(.horizontal, 13)
             .frame(
-                minWidth: 36,
+                minWidth: minimumWidth ?? 36,
                 maxWidth: fillsAvailableWidth ? .infinity : nil,
                 minHeight: buttonHeight,
                 maxHeight: buttonHeight

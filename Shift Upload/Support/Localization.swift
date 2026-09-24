@@ -1,7 +1,7 @@
 import Foundation
 
 enum ShiftHubLocalization {
-    static func string(_ key: String, locale: Locale) -> String {
+    nonisolated static func string(_ key: String, locale: Locale) -> String {
         let language = locale.identifier.hasPrefix("en") ? "en" : "ja"
         guard let path = Bundle.main.path(forResource: language, ofType: "lproj"),
               let bundle = Bundle(path: path) else {
@@ -11,23 +11,23 @@ enum ShiftHubLocalization {
         return bundle.localizedString(forKey: key, value: key, table: nil)
     }
 
-    static func format(_ key: String, locale: Locale, arguments: CVarArg...) -> String {
+    nonisolated static func format(_ key: String, locale: Locale, arguments: CVarArg...) -> String {
         String(format: string(key, locale: locale), arguments: arguments)
     }
 
-    static func isEnglish(_ locale: Locale) -> Bool {
+    nonisolated static func isEnglish(_ locale: Locale) -> Bool {
         locale.identifier.hasPrefix("en")
     }
 
-    static func yearText(_ year: Int, locale: Locale) -> String {
+    nonisolated static func yearText(_ year: Int, locale: Locale) -> String {
         String(year)
     }
 
-    static func monthText(_ month: Int, locale: Locale) -> String {
+    nonisolated static func monthText(_ month: Int, locale: Locale) -> String {
         String(format: "%02d", month)
     }
 
-    static func localizedErrorDescription(_ error: Error, locale: Locale) -> String {
+    nonisolated static func localizedErrorDescription(_ error: Error, locale: Locale) -> String {
         let description = error.localizedDescription
         let exactKeys = [
             "カレンダーへのアクセスが許可されていません。",

@@ -1,10 +1,33 @@
 import Combine
 import Foundation
+import os
+
+private let calendarFetchLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "ShiftUpload",
+    category: "CalendarFetch"
+)
 
 final class CalendarEventManagerModel: ObservableObject {
     private struct MonthCacheEntry {
         let events: [CalendarEventRecord]
         let calendarColor: CalendarDisplayColor?
+    }
+
+    private struct MonthFetchConfiguration {
+        let destination: CalendarDestination
+        let appleCalendarIdentifier: String
+        let googleCalendarID: String
+        let googleShowJapaneseHolidays: Bool
+        let notionDataSourceID: String
+        let notionDateProperty: String
+        let notionTitleProperty: String
+        let notionTagProperty: String
+        let notionTagValue: String
+        let notionNotesProperty: String
+        let notionLocationProperty: String
+        let notionURLProperty: String
+        let notionMetadataProperties: [NotionPropertyOption]
+        let localeIdentifier: String
     }
 
     @Published private(set) var events: [CalendarEventRecord] = []
@@ -17,7 +40,6 @@ final class CalendarEventManagerModel: ObservableObject {
     @Published private(set) var pendingDeletion: CalendarEventRecord?
     @Published private(set) var message = ""
     @Published private(set) var shouldAnimateEventBandReveal = false
-    @Published private(set) var cacheRevision = 0
 
     private var destination: CalendarDestination
     @Published private(set) var yearMonth: YearMonth
@@ -39,14 +61,16 @@ final class CalendarEventManagerModel: ObservableObject {
     private var loadGeneration = 0
     private var cacheGeneration = 0
     private var monthCache: [YearMonth: MonthCacheEntry] = [:]
+    private var didWarmInitialNeighbors = false
     private var prefetchTasks: [YearMonth: Task<Void, Never>] = [:]
     private var prefetchTokens: [YearMonth: UUID] = [:]
     private var queuedPrefetchMonths = Set<YearMonth>()
 
-    // Retain a bounded cache around the visible month; only adjacent months are prefetched.
-    private static let cacheMonthRadius = 12
+    // Keep the visible month and a six-month buffer on each side warm so
+    // month and week scrolling can render from memory.
+    private static let cacheMonthRadius = 6
     private static let maximumConcurrentPrefetches = 2
-    private static let prefetchThrottleNanoseconds: UInt64 = 100_000_000
+    private static let prefetchThrottleNanoseconds: UInt64 = 50_000_000
 
     init(
         destination: CalendarDestination,
@@ -195,9 +219,11 @@ final class CalendarEventManagerModel: ObservableObject {
             : String(format: "%04d-%02d", yearMonth.year, yearMonth.month)
     }
 
-    func events(for day: Int) -> [CalendarEventRecord] {
-        events
-            .filter { $0.starts(on: day, in: yearMonth) }
+    func events(for day: Int, yearMonth: YearMonth? = nil) -> [CalendarEventRecord] {
+        let targetYearMonth = yearMonth ?? self.yearMonth
+        let sourceEvents = yearMonth.map { cachedEvents(for: $0) } ?? events
+        return sourceEvents
+            .filter { $0.starts(on: day, in: targetYearMonth) }
             .sorted(by: calendarEventComesBefore)
     }
 
@@ -418,20 +444,24 @@ final class CalendarEventManagerModel: ObservableObject {
         updateCachedDisplayedMonth()
     }
 
-    func dayHeader(for day: Int, locale: Locale) -> String {
+    func dayHeader(
+        for day: Int,
+        yearMonth: YearMonth? = nil,
+        locale: Locale
+    ) -> String {
+        let displayYearMonth = yearMonth ?? self.yearMonth
         let weekdays = locale.identifier.hasPrefix("en")
             ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
             : ["日", "月", "火", "水", "木", "金", "土"]
-        let weekday = yearMonth.weekdayIndex(for: day)
+        let weekday = displayYearMonth.weekdayIndex(for: day)
             .map { weekdays[$0 - 1] } ?? ""
+        let dateText = displayYearMonth.displayText(for: day, locale: locale)
         return locale.identifier.hasPrefix("en")
-            ? "\(day) (\(weekday))"
-            : "\(day)日（\(weekday)）"
+            ? "\(dateText) (\(weekday))"
+            : "\(dateText)（\(weekday)）"
     }
 
     func load(forceRefresh: Bool = false) {
-        guard forceRefresh || loadTask == nil else { return }
-
         loadGeneration += 1
         let generation = loadGeneration
         let targetMonth = yearMonth
@@ -442,12 +472,21 @@ final class CalendarEventManagerModel: ObservableObject {
         prefetchKickoffTask = nil
 
         updateCacheWindow(around: targetMonth)
+        let loadLogMessage =
+            "load requested month=\(targetMonth.year)-\(targetMonth.month) "
+                + "forceRefresh=\(forceRefresh) "
+                + "cacheEntries=\(monthCache.count)"
+        calendarFetchLogger.debug("\(loadLogMessage, privacy: .public)")
         if forceRefresh {
             removeCachedMonth(for: targetMonth)
             cancelPrefetch(for: targetMonth)
         }
 
         if let cachedMonth = monthCache[targetMonth] {
+            let cacheLogMessage =
+                "cache hit month=\(targetMonth.year)-\(targetMonth.month) "
+                    + "events=\(cachedMonth.events.count)"
+            calendarFetchLogger.notice("\(cacheLogMessage, privacy: .public)")
             shouldAnimateEventBandReveal = false
             display(cachedMonth)
             isLoading = false
@@ -456,7 +495,6 @@ final class CalendarEventManagerModel: ObservableObject {
             return
         }
 
-        cancelPrefetch(for: targetMonth)
         if !forceRefresh || !hadDisplayedMonth {
             clearDisplayedMonth()
         }
@@ -476,11 +514,34 @@ final class CalendarEventManagerModel: ObservableObject {
             }
 
             do {
-                let fetchedMonth = try await self.fetchMonth(targetMonth)
+                let fetchedMonth: MonthCacheEntry
+                if self.prefetchTasks[targetMonth] != nil {
+                    // Reuse an adjacent-month fetch that is already in flight
+                    // instead of cancelling it and starting the same request again.
+                    if let prefetchedMonth = try await self.waitForPrefetch(targetMonth) {
+                        fetchedMonth = prefetchedMonth
+                    } else {
+                        fetchedMonth = try await self.fetchMonth(targetMonth)
+                    }
+                } else {
+                    fetchedMonth = try await self.fetchMonth(targetMonth)
+                }
                 guard !Task.isCancelled,
                       self.loadGeneration == generation,
                       self.cacheGeneration == requestedCacheGeneration,
                       self.yearMonth == targetMonth else { return }
+
+                if !self.didWarmInitialNeighbors {
+                    await self.warmInitialNeighbors(
+                        around: targetMonth,
+                        cacheGeneration: requestedCacheGeneration
+                    )
+                    guard !Task.isCancelled,
+                          self.loadGeneration == generation,
+                          self.cacheGeneration == requestedCacheGeneration,
+                          self.yearMonth == targetMonth else { return }
+                    self.didWarmInitialNeighbors = true
+                }
 
                 self.shouldAnimateEventBandReveal = true
                 self.store(fetchedMonth, for: targetMonth)
@@ -502,22 +563,104 @@ final class CalendarEventManagerModel: ObservableObject {
         }
     }
 
+    private func waitForPrefetch(_ yearMonth: YearMonth) async throws -> MonthCacheEntry? {
+        while prefetchTasks[yearMonth] != nil {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return monthCache[yearMonth]
+    }
+
+    private func warmInitialNeighbors(
+        around yearMonth: YearMonth,
+        cacheGeneration requestedCacheGeneration: Int
+    ) async {
+        for offset in [-1, 1] {
+            guard !Task.isCancelled,
+                  cacheGeneration == requestedCacheGeneration else { return }
+
+            let neighborMonth = yearMonth.addingMonths(offset)
+            guard monthCache[neighborMonth] == nil else { continue }
+
+            do {
+                let fetchedMonth = try await fetchMonth(neighborMonth)
+                guard !Task.isCancelled,
+                      cacheGeneration == requestedCacheGeneration,
+                      cacheWindow(around: self.yearMonth).contains(neighborMonth) else {
+                    return
+                }
+                store(fetchedMonth, for: neighborMonth)
+            } catch {
+                // The visible month remains usable even if a neighbor cannot be warmed.
+            }
+        }
+    }
+
     private func fetchMonth(_ yearMonth: YearMonth) async throws -> MonthCacheEntry {
+        let start = DispatchTime.now().uptimeNanoseconds
+        calendarFetchLogger.debug(
+            "fetch begin month=\(yearMonth.year)-\(yearMonth.month)"
+        )
+        let configuration = MonthFetchConfiguration(
+            destination: destination,
+            appleCalendarIdentifier: appleCalendarIdentifier,
+            googleCalendarID: googleCalendarID,
+            googleShowJapaneseHolidays: googleShowJapaneseHolidays,
+            notionDataSourceID: notionDataSourceID,
+            notionDateProperty: notionDateProperty,
+            notionTitleProperty: notionTitleProperty,
+            notionTagProperty: notionTagProperty,
+            notionTagValue: notionTagValue,
+            notionNotesProperty: notionNotesProperty,
+            notionLocationProperty: notionLocationProperty,
+            notionURLProperty: notionURLProperty,
+            notionMetadataProperties: notionMetadataProperties,
+            localeIdentifier: localeIdentifier
+        )
+        let fetchTask = Task.detached(priority: .utility) {
+            try await Self.fetchMonth(yearMonth, configuration: configuration)
+        }
+        do {
+            let result = try await withTaskCancellationHandler {
+                try await fetchTask.value
+            } onCancel: {
+                fetchTask.cancel()
+            }
+            let elapsedMilliseconds = Double(
+                DispatchTime.now().uptimeNanoseconds - start
+            ) / 1_000_000
+            let elapsedText = String(format: "%.2f", elapsedMilliseconds)
+            let fetchLogMessage =
+                "fetch end month=\(yearMonth.year)-\(yearMonth.month) "
+                    + "events=\(result.events.count) "
+                    + "duration=\(elapsedText)ms"
+            calendarFetchLogger.notice("\(fetchLogMessage, privacy: .public)")
+            return result
+        } catch {
+            let elapsedMilliseconds = Double(
+                DispatchTime.now().uptimeNanoseconds - start
+            ) / 1_000_000
+            let elapsedText = String(format: "%.2f", elapsedMilliseconds)
+            let fetchErrorLogMessage =
+                "fetch failed month=\(yearMonth.year)-\(yearMonth.month) "
+                    + "duration=\(elapsedText)ms"
+            calendarFetchLogger.error("\(fetchErrorLogMessage, privacy: .public)")
+            throw error
+        }
+    }
+
+    private nonisolated static func fetchMonth(
+        _ yearMonth: YearMonth,
+        configuration: MonthFetchConfiguration
+    ) async throws -> MonthCacheEntry {
         let fetchedEvents: [CalendarEventRecord]
         let fetchedCalendarColor: CalendarDisplayColor?
 
-        switch destination {
+        switch configuration.destination {
         case .apple:
-            let calendarIdentifier = appleCalendarIdentifier
-            let result = try await Task.detached(priority: .utility) {
-                let client = AppleCalendarEventClient(calendarIdentifier: calendarIdentifier)
-                return (
-                    calendarColor: try client.fetchCalendarColor(),
-                    events: try client.fetch(yearMonth: yearMonth)
-                )
-            }.value
-            fetchedCalendarColor = result.calendarColor
-            fetchedEvents = result.events
+            let calendarIdentifier = configuration.appleCalendarIdentifier
+            let client = AppleCalendarEventClient(calendarIdentifier: calendarIdentifier)
+            fetchedCalendarColor = try client.fetchCalendarColor()
+            fetchedEvents = try client.fetch(yearMonth: yearMonth)
         case .google:
             guard GoogleTokenStore.load() != nil else {
                 throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
@@ -526,40 +669,40 @@ final class CalendarEventManagerModel: ObservableObject {
             let client = GoogleCalendarAPIClient(clientID: GoogleOAuthConfiguration.clientID)
             var googleEvents = try await client.fetchEvents(
                 yearMonth: yearMonth,
-                calendarID: googleCalendarID
+                calendarID: configuration.googleCalendarID
             )
-            if googleShowJapaneseHolidays {
+            if configuration.googleShowJapaneseHolidays {
                 googleEvents.append(contentsOf: try await client.fetchJapaneseHolidayEvents(yearMonth: yearMonth))
             }
             fetchedEvents = googleEvents
             if let eventColor = fetchedEvents.compactMap({ $0.calendarColor }).first {
                 fetchedCalendarColor = eventColor
             } else {
-                fetchedCalendarColor = try? await client.fetchCalendarColor(calendarID: googleCalendarID)
+                fetchedCalendarColor = try? await client.fetchCalendarColor(calendarID: configuration.googleCalendarID)
             }
         case .notion:
             guard let token = KeychainStore.string(for: "notion-access-token"),
                   !token.isEmpty,
-                  !notionDataSourceID.isEmpty else {
+                  !configuration.notionDataSourceID.isEmpty else {
                 throw CalendarEventManagementError.invalidSettings("NotionのアクセストークンとデータベースIDを設定してください。")
             }
 
             fetchedEvents = try await NotionCalendarEventClient(
                 token: token,
-                dataSourceID: notionDataSourceID,
-                dateProperty: notionDateProperty,
-                titleProperty: notionTitleProperty,
-                tagProperty: notionTagProperty,
-                tagValue: notionTagValue,
-                notesProperty: notionNotesProperty,
-                locationProperty: notionLocationProperty,
-                urlProperty: notionURLProperty,
-                metadataProperties: notionMetadataProperties
+                dataSourceID: configuration.notionDataSourceID,
+                dateProperty: configuration.notionDateProperty,
+                titleProperty: configuration.notionTitleProperty,
+                tagProperty: configuration.notionTagProperty,
+                tagValue: configuration.notionTagValue,
+                notesProperty: configuration.notionNotesProperty,
+                locationProperty: configuration.notionLocationProperty,
+                urlProperty: configuration.notionURLProperty,
+                metadataProperties: configuration.notionMetadataProperties
             ).fetchEvents(yearMonth: yearMonth)
             fetchedCalendarColor = nil
         }
 
-        let displayLocale = Locale(identifier: localeIdentifier)
+        let displayLocale = Locale(identifier: configuration.localeIdentifier)
         return MonthCacheEntry(
             events: fetchedEvents.map { event in
                 CalendarEventRecord(
@@ -646,7 +789,7 @@ final class CalendarEventManagerModel: ObservableObject {
         updateCacheWindow(around: yearMonth)
         let allowedMonths = cacheWindow(around: yearMonth)
         let nearbyMonths = allowedMonths.filter {
-            monthDistance($0, from: yearMonth) <= 1
+            monthDistance($0, from: yearMonth) <= Self.cacheMonthRadius
         }
         queuedPrefetchMonths.formUnion(
             nearbyMonths.filter {
@@ -694,10 +837,10 @@ final class CalendarEventManagerModel: ObservableObject {
         prefetchKickoffTask?.cancel()
         let requestedCacheGeneration = cacheGeneration
 
-        // Let the visible month settle before starting the adjacent-month prefetches.
+        // Let the visible month settle briefly before starting background prefetches.
         prefetchKickoffTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(nanoseconds: 200_000_000)
+                try await Task.sleep(nanoseconds: 50_000_000)
             } catch {
                 return
             }
@@ -729,6 +872,7 @@ final class CalendarEventManagerModel: ObservableObject {
 
     private func invalidateMonthCache() {
         cacheGeneration += 1
+        didWarmInitialNeighbors = false
         monthCache.removeAll()
         queuedPrefetchMonths.removeAll()
         prefetchKickoffTask?.cancel()
@@ -748,7 +892,6 @@ final class CalendarEventManagerModel: ObservableObject {
 
     private func store(_ cachedMonth: MonthCacheEntry, for yearMonth: YearMonth) {
         monthCache[yearMonth] = cachedMonth
-        cacheRevision &+= 1
         if yearMonth == self.yearMonth {
             display(cachedMonth)
         }
