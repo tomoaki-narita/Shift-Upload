@@ -113,6 +113,20 @@ struct YearMonth: Hashable {
         return formatter.string(from: date)
     }
 
+    func monthName(for locale: Locale) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: 1)) else {
+            return "\(month)"
+        }
+
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.dateFormat = "MMM"
+        return formatter.string(from: date)
+    }
+
     func displayText(for day: Int, locale: Locale) -> String {
         guard locale.identifier.hasPrefix("en") else {
             return "\(year)年\(month)月\(day)日"

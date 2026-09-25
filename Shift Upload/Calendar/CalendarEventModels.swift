@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 import SwiftUI
 
-struct CalendarEventMetadata: Equatable, Hashable {
+struct CalendarEventMetadata: Codable, Equatable, Hashable {
     var notes: String = ""
     var location: String = ""
     var url: String = ""
@@ -55,7 +55,7 @@ struct CalendarEventMetadataFieldLabels: Equatable, Hashable {
     }
 }
 
-struct CalendarDisplayColor: Hashable {
+struct CalendarDisplayColor: Codable, Hashable {
     let red: Double
     let green: Double
     let blue: Double
@@ -94,7 +94,7 @@ struct CalendarDisplayColor: Hashable {
     }
 }
 
-struct CalendarEventRecord: Identifiable, Hashable {
+struct CalendarEventRecord: Codable, Identifiable, Hashable {
     let id: String
     let day: Int
     let title: String
@@ -266,7 +266,7 @@ struct CalendarEventBandShape: Shape {
 
     func path(in rect: CGRect) -> Path {
 #if os(macOS)
-        let radius = min(10, min(rect.width, rect.height) / 2)
+        let radius = min(12, min(rect.width, rect.height) / 2)
 #else
         let radius = min(6, min(rect.width, rect.height) / 2)
 #endif

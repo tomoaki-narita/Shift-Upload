@@ -120,6 +120,7 @@ struct CalHubTitlebarLogoAccessory: NSViewRepresentable {
 private enum CalendarDisplayMode: String, CaseIterable, Hashable {
     case month
     case week
+    case year
 }
 
 private enum CalendarDayActionsSheet: Identifiable {
@@ -237,12 +238,97 @@ private struct CalendarTimedEventLayoutResult {
     let overflowCounts: [Date: Int]
 }
 
+private enum CalendarLayoutCacheKind: Hashable {
+    case monthSegments
+    case monthBands
+    case weekSegments
+    case weekBands
+    case weekTimeline
+    case yearMarkers
+}
+
+private struct CalendarLayoutCacheKey: Hashable {
+    let kind: CalendarLayoutCacheKind
+    let pageDate: Date
+    let eventSignature: Int
+}
+
+private final class CalendarEventLayoutCache {
+    private var displaySegments: [CalendarLayoutCacheKey: [CalendarEventDisplaySegment]] = [:]
+    private var bandLayouts: [CalendarLayoutCacheKey: [CalendarEventBandLayout]] = [:]
+    private var timedLayouts: [CalendarLayoutCacheKey: CalendarTimedEventLayoutResult] = [:]
+    private var yearMarkerColorsByKey: [CalendarLayoutCacheKey: [Int: Color]] = [:]
+
+    func removeAll() {
+        displaySegments.removeAll(keepingCapacity: true)
+        bandLayouts.removeAll(keepingCapacity: true)
+        timedLayouts.removeAll(keepingCapacity: true)
+        yearMarkerColorsByKey.removeAll(keepingCapacity: true)
+    }
+
+    func yearMarkerColors(
+        for key: CalendarLayoutCacheKey,
+        build: () -> [Int: Color]
+    ) -> [Int: Color] {
+        if let cached = yearMarkerColorsByKey[key] {
+            return cached
+        }
+
+        let result = build()
+        yearMarkerColorsByKey[key] = result
+        return result
+    }
+
+    func displaySegments(
+        for key: CalendarLayoutCacheKey,
+        build: () -> [CalendarEventDisplaySegment]
+    ) -> [CalendarEventDisplaySegment] {
+        if let cached = displaySegments[key] {
+            return cached
+        }
+
+        let result = build()
+        displaySegments[key] = result
+        return result
+    }
+
+    func bandLayouts(
+        for key: CalendarLayoutCacheKey,
+        build: () -> [CalendarEventBandLayout]
+    ) -> [CalendarEventBandLayout] {
+        if let cached = bandLayouts[key] {
+            return cached
+        }
+
+        let result = build()
+        bandLayouts[key] = result
+        return result
+    }
+
+    func timedLayouts(
+        for key: CalendarLayoutCacheKey,
+        build: () -> CalendarTimedEventLayoutResult
+    ) -> CalendarTimedEventLayoutResult {
+        if let cached = timedLayouts[key] {
+            return cached
+        }
+
+        let result = build()
+        timedLayouts[key] = result
+        return result
+    }
+}
+
 private struct CalendarTimelineSegmentShape: Shape {
     let squareTop: Bool
     let squareBottom: Bool
 
     func path(in rect: CGRect) -> Path {
+#if os(macOS)
+        let radius = min(8, min(rect.width, rect.height) / 2)
+#else
         let radius = min(5, min(rect.width, rect.height) / 2)
+#endif
         let topLeading = squareTop ? 0 : radius
         let topTrailing = squareTop ? 0 : radius
         let bottomLeading = squareBottom ? 0 : radius
@@ -351,6 +437,14 @@ struct CalendarOverlayAnchorKey: PreferenceKey {
         let next = nextValue()
         value.monthTitle = value.monthTitle ?? next.monthTitle
         value.destination = value.destination ?? next.destination
+    }
+}
+
+private struct CalendarHeaderWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
@@ -567,6 +661,8 @@ struct CalendarEventManagerView: View {
     @StateObject private var model: CalendarEventManagerModel
     @State private var selectedYear: Int
     @State private var selectedMonth: Int
+    @State private var calendarFocusDate: Date
+    @State private var yearModeReturnFocusDate: Date?
     @State private var isShiftSelectionPresented = false
     @State private var isDateTimeEventRegistrationPresented = false
     @State private var dateTimeEventRegistrationStartDate = Date()
@@ -590,6 +686,17 @@ struct CalendarEventManagerView: View {
     @State private var isYearMonthPickerPresented = false
     @State private var isCalendarDestinationMenuPresented = false
     @State private var calendarDisplayMode: CalendarDisplayMode = .month
+    @State private var calendarHeaderWidth: CGFloat = 343
+    @State private var yearPageID: Int?
+    @State private var queuedYearNavigationSteps = 0
+    @State private var isYearButtonNavigationActive = false
+    @State private var didObserveYearButtonScroll = false
+    @State private var yearEventsByYear: [Int: [YearMonth: [CalendarEventRecord]]] = [:]
+    @State private var isLoadingYearEvents = false
+    @State private var yearEventRefreshID = 0
+    @State private var shouldForceRefreshYearEvents = false
+    @State private var calendarCacheRevalidationID = 0
+    @State private var isRefreshingVisibleMonths = false
     @State private var weekContentInset: CGFloat = 0
     @State private var weekPageID: Date?
     @State private var pendingWeekMonthAnchorDate: Date?
@@ -603,6 +710,7 @@ struct CalendarEventManagerView: View {
     @State private var eventBandRevealGeneration = 0
     @State private var didLoadInitialMonth = false
     @State private var didEnterBackground = false
+    @State private var calendarEventLayoutCache = CalendarEventLayoutCache()
 #if os(macOS)
     @State private var isCalendarLiveResizing = false
     @State private var isDayActionsPopoverPresented = false
@@ -610,14 +718,14 @@ struct CalendarEventManagerView: View {
     // Ignore that one trailing band tap so the same popover is not reopened.
     @State private var bandPopoverDismissalDeadline = Date.distantPast
 #endif
-    private let monthPageAnchor: YearMonth
+    @State private var monthPageAnchor: YearMonth
+    private let yearPageAnchor: Int
     @State private var weekPageTemplates: [[CalendarGridDate]]
     private static let monthPageRadius = 120
     // Keep the week pager bounded. A 20-year page set makes SwiftUI measure a
     // large number of event-band views when switching from month to week.
     // This matches the model's six-month neighbor cache on either side.
     private static let weekPageMonthRadius = 6
-    private static let calendarControlMinimumWidth: CGFloat = 130
     private static let calendarControlHeight: CGFloat = 34
 
     private var calendarDayActionsSheetBinding: Binding<CalendarDayActionsSheet?> {
@@ -701,10 +809,18 @@ struct CalendarEventManagerView: View {
         self.isCloudSyncEnabled = isCloudSyncEnabled
         self.onSynchronize = onSynchronize
         self.isTitlebarLogoVisible = isTitlebarLogoVisible
-        self.monthPageAnchor = initial
+        _monthPageAnchor = State(initialValue: initial)
+        self.yearPageAnchor = initial.year
         _weekPageTemplates = State(initialValue: Self.makeWeekPageTemplates(around: initial))
         _selectedYear = State(initialValue: initial.year)
         _selectedMonth = State(initialValue: initial.month)
+        _calendarFocusDate = State(initialValue: initial == .current
+            ? Date()
+            : Calendar.current.date(from: DateComponents(
+                year: initial.year,
+                month: initial.month,
+                day: 1
+            )) ?? Date())
         _monthPageID = State(initialValue: Self.monthPageRadius)
         _pendingMonthPageID = State(initialValue: nil)
         _isMonthScrollActive = State(initialValue: false)
@@ -729,6 +845,10 @@ struct CalendarEventManagerView: View {
 
     private var selectedYearMonth: YearMonth {
         YearMonth(year: selectedYear, month: selectedMonth)
+    }
+
+    private var displayedYearEvents: [YearMonth: [CalendarEventRecord]] {
+        yearEventsByYear[selectedYear] ?? [:]
     }
 
     private func localized(_ key: String) -> String {
@@ -792,6 +912,22 @@ struct CalendarEventManagerView: View {
         model.calendarColor?.color ?? Color.accentColor
     }
 
+    private var calendarBaseBackground: Color {
+#if os(iOS)
+        colorScheme == .dark
+            ? Color(red: 0.1176, green: 0.1176, blue: 0.1176)
+            : Color.white
+#else
+        Color(nsColor: .windowBackgroundColor)
+#endif
+    }
+
+    private var calendarCardBackground: Color {
+        colorScheme == .dark
+            ? Color(red: 0.15, green: 0.15, blue: 0.15)
+            : Color(red: 0.96, green: 0.96, blue: 0.96)
+    }
+
     private var isBandPopoverPresented: Bool {
 #if os(macOS)
         selectedBandEventForActions != nil || selectedTimelineEventForActions != nil
@@ -806,7 +942,365 @@ struct CalendarEventManagerView: View {
         return Array(Set(range + [selectedYear])).sorted()
     }
 
-    var body: some View {
+    private func handleSelectedYearChange() {
+        isLoadingYearEvents = false
+        if calendarDisplayMode == .year {
+            if yearPageID != selectedYear {
+                yearPageID = selectedYear
+            }
+            calendarFocusDate = dateByReplacingYear(of: calendarFocusDate, with: selectedYear)
+        } else {
+            reloadSelectedMonth()
+        }
+    }
+
+    private func handleSelectedMonthChange() {
+        if calendarDisplayMode == .year {
+            let previousDay = Calendar.current.component(.day, from: calendarFocusDate)
+            calendarFocusDate = calendarDate(
+                yearMonth: selectedYearMonth,
+                day: min(previousDay, selectedYearMonth.numberOfDays)
+            )
+            yearModeReturnFocusDate = calendarFocusDate
+        } else {
+            reloadSelectedMonth()
+        }
+    }
+
+    private func handleLocaleChange() {
+        model.setLocaleIdentifier(locale.identifier)
+        model.load()
+    }
+
+    private func handleInitialCalendarAppearance() {
+        onCalendarColorChange(model.calendarColor)
+        guard !didLoadInitialMonth else { return }
+        didLoadInitialMonth = true
+        model.setLocaleIdentifier(locale.identifier)
+        model.load()
+    }
+
+    private var yearEventsTaskID: String? {
+        calendarDisplayMode == .year
+            ? "\(selectedYear)-\(yearEventRefreshID)-\(calendarCacheRevalidationID)"
+            : nil
+    }
+
+    private var monthWeekCacheTaskID: String? {
+        guard calendarDisplayMode != .year else { return nil }
+        let monthKey = cacheMonthsForCurrentDisplay
+            .sorted { ($0.year, $0.month) < ($1.year, $1.month) }
+            .map { "\($0.year)-\($0.month)" }
+            .joined(separator: ",")
+        let weekPageKey = weekPageID?.timeIntervalSinceReferenceDate ?? 0
+        return "\(calendarDisplayMode.rawValue)-\(monthKey)-\(weekPageKey)-\(calendarCacheRevalidationID)"
+    }
+
+    private var cacheMonthsForCurrentDisplay: Set<YearMonth> {
+        guard calendarDisplayMode != .year else { return [] }
+        return [model.yearMonth.previousMonth, model.yearMonth, model.yearMonth.nextMonth]
+    }
+
+    private func monitorVisibleMonthWeekCaches() async {
+        guard calendarDisplayMode != .year else { return }
+        model.revalidateCachedMonths(for: cacheMonthsForCurrentDisplay)
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: 10 * 60 * 1_000_000_000)
+            } catch {
+                return
+            }
+            guard scenePhase == .active,
+                  calendarDisplayMode != .year else { continue }
+            model.revalidateCachedMonths(for: cacheMonthsForCurrentDisplay)
+        }
+    }
+
+    private func monitorSelectedYearEvents() async {
+        let forceRefresh = shouldForceRefreshYearEvents
+        shouldForceRefreshYearEvents = false
+        await loadEventsForSelectedYear(forceRefresh: forceRefresh)
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: 10 * 60 * 1_000_000_000)
+            } catch {
+                return
+            }
+            guard scenePhase == .active,
+                  calendarDisplayMode == .year else { continue }
+            await loadEventsForSelectedYear()
+        }
+    }
+
+    private func loadEventsForSelectedYear(forceRefresh: Bool = false) async {
+        guard calendarDisplayMode == .year else { return }
+        let year = selectedYear
+        if !forceRefresh {
+            let cachedEvents = model.cachedEventsByMonth(
+                for: year,
+                loadingPersistentCache: true
+            )
+            if !cachedEvents.isEmpty {
+                yearEventsByYear[year] = cachedEvents
+            }
+        }
+        let hasCachedEvents = yearEventsByYear[year]?.isEmpty == false
+        let shouldShowLoading = forceRefresh || !hasCachedEvents
+        if shouldShowLoading {
+            isLoadingYearEvents = true
+        }
+        defer {
+            if shouldShowLoading && selectedYear == year && calendarDisplayMode == .year {
+                isLoadingYearEvents = false
+            }
+        }
+
+        let fetchedEvents: [YearMonth: [CalendarEventRecord]]
+        if forceRefresh {
+            fetchedEvents = await model.refreshEventsByMonth(for: year)
+        } else {
+            fetchedEvents = await model.fetchEventsByMonth(for: year)
+        }
+        guard !Task.isCancelled else { return }
+        yearEventsByYear[year] = fetchedEvents
+    }
+
+    private func handleDateTimeEventRegistration(_ draft: CalendarEventDraft) {
+        isDateTimeEventRegistrationPresented = false
+        let completion = DateTimeEventRegistrationCompletion { eventID in
+            model.applyRegisteredDateTimeEvent(id: eventID, draft: draft)
+        }
+        onRegisterDateTimeEvent(draft, completion)
+    }
+
+    private func handleEventEdit(_ event: CalendarEventRecord, draft: CalendarEventDraft) {
+        eventBeingEdited = nil
+        model.updateEvent(event, draft: draft)
+    }
+
+    private func eventEditingSheet(for event: CalendarEventRecord) -> some View {
+        let startDate = editingStartDate(for: event)
+        return DateTimeEventRegistrationView(
+            initialStartDate: startDate,
+            locale: locale,
+            initialTitle: event.title,
+            initialEndDate: editingEndDate(for: event, startDate: startDate),
+            initialIsAllDay: event.isAllDay,
+            initialMetadata: event.metadata,
+            metadataFieldLabels: metadataFieldLabels,
+            isEditing: true
+        ) { draft in
+            handleEventEdit(event, draft: draft)
+        }
+        .environment(\.locale, locale)
+    }
+
+    private func handleShiftSelection(_ title: String) {
+        if isDaySelectionMode {
+            completeMultipleShiftSelection(title)
+        } else {
+            completeShiftSelection(title)
+        }
+    }
+
+    private var shiftSelectionSheetContent: some View {
+        ShiftSelectionView(
+            definitions: definitions,
+            tint: managerAccentColor,
+            locale: locale,
+            onSelect: handleShiftSelection
+        )
+    }
+
+    private var dateTimeEventRegistrationSheetContent: some View {
+        DateTimeEventRegistrationView(
+            initialStartDate: dateTimeEventRegistrationStartDate,
+            locale: locale,
+            metadataFieldLabels: metadataFieldLabels,
+            onRegister: handleDateTimeEventRegistration
+        )
+        .environment(\.locale, locale)
+    }
+
+    private func handleCalendarEventManagerConfigurationChange() {
+        yearEventsByYear.removeAll()
+        yearEventRefreshID += 1
+        model.updateConfiguration(
+            destination: destination,
+            appleCalendarIdentifier: appleCalendarIdentifier,
+            googleCalendarID: googleCalendarID,
+            googleShowJapaneseHolidays: googleShowJapaneseHolidays,
+            notionDataSourceID: notionDataSourceID,
+            notionDateProperty: notionDateProperty,
+            notionTitleProperty: notionTitleProperty,
+            notionTagProperty: notionTagProperty,
+            notionTagValue: notionTagValue,
+            notionNotesProperty: notionNotesProperty,
+            notionLocationProperty: notionLocationProperty,
+            notionURLProperty: notionURLProperty,
+            notionMetadataProperties: notionMetadataProperties
+        )
+    }
+
+    private func handleModelYearMonthChange() {
+        selectedYear = model.yearMonth.year
+        selectedMonth = model.yearMonth.month
+
+        if let anchorDate = pendingWeekMonthAnchorDate {
+            pendingWeekMonthAnchorDate = nil
+            if calendarDisplayMode == .week {
+                scheduleWeekPageRebuild(anchorDate: anchorDate)
+            }
+        } else if calendarDisplayMode == .week,
+                  weekPageID == nil,
+                  !isRebuildingWeekPages {
+            scheduleWeekPageRebuild()
+        }
+
+        if let pendingSelection = pendingDayActionsSelection,
+           pendingSelection.yearMonth == model.yearMonth {
+            pendingDayActionsSelection = nil
+            Task { @MainActor in
+                await Task.yield()
+                selectedDayForActions = pendingSelection.day
+#if os(macOS)
+                isDayActionsPopoverPresented = true
+#endif
+            }
+        }
+
+        if let pendingBandSelection = pendingBandEventForActions,
+           pendingBandSelection.yearMonth == model.yearMonth {
+            pendingBandEventForActions = nil
+            Task { @MainActor in
+                await Task.yield()
+                selectedBandEventForActions = pendingBandSelection
+            }
+        }
+
+        if model.shouldAnimateEventBandReveal {
+            beginEventBandReveal()
+        } else {
+            showAllEventBandsImmediately()
+        }
+    }
+
+#if os(macOS)
+    @ToolbarContentBuilder
+    private var calendarToolbarContent: some ToolbarContent {
+        if isCloudSyncEnabled {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    onSynchronize()
+                } label: {
+                    if isSynchronizing {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 36, height: 36)
+                    } else {
+                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 36, height: 36)
+                            .contentShape(Circle())
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(isSynchronizing)
+                .help("今すぐ同期")
+            }
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                leaveDaySelectionModeAndOpen(onOpenPDFList)
+            } label: {
+                Image(systemName: "folder")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(ShiftHubLocalization.string("履歴", locale: locale))
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                toggleDaySelectionMode()
+            } label: {
+                Image(
+                    systemName: isDaySelectionMode
+                        ? "xmark"
+                        : "circle.grid.2x2.topleft.checkmark.filled"
+                )
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(isDaySelectionMode ? "複数選択を解除" : "複数選択")
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                leaveDaySelectionModeAndOpen(onOpenShiftUpload)
+            } label: {
+                Image(systemName: "doc.viewfinder")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("勤務表")
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                leaveDaySelectionModeAndOpen(onOpenSettings)
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("設定")
+        }
+    }
+
+    private var titlebarLogoAccessory: some View {
+        CalHubTitlebarLogoAccessory(
+            isDark: colorScheme == .dark,
+            isVisible: isTitlebarLogoVisible
+        )
+        .frame(width: 0, height: 0)
+    }
+
+    private func beginCalendarLiveResize() {
+        isCalendarLiveResizing = true
+    }
+
+    private func endCalendarLiveResize() {
+        isCalendarLiveResizing = false
+        guard let currentPageID = pageID(for: model.yearMonth) else { return }
+
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            monthPageID = currentPageID
+        }
+    }
+#endif
+
+    private var calendarRootView: some View {
         VStack(alignment: .leading, spacing: 0) {
 #if os(iOS)
             iOSHomeHeader
@@ -824,22 +1318,34 @@ struct CalendarEventManagerView: View {
                 }
                 .zIndex(1)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 2) {
                     monthTitleSelector
-                        .font(.title3.bold())
+                        .font(.title.bold())
+#if os(iOS)
+                        .layoutPriority(3)
+#else
+                        .layoutPriority(1)
+#endif
 
                     Spacer(minLength: 0)
 
                     monthNavigationControls
 
+#if os(iOS)
+                    Spacer(minLength: 0)
+#endif
+
                     calendarDisplayModeSelector
+#if os(iOS)
+                        .layoutPriority(2)
+#endif
 
                     newEventButton
 
                     Button {
-                        model.load(forceRefresh: true)
+                        refreshDisplayedCalendar()
                     } label: {
-                        if model.isLoading {
+                        if model.isLoading || isLoadingYearEvents || isRefreshingVisibleMonths {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
@@ -848,11 +1354,23 @@ struct CalendarEventManagerView: View {
                                 .foregroundStyle(.primary)
                         }
                     }
-                    .padding(.leading, 8)
+                    .padding(.leading, 4)
                     .buttonStyle(.plain)
                     .tint(.primary)
                     .accessibilityLabel("取得")
-                    .disabled(model.isLoading || model.isDeleting)
+                    .disabled(model.isLoading || isLoadingYearEvents || isRefreshingVisibleMonths || model.isDeleting)
+                }
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: CalendarHeaderWidthPreferenceKey.self,
+                            value: geometry.size.width
+                        )
+                    }
+                }
+                .onPreferenceChange(CalendarHeaderWidthPreferenceKey.self) { width in
+                    guard width > 0, abs(width - calendarHeaderWidth) > 0.5 else { return }
+                    calendarHeaderWidth = width
                 }
             }
             .padding(.horizontal, 16)
@@ -893,9 +1411,9 @@ struct CalendarEventManagerView: View {
                     newEventButton
 
                     Button {
-                        model.load(forceRefresh: true)
+                        refreshDisplayedCalendar()
                     } label: {
-                        if model.isLoading {
+                        if model.isLoading || isLoadingYearEvents || isRefreshingVisibleMonths {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
@@ -905,7 +1423,7 @@ struct CalendarEventManagerView: View {
                     .buttonStyle(.plain)
                     .tint(.primary)
                     .help("取得")
-                    .disabled(model.isLoading || model.isDeleting)
+                    .disabled(model.isLoading || isLoadingYearEvents || isRefreshingVisibleMonths || model.isDeleting)
 
                 }
                 .padding(.vertical)
@@ -928,49 +1446,33 @@ struct CalendarEventManagerView: View {
 #endif
 
 #if os(iOS)
-            ZStack(alignment: .topLeading) {
-                if !model.message.isEmpty && !model.isLoading {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(verbatim: model.displayedMonthText)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-
-                        Spacer(minLength: 12)
-
-                        Text(verbatim: model.message)
-                            .multilineTextAlignment(.trailing)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            ZStack(alignment: .center) {
+                if calendarDisplayMode == .year {
+                    footerSummary(title: displayedYearFooterTitle, message: yearFooterMessage)
+                        .font(.caption2)
+                } else if !model.message.isEmpty && !model.isLoading {
+                    footerSummary(title: model.displayedMonthText, message: model.message)
+                        .font(.caption2)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .frame(minHeight: 20, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(minHeight: 20, alignment: .center)
             .padding(.horizontal, 24)
+            .padding(.top, 8)
             .padding(.bottom, 12)
 #else
-            ZStack(alignment: .topLeading) {
-                if !model.message.isEmpty && !model.isLoading {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(verbatim: model.displayedMonthText)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-
-                        Spacer(minLength: 12)
-
-                        Text(verbatim: model.message)
-                            .multilineTextAlignment(.trailing)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            ZStack(alignment: .center) {
+                if calendarDisplayMode == .year {
+                    footerSummary(title: displayedYearFooterTitle, message: yearFooterMessage)
+                        .font(.callout)
+                } else if !model.message.isEmpty && !model.isLoading {
+                    footerSummary(title: model.displayedMonthText, message: model.message)
+                        .font(.callout)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 20, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: 20, alignment: .center)
             .padding(.horizontal, 24)
+            .padding(.top, 8)
             .padding(.bottom, 12)
 #endif
         }
@@ -991,6 +1493,7 @@ struct CalendarEventManagerView: View {
             alignment: .topLeading
         )
 #endif
+        .background(calendarBaseBackground)
         .contentShape(Rectangle())
         .onTapGesture {
             if isCalendarDestinationMenuPresented {
@@ -1045,114 +1548,25 @@ struct CalendarEventManagerView: View {
             .allowsHitTesting(isYearMonthPickerPresented || isCalendarDestinationMenuPresented)
         }
 #if os(macOS)
-        .toolbar {
-            if isCloudSyncEnabled {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        onSynchronize()
-                    } label: {
-                        if isSynchronizing {
-                            ProgressView()
-                                .controlSize(.small)
-                                .frame(width: 36, height: 36)
-                        } else {
-                            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.icloud")
-                                .font(.body.weight(.semibold))
-                                .frame(width: 36, height: 36)
-                                .contentShape(Circle())
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isSynchronizing)
-                    .help("今すぐ同期")
-                }
-            }
-
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    leaveDaySelectionModeAndOpen(onOpenPDFList)
-                } label: {
-                    Image(systemName: "folder")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 36, height: 36)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help(ShiftHubLocalization.string("履歴", locale: locale))
-            }
-
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    toggleDaySelectionMode()
-                } label: {
-                    Image(
-                        systemName: isDaySelectionMode
-                            ? "xmark"
-                            : "circle.grid.2x2.topleft.checkmark.filled"
-                    )
-                        .font(.body.weight(.semibold))
-                        .frame(width: 36, height: 36)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help(isDaySelectionMode ? "複数選択を解除" : "複数選択")
-            }
-
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    leaveDaySelectionModeAndOpen(onOpenShiftUpload)
-                } label: {
-                    Image(systemName: "doc.viewfinder")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 36, height: 36)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help("勤務表")
-            }
-
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    leaveDaySelectionModeAndOpen(onOpenSettings)
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 36, height: 36)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help("設定")
-            }
-        }
+        .toolbar { calendarToolbarContent }
 #endif
 #if os(macOS)
-        .background {
-            CalHubTitlebarLogoAccessory(
-                isDark: colorScheme == .dark,
-                isVisible: isTitlebarLogoVisible
-            )
-                .frame(width: 0, height: 0)
-        }
+        .background { titlebarLogoAccessory }
 #endif
         .onAppear {
-            onCalendarColorChange(model.calendarColor)
-            guard !didLoadInitialMonth else { return }
-            didLoadInitialMonth = true
-            model.setLocaleIdentifier(locale.identifier)
-            model.load()
+            handleInitialCalendarAppearance()
+        }
+        .task(id: yearEventsTaskID) {
+            await monitorSelectedYearEvents()
+        }
+        .task(id: monthWeekCacheTaskID) {
+            await monitorVisibleMonthWeekCaches()
         }
         .onChange(of: model.calendarColor) { _, color in
             onCalendarColorChange(color)
         }
         .onChange(of: model.events) { _, events in
+            calendarEventLayoutCache.removeAll()
             let logMessage =
                 "events changed count=\(events.count) "
                     + "month=\(model.yearMonth.year)-\(model.yearMonth.month)"
@@ -1168,91 +1582,34 @@ struct CalendarEventManagerView: View {
                 showAllEventBandsImmediately()
             }
         }
-#if os(iOS)
         .onChange(of: scenePhase) { _, phase in
             switch phase {
-            case .background:
+            case .inactive, .background:
                 didEnterBackground = true
             case .active where didEnterBackground:
                 didEnterBackground = false
-                model.refreshAllCachedMonths()
+                calendarCacheRevalidationID += 1
             default:
                 break
             }
         }
-#endif
         .onChange(of: isSynchronizing) { wasSynchronizing, isSynchronizing in
             guard wasSynchronizing, !isSynchronizing, isCloudSyncEnabled else { return }
             model.refreshAllCachedMonths()
+            yearEventsByYear.removeAll()
+            yearEventRefreshID += 1
         }
         .onChange(of: calendarEventManagerConfigurationKey) {
-            model.updateConfiguration(
-                destination: destination,
-                appleCalendarIdentifier: appleCalendarIdentifier,
-                googleCalendarID: googleCalendarID,
-                googleShowJapaneseHolidays: googleShowJapaneseHolidays,
-                notionDataSourceID: notionDataSourceID,
-                notionDateProperty: notionDateProperty,
-                notionTitleProperty: notionTitleProperty,
-                notionTagProperty: notionTagProperty,
-                notionTagValue: notionTagValue,
-                notionNotesProperty: notionNotesProperty,
-                notionLocationProperty: notionLocationProperty,
-                notionURLProperty: notionURLProperty,
-                notionMetadataProperties: notionMetadataProperties
-            )
+            handleCalendarEventManagerConfigurationChange()
         }
-        .onChange(of: model.yearMonth) {
-            selectedYear = model.yearMonth.year
-            selectedMonth = model.yearMonth.month
-
-            if let anchorDate = pendingWeekMonthAnchorDate {
-                pendingWeekMonthAnchorDate = nil
-                if calendarDisplayMode == .week {
-                    scheduleWeekPageRebuild(anchorDate: anchorDate)
-                }
-            } else if calendarDisplayMode == .week,
-                      weekPageID == nil {
-                scheduleWeekPageRebuild()
-            }
-
-            if let pendingSelection = pendingDayActionsSelection,
-               pendingSelection.yearMonth == model.yearMonth {
-                pendingDayActionsSelection = nil
-                Task { @MainActor in
-                    await Task.yield()
-                    selectedDayForActions = pendingSelection.day
-#if os(macOS)
-                    isDayActionsPopoverPresented = true
-#endif
-                }
-            }
-
-            if let pendingBandSelection = pendingBandEventForActions,
-               pendingBandSelection.yearMonth == model.yearMonth {
-                pendingBandEventForActions = nil
-                Task { @MainActor in
-                    await Task.yield()
-                    selectedBandEventForActions = pendingBandSelection
-                }
-            }
-
-            if model.shouldAnimateEventBandReveal {
-                beginEventBandReveal()
-            } else {
-                showAllEventBandsImmediately()
-            }
+        .onChange(of: model.cachedMonthRevision) { _, _ in
+            guard calendarDisplayMode == .year else { return }
+            yearEventsByYear[selectedYear] = model.cachedEventsByMonth(for: selectedYear)
         }
-        .onChange(of: selectedYear) {
-            reloadSelectedMonth()
-        }
-        .onChange(of: selectedMonth) {
-            reloadSelectedMonth()
-        }
-        .onChange(of: locale.identifier) {
-            model.setLocaleIdentifier(locale.identifier)
-            model.load()
-        }
+        .onChange(of: model.yearMonth) { handleModelYearMonthChange() }
+        .onChange(of: selectedYear) { handleSelectedYearChange() }
+        .onChange(of: selectedMonth) { handleSelectedMonthChange() }
+        .onChange(of: locale.identifier) { handleLocaleChange() }
         .onChange(of: monthPageID) { _, pageID in
             guard let pageID,
                   (0...Self.monthPageRadius * 2).contains(pageID) else { return }
@@ -1268,6 +1625,12 @@ struct CalendarEventManagerView: View {
             }
         }
         .onChange(of: calendarDisplayMode) { _, mode in
+            if mode != .year {
+                isLoadingYearEvents = false
+                queuedYearNavigationSteps = 0
+                isYearButtonNavigationActive = false
+                didObserveYearButtonScroll = false
+            }
             logCalendarRenderingEvent(
                 "CalendarDisplayModeChange",
                 details: "mode=\(mode.rawValue) events=\(model.events.count)"
@@ -1292,26 +1655,29 @@ struct CalendarEventManagerView: View {
             }
             let entryAnchorDate = pendingWeekMonthAnchorDate ?? weekModeEntryAnchorDate()
             pendingWeekMonthAnchorDate = nil
-            scheduleWeekPageRebuild(anchorDate: entryAnchorDate)
+            if !isRebuildingWeekPages {
+                scheduleWeekPageRebuild(anchorDate: entryAnchorDate)
+            }
         }
         .onChange(of: weekPageID) { oldPageID, newPageID in
+            if calendarDisplayMode == .week, let newPageID {
+                calendarFocusDate = Calendar.current.date(byAdding: .day, value: 3, to: newPageID)
+                    ?? newPageID
+            }
             handleWeekPageChange(from: oldPageID, to: newPageID)
         }
 #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willStartLiveResizeNotification)) { _ in
-            isCalendarLiveResizing = true
+            beginCalendarLiveResize()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { _ in
-            isCalendarLiveResizing = false
-            if let currentPageID = pageID(for: model.yearMonth) {
-                var transaction = Transaction()
-                transaction.animation = nil
-                withTransaction(transaction) {
-                    monthPageID = currentPageID
-                }
-            }
+            endCalendarLiveResize()
         }
 #endif
+    }
+
+    private var calendarAlertView: some View {
+        calendarRootView
         .alert(
             shiftTitleAfterDelete == nil
                 ? localized("イベントを削除しますか？")
@@ -1344,61 +1710,38 @@ struct CalendarEventManagerView: View {
         } message: {
             Text(pendingDeletionConfirmationText)
         }
+    }
+
+    private var calendarShiftSelectionSheetView: some View {
+        calendarAlertView
         .sheet(isPresented: $isShiftSelectionPresented) {
-            ShiftSelectionView(
-                definitions: definitions,
-                tint: managerAccentColor,
-                locale: locale
-            ) { title in
-                if isDaySelectionMode {
-                    completeMultipleShiftSelection(title)
-                } else {
-                    completeShiftSelection(title)
-                }
-            }
+            shiftSelectionSheetContent
         }
+    }
+
+    private var calendarDateTimeRegistrationSheetView: some View {
+        calendarShiftSelectionSheetView
         .sheet(isPresented: $isDateTimeEventRegistrationPresented) {
-            DateTimeEventRegistrationView(
-                initialStartDate: dateTimeEventRegistrationStartDate,
-                locale: locale,
-                metadataFieldLabels: metadataFieldLabels
-            ) { draft in
-                isDateTimeEventRegistrationPresented = false
-                onRegisterDateTimeEvent(
-                    draft,
-                    DateTimeEventRegistrationCompletion { eventID in
-                        model.applyRegisteredDateTimeEvent(
-                            id: eventID,
-                            draft: draft
-                        )
-                    }
-                )
-            }
-            .environment(\.locale, locale)
+            dateTimeEventRegistrationSheetContent
         }
+    }
+
+    private var calendarEventEditingSheetView: some View {
+        calendarDateTimeRegistrationSheetView
         .sheet(item: $eventBeingEdited) { event in
-            let startDate = editingStartDate(for: event)
-            DateTimeEventRegistrationView(
-                initialStartDate: startDate,
-                locale: locale,
-                initialTitle: event.title,
-                initialEndDate: editingEndDate(for: event, startDate: startDate),
-                initialIsAllDay: event.isAllDay,
-                initialMetadata: event.metadata,
-                metadataFieldLabels: metadataFieldLabels,
-                isEditing: true
-            ) { draft in
-                eventBeingEdited = nil
-                model.updateEvent(
-                    event,
-                    draft: draft
-                )
-            }
-            .environment(\.locale, locale)
+            eventEditingSheet(for: event)
         }
+    }
+
+    private var calendarPresentedView: some View {
+        calendarEventEditingSheetView
 #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
 #endif
+    }
+
+    var body: some View {
+        calendarPresentedView
     }
 
     private var iOSHomeHeader: some View {
@@ -1554,7 +1897,7 @@ struct CalendarEventManagerView: View {
             showsCalendarIcon: true,
             isPresented: $isCalendarDestinationMenuPresented,
             rendersOverlay: false,
-            buttonMinimumWidth: Self.calendarControlMinimumWidth,
+            buttonMinimumWidth: nil,
             buttonHeight: Self.calendarControlHeight,
             onOpen: { isYearMonthPickerPresented = false },
             onSelect: onCalendarDestinationChange
@@ -1674,25 +2017,21 @@ struct CalendarEventManagerView: View {
     }
 
     private var eventMonthTitle: String {
-        let displayYearMonth = displayedWeekYearMonth ?? model.yearMonth
+        if calendarDisplayMode == .year {
+            return String(selectedYear)
+        }
+        let displayYearMonth: YearMonth
+        if calendarDisplayMode == .month {
+            let pageID = monthPageID ?? pageID(for: model.yearMonth) ?? Self.monthPageRadius
+            displayYearMonth = monthForPageID(pageID)
+        } else {
+            displayYearMonth = model.yearMonth
+        }
         if locale.identifier.hasPrefix("en") {
             return displayYearMonth.displayText(for: locale)
         }
 
         return String(format: "%04d-%02d", displayYearMonth.year, displayYearMonth.month)
-    }
-
-    private var displayedWeekYearMonth: YearMonth? {
-        guard calendarDisplayMode == .week,
-              let weekPageID,
-              let page = weekPageTemplates.first(where: { $0.first?.date == weekPageID }) else {
-            return nil
-        }
-
-        if page.contains(where: { $0.yearMonth == model.yearMonth }) {
-            return model.yearMonth
-        }
-        return page.first?.yearMonth
     }
 
     private var calendarBaseHorizontalInset: CGFloat {
@@ -1706,14 +2045,16 @@ struct CalendarEventManagerView: View {
     @ViewBuilder
     private var calendarDisplayContent: some View {
         VStack(spacing: 0) {
-            eventWeekdayHeader(columns: eventCalendarColumns)
-                .padding(.leading, calendarBaseHorizontalInset + weekContentInset)
-                .padding(.trailing, calendarBaseHorizontalInset)
+            if calendarDisplayMode != .year {
+                eventWeekdayHeader(columns: eventCalendarColumns)
+                    .padding(.leading, calendarBaseHorizontalInset + weekContentInset)
+                    .padding(.trailing, calendarBaseHorizontalInset)
+            }
 
             if calendarDisplayMode == .month {
                 eventCalendarView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            } else if calendarDisplayMode == .week {
                 GeometryReader { geometry in
                     let cardHeight = eventCalendarCardHeight(
                         availableHeight: geometry.size.height
@@ -1727,9 +2068,318 @@ struct CalendarEventManagerView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
+            } else {
+                yearCalendarView
             }
         }
         .animation(.easeInOut(duration: 0.25), value: weekContentInset)
+    }
+
+    private var yearCalendarView: some View {
+        GeometryReader { geometry in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach((yearPageAnchor - 100)...(yearPageAnchor + 100), id: \.self) { year in
+                        yearCalendarPage(year: year, height: geometry.size.height)
+                            .frame(width: geometry.size.width)
+                            .id(year)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
+            .scrollPosition(id: $yearPageID)
+            .onChange(of: yearPageID) { _, pageID in
+                guard let pageID,
+                      pageID != selectedYear else { return }
+                selectedYear = pageID
+            }
+            .onScrollPhaseChange { _, phase in
+                guard phase == .idle else {
+                    if isYearButtonNavigationActive {
+                        didObserveYearButtonScroll = true
+                    }
+                    return
+                }
+                if isYearButtonNavigationActive {
+                    guard didObserveYearButtonScroll else { return }
+                    didObserveYearButtonScroll = false
+                    guard queuedYearNavigationSteps == 0 else {
+                        advanceQueuedYearNavigation()
+                        return
+                    }
+                    isYearButtonNavigationActive = false
+                }
+                guard let settledYear = yearPageID,
+                      settledYear != selectedYear else { return }
+                selectedYear = settledYear
+            }
+        }
+    }
+
+    private func yearCalendarPage(year: Int, height: CGFloat) -> some View {
+        let cardSpacing: CGFloat = 5
+        let cardHeight = max(76, (height - 16 - cardSpacing * 3) / 4)
+        return VStack(spacing: cardSpacing) {
+            ForEach(0..<4, id: \.self) { row in
+                HStack(spacing: cardSpacing) {
+                    ForEach(1...3, id: \.self) { column in
+                        let month = row * 3 + column
+                        yearMonthCard(
+                            YearMonth(year: year, month: month),
+                            height: cardHeight
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .frame(height: cardHeight)
+            }
+        }
+        .padding(.horizontal, calendarBaseHorizontalInset)
+        .padding(.vertical, 8)
+        .frame(height: height, alignment: .center)
+    }
+
+    private func yearMonthCard(_ yearMonth: YearMonth, height: CGFloat) -> some View {
+        let events = yearEventsByYear[yearMonth.year]?[yearMonth] ?? []
+        let days = yearMonthCalendarDays(yearMonth)
+        let eventSignature = events.hashValue
+        let markerCacheKey = CalendarLayoutCacheKey(
+            kind: .yearMarkers,
+            pageDate: calendarDate(yearMonth: yearMonth, day: 1),
+            eventSignature: eventSignature
+        )
+        let markerColors = calendarEventLayoutCache.yearMarkerColors(for: markerCacheKey) {
+            yearEventMarkerColors(for: yearMonth, events: events)
+        }
+        let today = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        let dateCellHeight = max(10, (height - 23) / 6)
+        let monthText = locale.identifier.hasPrefix("en")
+            ? yearMonth.monthName(for: locale)
+            : "\(yearMonth.month)"
+
+        let card = Button {
+            selectYearMonth(yearMonth)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(monthText)
+#if os(macOS)
+                    .font(.system(size: 23, weight: .semibold))
+                    .padding(.leading, 4)
+                    .padding(.top, 6)
+#else
+                    .font(.system(size: 18, weight: .semibold))
+#endif
+                    .foregroundStyle(
+                        today.year == yearMonth.year && today.month == yearMonth.month
+                            ? .red
+                            : .primary
+                    )
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                Canvas { context, size in
+                    let cellWidth = size.width / 7
+#if os(macOS)
+                    let markerSize = min(4, max(1.5, min(dateCellHeight * 0.17, cellWidth * 0.12)))
+                    let markerBottomInset = min(2, dateCellHeight * 0.12)
+                    let dateLabelGap = min(1.0, dateCellHeight * 0.05)
+                    let dateLabelAreaHeight = max(
+                        8,
+                        dateCellHeight - markerSize - markerBottomInset - dateLabelGap
+                    )
+                    let dateLabelSize = min(12, dateLabelAreaHeight * 0.9)
+                    let dateLabelCenterOffset = min(dateCellHeight * 0.3, dateLabelSize * 0.65)
+                    let markerTopOffset = dateLabelCenterOffset + dateLabelSize * 0.55 + dateLabelGap
+#else
+                    let markerSize: CGFloat = 2
+                    let markerBottomInset: CGFloat = 1
+                    let dateLabelSize: CGFloat = 8
+                    let dateLabelCenterOffset = (dateCellHeight - 2) / 2
+                    let markerTopOffset = dateCellHeight - markerSize - markerBottomInset
+#endif
+                    let todayNumber = today.year == yearMonth.year && today.month == yearMonth.month
+                        ? today.day
+                        : nil
+
+                    for (slot, day) in days.enumerated() {
+                        guard let day else { continue }
+                        let column = slot % 7
+                        let row = slot / 7
+                        let cellTop = CGFloat(row) * dateCellHeight
+                        let cellCenterX = (CGFloat(column) + 0.5) * cellWidth
+
+                        let label = Text("\(day)")
+#if os(macOS)
+                            .font(.system(size: dateLabelSize, weight: .regular, design: .rounded))
+#else
+                            .font(.system(size: 8, weight: .regular, design: .rounded))
+#endif
+                            .foregroundColor(todayNumber == day ? .red : .primary)
+                        context.draw(
+                            label,
+                            at: CGPoint(x: cellCenterX, y: cellTop + dateLabelCenterOffset),
+                            anchor: .center
+                        )
+
+                        if let color = markerColors[day] {
+                            let markerRect = CGRect(
+                                x: cellCenterX - markerSize / 2,
+                                y: cellTop + markerTopOffset,
+                                width: markerSize,
+                                height: markerSize
+                            )
+                            context.fill(Path(ellipseIn: markerRect), with: .color(color))
+                        }
+                    }
+                }
+                .frame(height: dateCellHeight * 6)
+            }
+            .padding(4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .frame(height: height)
+        .background(calendarCardBackground, in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityLabel(yearMonth.displayText(for: locale))
+        return card
+    }
+
+    private func yearEventMarkerColors(
+        for yearMonth: YearMonth,
+        events: [CalendarEventRecord]
+    ) -> [Int: Color] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        guard let monthStart = calendar.date(from: DateComponents(
+            year: yearMonth.year,
+            month: yearMonth.month,
+            day: 1
+        )),
+        let monthEnd = calendar.date(byAdding: .day, value: yearMonth.numberOfDays - 1, to: monthStart) else {
+            return [:]
+        }
+
+        var markerColors: [Int: Color] = [:]
+        for event in events {
+            let firstDay: Int
+            let lastDay: Int
+
+            if let startDate = event.startDate {
+                let start = calendar.startOfDay(for: startDate)
+                let end = calendar.startOfDay(for: event.endDate ?? startDate)
+                guard end >= start, end >= monthStart, start <= monthEnd else { continue }
+
+                firstDay = calendar.component(.day, from: max(start, monthStart))
+                lastDay = calendar.component(.day, from: min(end, monthEnd))
+            } else {
+                firstDay = event.day
+                lastDay = event.day
+            }
+
+            guard firstDay > 0, lastDay <= yearMonth.numberOfDays, firstDay <= lastDay else {
+                continue
+            }
+            for day in firstDay...lastDay where markerColors[day] == nil {
+                markerColors[day] = yearMarkerColor(for: event)
+            }
+        }
+        return markerColors
+    }
+
+    private func yearMonthCalendarDays(_ yearMonth: YearMonth) -> [Int?] {
+        let days: [Int?] = Array(repeating: nil, count: yearMonth.leadingBlankCount)
+            + (1...yearMonth.numberOfDays).map { Optional($0) }
+        return days + Array(repeating: nil, count: 42 - days.count)
+    }
+
+    private func calendarDate(yearMonth: YearMonth, day: Int) -> Date {
+        Calendar.current.date(from: DateComponents(
+            year: yearMonth.year,
+            month: yearMonth.month,
+            day: day
+        )) ?? .now
+    }
+
+    private func yearMarkerColor(for event: CalendarEventRecord) -> Color {
+        event.isRestEvent ? .red : event.calendarColor?.color ?? .accentColor
+    }
+
+    private func selectYearMonth(_ yearMonth: YearMonth) {
+        selectedYear = yearMonth.year
+        selectedMonth = yearMonth.month
+        calendarFocusDate = calendarDate(yearMonth: yearMonth, day: 1)
+        yearModeReturnFocusDate = nil
+        pendingMonthPageID = nil
+        model.updateYearMonth(yearMonth)
+        model.load()
+        monthPageAnchor = yearMonth
+        monthPageID = Self.monthPageRadius
+        calendarDisplayMode = .month
+    }
+
+    private var displayedYearFooterTitle: String {
+        locale.identifier.hasPrefix("en") ? String(selectedYear) : "\(selectedYear)年"
+    }
+
+    private var yearFooterMessage: String {
+        if isLoadingYearEvents {
+            return locale.identifier.hasPrefix("en") ? "Loading events..." : "イベントを取得中です..."
+        }
+        let count = displayedYearEvents.values.reduce(0) { $0 + $1.count }
+        return locale.identifier.hasPrefix("en")
+            ? "\(count) events retrieved."
+            : "\(count)件のイベントを取得しました。"
+    }
+
+    private func moveYear(by offset: Int) {
+        queuedYearNavigationSteps += offset
+        guard !isYearButtonNavigationActive else { return }
+        isYearButtonNavigationActive = true
+        advanceQueuedYearNavigation()
+    }
+
+    private func advanceQueuedYearNavigation() {
+        guard queuedYearNavigationSteps != 0 else { return }
+        let step = queuedYearNavigationSteps > 0 ? 1 : -1
+        queuedYearNavigationSteps -= step
+        didObserveYearButtonScroll = false
+        let fromYear = yearPageID ?? selectedYear
+        withAnimation(.easeInOut(duration: 0.3)) {
+            yearPageID = fromYear + step
+        }
+    }
+
+    private func refreshDisplayedCalendar() {
+        if calendarDisplayMode == .year {
+            shouldForceRefreshYearEvents = true
+            isLoadingYearEvents = true
+            yearEventRefreshID += 1
+            return
+        }
+
+        let months = cacheMonthsForCurrentDisplay
+        isRefreshingVisibleMonths = true
+        Task { @MainActor in
+            _ = await model.refreshCachedMonths(for: months)
+            isRefreshingVisibleMonths = false
+        }
+    }
+
+    private func footerSummary(title: String, message: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(verbatim: title)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 12)
+            Text(verbatim: message)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.secondary)
     }
 
     private func eventCalendarCardHeight(availableHeight: CGFloat) -> CGFloat {
@@ -1757,10 +2407,11 @@ struct CalendarEventManagerView: View {
     }
 
     private func weekCalendarHeight(for cardHeight: CGFloat) -> CGFloat {
+        let timelineGap: CGFloat = 5
 #if os(iOS)
-        return cardHeight + 8
+        return cardHeight + 5 + timelineGap
 #else
-        return cardHeight + 16
+        return cardHeight + 13 + timelineGap
 #endif
     }
 
@@ -1848,7 +2499,7 @@ struct CalendarEventManagerView: View {
 #if os(macOS)
         let labelCenterX: CGFloat = 25
 #else
-        let labelCenterX: CGFloat = 17
+        let labelCenterX: CGFloat = 25
 #endif
 
         return ZStack(alignment: .topLeading) {
@@ -1893,14 +2544,21 @@ struct CalendarEventManagerView: View {
         )
         let laneSpacing: CGFloat = 3
         let laneAreaWidth = max(0, columnWidth - 8)
+        let cacheKey = CalendarLayoutCacheKey(
+            kind: .weekTimeline,
+            pageDate: dates.first?.date ?? Date.distantPast,
+            eventSignature: events.hashValue
+        )
         let timedLayoutResult = measureCalendarRendering(
             "WeekTimelineSegments",
             details: "days=\(dates.count) events=\(events.count)"
         ) {
-            calendarTimedEventLayouts(
-                for: dates,
-                events: events
-            )
+            calendarEventLayoutCache.timedLayouts(for: cacheKey) {
+                calendarTimedEventLayouts(
+                    for: dates,
+                    events: events
+                )
+            }
         }
         let timedLayouts = timedLayoutResult.layouts
 
@@ -2146,21 +2804,37 @@ struct CalendarEventManagerView: View {
         trailingInset: CGFloat
     ) -> some View {
         let yearMonth = dates.first?.yearMonth ?? model.yearMonth
+        let pageDate = dates.first?.date ?? Date.distantPast
+        let eventSignature = events.hashValue
+        let segmentCacheKey = CalendarLayoutCacheKey(
+            kind: .weekSegments,
+            pageDate: pageDate,
+            eventSignature: eventSignature
+        )
         let displaySegments = measureCalendarRendering(
             "WeekEventSegments",
             details: "days=\(dates.count) events=\(events.count)"
         ) {
-            eventDisplaySegments(events: events, gridDates: dates)
+            calendarEventLayoutCache.displaySegments(for: segmentCacheKey) {
+                eventDisplaySegments(events: events, gridDates: dates)
+            }
         }
+        let bandCacheKey = CalendarLayoutCacheKey(
+            kind: .weekBands,
+            pageDate: pageDate,
+            eventSignature: eventSignature
+        )
         let bandLayouts = measureCalendarRendering(
             "WeekEventBandLayouts",
             details: "segments=\(displaySegments.count) events=\(events.count)"
         ) {
-            eventBandLayouts(
-                events: events,
-                segments: displaySegments,
-                gridDates: dates
-            )
+            calendarEventLayoutCache.bandLayouts(for: bandCacheKey) {
+                eventBandLayouts(
+                    events: events,
+                    segments: displaySegments,
+                    gridDates: dates
+                )
+            }
         }
 #if os(iOS)
         let gridSpacing: CGFloat = 0
@@ -2379,58 +3053,222 @@ struct CalendarEventManagerView: View {
     }
 
     private var monthNavigationControls: some View {
-        HStack(spacing: 12) {
+#if os(iOS)
+        monthNavigationButtons(
+            buttonWidth: min(30, max(22, calendarHeaderWidth * 0.07)),
+            spacing: min(8, max(0, (calendarHeaderWidth - 343) * 0.12))
+        )
+        .layoutPriority(-1)
+#else
+        monthNavigationButtons(buttonWidth: 34, spacing: 12)
+#endif
+    }
+
+    private func monthNavigationButtons(buttonWidth: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
             Button {
                 isYearMonthPickerPresented = false
-                moveMonth(by: -1)
+                if calendarDisplayMode == .week {
+                    moveWeek(by: -1)
+                } else if calendarDisplayMode == .year {
+                    moveYear(by: -1)
+                } else {
+                    moveMonth(by: -1)
+                }
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.body.weight(.semibold))
-                    .frame(width: 34, height: 34)
+                    .frame(width: buttonWidth, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.primary)
-            .accessibilityLabel(locale.identifier.hasPrefix("en") ? "Previous month" : "前の月")
+            .accessibilityLabel(
+                locale.identifier.hasPrefix("en")
+                    ? (calendarDisplayMode == .week ? "Previous week" : calendarDisplayMode == .year ? "Previous year" : "Previous month")
+                    : (calendarDisplayMode == .week ? "前の週" : calendarDisplayMode == .year ? "前年" : "前の月")
+            )
 
             Button {
                 isYearMonthPickerPresented = false
-                moveMonth(by: 1)
+                if calendarDisplayMode == .week {
+                    moveWeek(by: 1)
+                } else if calendarDisplayMode == .year {
+                    moveYear(by: 1)
+                } else {
+                    moveMonth(by: 1)
+                }
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.body.weight(.semibold))
-                    .frame(width: 34, height: 34)
+                    .frame(width: buttonWidth, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.primary)
-            .accessibilityLabel(locale.identifier.hasPrefix("en") ? "Next month" : "次の月")
+            .accessibilityLabel(
+                locale.identifier.hasPrefix("en")
+                    ? (calendarDisplayMode == .week ? "Next week" : calendarDisplayMode == .year ? "Next year" : "Next month")
+                    : (calendarDisplayMode == .week ? "次の週" : calendarDisplayMode == .year ? "次年" : "次の月")
+            )
         }
     }
 
     private var calendarDisplayModeSelector: some View {
-        Picker("", selection: $calendarDisplayMode) {
-            Image(systemName: "31.calendar")
-                .accessibilityLabel(locale.identifier.hasPrefix("en") ? "Month" : "月")
-                .tag(CalendarDisplayMode.month)
-            Image(systemName: "7.calendar")
-                .accessibilityLabel(locale.identifier.hasPrefix("en") ? "Week" : "週")
-                .tag(CalendarDisplayMode.week)
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .frame(width: 76)
+        CalHubSegmentedControl(
+            options: calendarDisplayModeOptions,
+            selection: calendarDisplayModeSelection,
+            systemImages: ["12.calendar", "31.calendar", "7.calendar"]
+        )
+        .frame(width: calendarDisplayModeControlWidth)
         .accessibilityLabel(locale.identifier.hasPrefix("en") ? "Calendar view" : "カレンダー表示")
+    }
+
+    private var calendarDisplayModeOptions: [String] {
+        locale.identifier.hasPrefix("en") ? ["Year", "Month", "Week"] : ["年", "月", "週"]
+    }
+
+    private var calendarDisplayModeControlWidth: CGFloat {
+#if os(iOS)
+        min(124, max(120, calendarHeaderWidth * 0.30))
+#else
+        108
+#endif
+    }
+
+    private var calendarDisplayModeSelection: Binding<String> {
+        Binding(
+            get: {
+                switch calendarDisplayMode {
+                case .year: return calendarDisplayModeOptions[0]
+                case .month: return calendarDisplayModeOptions[1]
+                case .week: return calendarDisplayModeOptions[2]
+                }
+            },
+            set: { value in
+                if value == calendarDisplayModeOptions[0] {
+                    setCalendarDisplayMode(.year)
+                } else if value == calendarDisplayModeOptions[2] {
+                    setCalendarDisplayMode(.week)
+                } else {
+                    setCalendarDisplayMode(.month)
+                }
+            }
+        )
+    }
+
+    private func setCalendarDisplayMode(_ mode: CalendarDisplayMode) {
+        if calendarDisplayMode == .week {
+            let day = Calendar.current.component(.day, from: calendarFocusDate)
+            calendarFocusDate = calendarDate(
+                yearMonth: model.yearMonth,
+                day: min(day, model.yearMonth.numberOfDays)
+            )
+        }
+
+        if calendarDisplayMode == .year,
+           mode != .year,
+           let yearModeReturnFocusDate {
+            calendarFocusDate = yearModeReturnFocusDate
+        }
+
+        let components = Calendar.current.dateComponents([.year, .month], from: calendarFocusDate)
+        guard let year = components.year,
+              let month = components.month else {
+            calendarDisplayMode = mode
+            return
+        }
+
+        let targetMonth = YearMonth(year: year, month: month)
+        if mode == .year {
+            if calendarDisplayMode != .year {
+                yearModeReturnFocusDate = calendarFocusDate
+            }
+            selectedYear = year
+            selectedMonth = month
+            yearPageID = year
+        } else {
+            yearModeReturnFocusDate = nil
+            if mode == .week {
+                pendingWeekMonthAnchorDate = calendarFocusDate
+            } else {
+                pendingWeekMonthAnchorDate = nil
+                if let pageID = pageID(for: targetMonth) {
+                    monthPageID = pageID
+                } else {
+                    monthPageAnchor = targetMonth
+                    monthPageID = Self.monthPageRadius
+                }
+            }
+
+            selectedYear = targetMonth.year
+            selectedMonth = targetMonth.month
+            if model.yearMonth != targetMonth {
+                model.updateYearMonth(targetMonth)
+                model.load()
+            }
+        }
+
+        calendarDisplayMode = mode
+    }
+
+    private func dateByReplacingYear(of date: Date, with year: Int) -> Date {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        guard let month = components.month,
+              let day = components.day else {
+            return date
+        }
+
+        let yearMonth = YearMonth(year: year, month: month)
+        return calendarDate(yearMonth: yearMonth, day: min(day, yearMonth.numberOfDays))
     }
 
     private func moveMonth(by offset: Int) {
         let target = model.yearMonth.addingMonths(offset)
-        moveMonth(to: target)
+        moveMonth(to: target, animated: true)
+    }
+
+    private func moveWeek(by offset: Int) {
+        guard calendarDisplayMode == .week,
+              !isRebuildingWeekPages else {
+            return
+        }
+
+        let pages = calendarWeekPages(for: model.yearMonth)
+        guard !pages.isEmpty else { return }
+
+        let currentIndex = weekPageID.flatMap { pageID in
+            pages.firstIndex { $0.first?.date == pageID }
+        } ?? pages.firstIndex { page in
+            page.contains { $0.yearMonth == model.yearMonth }
+        } ?? 0
+        let targetIndex = currentIndex + offset
+        guard pages.indices.contains(targetIndex),
+              let targetPageID = pages[targetIndex].first?.date else {
+            return
+        }
+
+        // Let the normal page-change handler perform month-boundary loading.
+        programmaticWeekPageID = nil
+        withAnimation(.easeInOut(duration: 0.25)) {
+            weekPageID = targetPageID
+        }
     }
 
     private func jumpToToday() {
         let today = Date()
         let targetMonth = YearMonth.current
+        calendarFocusDate = today
+        if calendarDisplayMode == .year {
+            yearModeReturnFocusDate = today
+        }
         isYearMonthPickerPresented = false
         isCalendarDestinationMenuPresented = false
+
+        if calendarDisplayMode == .year {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                yearPageID = targetMonth.year
+            }
+            return
+        }
 
         if calendarDisplayMode == .week {
             pendingWeekMonthAnchorDate = targetMonth == model.yearMonth ? nil : today
@@ -2449,15 +3287,7 @@ struct CalendarEventManagerView: View {
     }
 
     private func weekModeEntryAnchorDate() -> Date? {
-        if model.yearMonth == YearMonth.current {
-            return Date()
-        }
-
-        return Calendar.current.date(from: DateComponents(
-            year: model.yearMonth.year,
-            month: model.yearMonth.month,
-            day: 1
-        ))
+        calendarFocusDate
     }
 
     private func weekPagingDebug(_ message: String) {
@@ -2543,12 +3373,23 @@ struct CalendarEventManagerView: View {
 
         let isMovingForward = newIndex > oldIndex
         let isMovingBackward = newIndex < oldIndex
+        let firstCurrentMonthPageIndex = weekPages.firstIndex { page in
+            page.contains { $0.yearMonth == model.yearMonth }
+        } ?? 0
+        let lastCurrentMonthPageIndex = weekPages.lastIndex { page in
+            page.contains { $0.yearMonth == model.yearMonth }
+        } ?? max(0, weekPages.count - 1)
 
-        let shouldMoveToNextMonth = isMovingForward && containsNextMonthFirstDay
+        // The boundary week may contain the first day of the next month while
+        // still being the last page that contains dates from the current
+        // month. Moving from Dec 28-Jan 3 to Jan 4-Jan 10 therefore needs the
+        // page-range check as well; the new page no longer contains Jan 1.
+        let crossedAfterMonthEnd = isMovingForward
+            && newIndex > lastCurrentMonthPageIndex
+        let shouldMoveToNextMonth = isMovingForward
+            && (containsNextMonthFirstDay || crossedAfterMonthEnd)
         let crossedBeforeMonthStart = isMovingBackward
-            && newIndex < (weekPages.firstIndex { page in
-                page.contains { $0.yearMonth == model.yearMonth }
-            } ?? 0)
+            && newIndex < firstCurrentMonthPageIndex
         let shouldMoveToPreviousMonth = isMovingBackward
             && (containsPreviousMonthLastDay || crossedBeforeMonthStart)
 
@@ -2766,6 +3607,30 @@ struct CalendarEventManagerView: View {
             ))
         }
 
+        if calendarDisplayMode == .week {
+            calendarFocusDate = pendingWeekMonthAnchorDate
+                ?? calendarDate(yearMonth: target, day: 1)
+        }
+
+        // The month pager is not mounted while week mode is visible, so its
+        // scroll-position callback cannot commit this transition. Update the
+        // model directly; otherwise the week page can show a new month while
+        // the footer and event source remain on the old one.
+        if calendarDisplayMode == .week {
+            pendingMonthPageID = nil
+            model.updateYearMonth(target)
+            selectedYear = target.year
+            selectedMonth = target.month
+            model.load()
+
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                monthPageID = pageID
+            }
+            return
+        }
+
         if animated {
             // Keep the pending date or event selection until the page scroll reaches idle.
             isMonthScrollActive = true
@@ -2861,15 +3726,16 @@ struct CalendarEventManagerView: View {
     }
 
     private func reloadSelectedMonth() {
+        let previousDay = Calendar.current.component(.day, from: calendarFocusDate)
+        calendarFocusDate = calendarDate(
+            yearMonth: selectedYearMonth,
+            day: min(previousDay, selectedYearMonth.numberOfDays)
+        )
         guard selectedYearMonth != model.yearMonth else { return }
         pendingMonthPageID = nil
         if calendarDisplayMode == .week,
            pendingWeekMonthAnchorDate == nil {
-            pendingWeekMonthAnchorDate = Calendar.current.date(from: DateComponents(
-                year: selectedYearMonth.year,
-                month: selectedYearMonth.month,
-                day: 1
-            ))
+            pendingWeekMonthAnchorDate = calendarFocusDate
         }
         if let pageID = pageID(for: selectedYearMonth) {
             var transaction = Transaction()
@@ -2890,6 +3756,7 @@ struct CalendarEventManagerView: View {
         let target = monthForPageID(pageID)
         guard target != model.yearMonth else { return }
 
+        calendarFocusDate = calendarDate(yearMonth: target, day: 1)
         model.updateYearMonth(target)
         selectedYear = target.year
         selectedMonth = target.month
@@ -3497,21 +4364,36 @@ struct CalendarEventManagerView: View {
         let gridDates = calendarGridDates(for: yearMonth)
         let isCurrentMonth = yearMonth == model.yearMonth
         let pageEvents = calendarPageEvents(for: yearMonth, events: events)
+        let eventSignature = pageEvents.hashValue
+        let segmentCacheKey = CalendarLayoutCacheKey(
+            kind: .monthSegments,
+            pageDate: gridDates.first?.date ?? Date.distantPast,
+            eventSignature: eventSignature
+        )
         let displaySegments = measureCalendarRendering(
             "MonthEventSegments",
             details: "days=\(gridDates.count) events=\(pageEvents.count)"
         ) {
-            eventDisplaySegments(events: pageEvents, gridDates: gridDates)
+            calendarEventLayoutCache.displaySegments(for: segmentCacheKey) {
+                eventDisplaySegments(events: pageEvents, gridDates: gridDates)
+            }
         }
+        let bandCacheKey = CalendarLayoutCacheKey(
+            kind: .monthBands,
+            pageDate: gridDates.first?.date ?? Date.distantPast,
+            eventSignature: eventSignature
+        )
         let bandLayouts = measureCalendarRendering(
             "MonthEventBandLayouts",
             details: "segments=\(displaySegments.count) events=\(pageEvents.count)"
         ) {
-            eventBandLayouts(
-                events: pageEvents,
-                segments: displaySegments,
-                gridDates: gridDates
-            )
+            calendarEventLayoutCache.bandLayouts(for: bandCacheKey) {
+                eventBandLayouts(
+                    events: pageEvents,
+                    segments: displaySegments,
+                    gridDates: gridDates
+                )
+            }
         }
 #if os(iOS)
         let gridSpacing: CGFloat = 5
@@ -3733,7 +4615,7 @@ struct CalendarEventManagerView: View {
                     .padding(.vertical, 6)
             }
         }
-        .background(.background)
+        .background(calendarBaseBackground)
     }
 
     private func eventDayCell(
@@ -3928,7 +4810,7 @@ struct CalendarEventManagerView: View {
             .background {
                 GeometryReader { proxy in
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(.background.secondary.opacity(0.45))
+                        .fill(calendarCardBackground)
                         .allowsHitTesting(false)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                 }

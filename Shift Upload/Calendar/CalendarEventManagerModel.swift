@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 import os
 
@@ -8,9 +9,25 @@ private let calendarFetchLogger = Logger(
 )
 
 final class CalendarEventManagerModel: ObservableObject {
-    private struct MonthCacheEntry {
+    private struct MonthCacheEntry: Codable {
         let events: [CalendarEventRecord]
         let calendarColor: CalendarDisplayColor?
+        let fetchedAt: Date
+
+        nonisolated init(
+            events: [CalendarEventRecord],
+            calendarColor: CalendarDisplayColor?,
+            fetchedAt: Date = Date()
+        ) {
+            self.events = events
+            self.calendarColor = calendarColor
+            self.fetchedAt = fetchedAt
+        }
+    }
+
+    private struct PersistedMonthCache: Codable {
+        let version: Int
+        let entry: MonthCacheEntry
     }
 
     private struct MonthFetchConfiguration {
@@ -40,6 +57,7 @@ final class CalendarEventManagerModel: ObservableObject {
     @Published private(set) var pendingDeletion: CalendarEventRecord?
     @Published private(set) var message = ""
     @Published private(set) var shouldAnimateEventBandReveal = false
+    @Published private(set) var cachedMonthRevision = 0
 
     private var destination: CalendarDestination
     @Published private(set) var yearMonth: YearMonth
@@ -65,12 +83,19 @@ final class CalendarEventManagerModel: ObservableObject {
     private var prefetchTasks: [YearMonth: Task<Void, Never>] = [:]
     private var prefetchTokens: [YearMonth: UUID] = [:]
     private var queuedPrefetchMonths = Set<YearMonth>()
+    private var backgroundCacheRefreshQueue: [YearMonth] = []
+    private var backgroundCacheRefreshTask: Task<Void, Never>?
+    private var backgroundCacheRefreshToken: UUID?
+    private var backgroundCacheRefreshMonths = Set<YearMonth>()
+    private var didPrunePersistentCache = false
 
     // Keep the visible month and a six-month buffer on each side warm so
     // month and week scrolling can render from memory.
     private static let cacheMonthRadius = 6
     private static let maximumConcurrentPrefetches = 2
     private static let prefetchThrottleNanoseconds: UInt64 = 50_000_000
+    private static let persistentCacheRefreshInterval: TimeInterval = 10 * 60
+    private static let persistentCacheLifetime: TimeInterval = 30 * 24 * 60 * 60
 
     init(
         destination: CalendarDestination,
@@ -206,6 +231,132 @@ final class CalendarEventManagerModel: ObservableObject {
             )
             .values
         )
+    }
+
+    @MainActor
+    func fetchEventsByMonth(for year: Int) async -> [YearMonth: [CalendarEventRecord]] {
+        var result: [YearMonth: [CalendarEventRecord]] = [:]
+        for firstMonthNumber in stride(from: 1, through: 12, by: 2) {
+            guard !Task.isCancelled else { break }
+            let firstMonth = YearMonth(year: year, month: firstMonthNumber)
+            let secondMonth = YearMonth(year: year, month: firstMonthNumber + 1)
+            async let firstEntry = fetchMonthIfNeeded(firstMonth)
+            async let secondEntry = fetchMonthIfNeeded(secondMonth)
+            let (first, second) = await (firstEntry, secondEntry)
+            if let first {
+                store(first, for: firstMonth)
+                if isPersistentCacheStale(first) {
+                    enqueueBackgroundCacheRefresh(for: firstMonth)
+                }
+            }
+            if let second {
+                store(second, for: secondMonth)
+                if isPersistentCacheStale(second) {
+                    enqueueBackgroundCacheRefresh(for: secondMonth)
+                }
+            }
+            result[firstMonth] = first?.events
+            result[secondMonth] = second?.events
+        }
+        return result
+    }
+
+    @MainActor
+    func refreshEventsByMonth(for year: Int) async -> [YearMonth: [CalendarEventRecord]] {
+        let yearMonths = Set((1...12).map { YearMonth(year: year, month: $0) })
+        return await refreshCachedMonths(for: yearMonths)
+    }
+
+    @MainActor
+    func refreshCachedMonths(for yearMonths: Set<YearMonth>) async -> [YearMonth: [CalendarEventRecord]] {
+        cancelBackgroundCacheRefreshes()
+        let orderedMonths = yearMonths.sorted {
+            ($0.year, $0.month) < ($1.year, $1.month)
+        }
+        var index = 0
+        while index + 1 < orderedMonths.count {
+            guard !Task.isCancelled else { break }
+            let firstMonth = orderedMonths[index]
+            let secondMonth = orderedMonths[index + 1]
+            async let firstEntry = try? fetchMonth(firstMonth)
+            async let secondEntry = try? fetchMonth(secondMonth)
+            let (first, second) = await (firstEntry, secondEntry)
+            if let first {
+                store(first, for: firstMonth)
+            }
+            if let second {
+                store(second, for: secondMonth)
+            }
+            if first != nil || second != nil {
+                cachedMonthRevision += 1
+            }
+            index += 2
+        }
+        if index < orderedMonths.count, !Task.isCancelled {
+            let yearMonth = orderedMonths[index]
+            if let refreshedMonth = try? await fetchMonth(yearMonth) {
+                store(refreshedMonth, for: yearMonth)
+                cachedMonthRevision += 1
+            }
+        }
+
+        var result: [YearMonth: [CalendarEventRecord]] = [:]
+        for yearMonth in orderedMonths {
+            result[yearMonth] = monthCache[yearMonth]?.events
+        }
+        return result
+    }
+
+    @MainActor
+    func revalidateCachedMonths(for yearMonths: Set<YearMonth>) {
+        var loadedPersistentCache = false
+        for yearMonth in yearMonths {
+            if monthCache[yearMonth] == nil,
+               let cachedMonth = loadPersistentMonth(for: yearMonth) {
+                monthCache[yearMonth] = cachedMonth
+                loadedPersistentCache = true
+            }
+            if let cachedMonth = monthCache[yearMonth], isPersistentCacheStale(cachedMonth) {
+                enqueueBackgroundCacheRefresh(for: yearMonth)
+            }
+        }
+        if loadedPersistentCache {
+            cachedMonthRevision += 1
+        }
+    }
+
+    @MainActor
+    func cachedEventsByMonth(
+        for year: Int,
+        loadingPersistentCache: Bool = false
+    ) -> [YearMonth: [CalendarEventRecord]] {
+        var result: [YearMonth: [CalendarEventRecord]] = [:]
+        for month in 1...12 {
+            let yearMonth = YearMonth(year: year, month: month)
+            if monthCache[yearMonth] == nil,
+               loadingPersistentCache,
+               let cachedMonth = loadPersistentMonth(for: yearMonth) {
+                monthCache[yearMonth] = cachedMonth
+            }
+            if let cachedMonth = monthCache[yearMonth] {
+                result[yearMonth] = cachedMonth.events
+                if loadingPersistentCache && isPersistentCacheStale(cachedMonth) {
+                    enqueueBackgroundCacheRefresh(for: yearMonth)
+                }
+            } else {
+                result[yearMonth] = nil
+            }
+        }
+        return result
+    }
+
+    @MainActor
+    private func fetchMonthIfNeeded(_ yearMonth: YearMonth) async -> MonthCacheEntry? {
+        if let cachedMonth = monthCache[yearMonth] { return cachedMonth }
+        if let cachedMonth = loadPersistentMonth(for: yearMonth) {
+            return cachedMonth
+        }
+        return try? await fetchMonth(yearMonth)
     }
 
     var groupedDays: [Int] {
@@ -370,9 +521,11 @@ final class CalendarEventManagerModel: ObservableObject {
                 if self.destination == .notion {
                     self.events.removeAll { $0.id == target.id }
                     self.loadedDays = Set(self.events.map(\.day))
+                    self.clearPersistentCacheForCurrentConfiguration()
                     self.invalidateMonthCache()
                     self.load(forceRefresh: true)
                 } else {
+                    self.clearPersistentCacheForCurrentConfiguration()
                     self.applyUpdatedDateTimeEvent(
                         id: target.id,
                         title: trimmedTitle,
@@ -478,24 +631,41 @@ final class CalendarEventManagerModel: ObservableObject {
                 + "cacheEntries=\(monthCache.count)"
         calendarFetchLogger.debug("\(loadLogMessage, privacy: .public)")
         if forceRefresh {
-            removeCachedMonth(for: targetMonth)
+            monthCache.removeValue(forKey: targetMonth)
             cancelPrefetch(for: targetMonth)
         }
 
-        if let cachedMonth = monthCache[targetMonth] {
+        var cachedMonth = monthCache[targetMonth]
+        if cachedMonth == nil && !forceRefresh {
+            cachedMonth = loadPersistentMonth(for: targetMonth)
+            if let cachedMonth {
+                monthCache[targetMonth] = cachedMonth
+            }
+        }
+
+        if let cachedMonth {
             let cacheLogMessage =
                 "cache hit month=\(targetMonth.year)-\(targetMonth.month) "
                     + "events=\(cachedMonth.events.count)"
             calendarFetchLogger.notice("\(cacheLogMessage, privacy: .public)")
             shouldAnimateEventBandReveal = false
             display(cachedMonth)
-            isLoading = false
-            loadTask = nil
-            schedulePrefetchAfterDisplay(around: targetMonth, generation: generation)
-            return
+            if !forceRefresh && !isPersistentCacheStale(cachedMonth) {
+                isLoading = false
+                loadTask = nil
+                schedulePrefetchAfterDisplay(around: targetMonth, generation: generation)
+                return
+            }
+            if !forceRefresh {
+                enqueueBackgroundCacheRefresh(for: targetMonth)
+                isLoading = false
+                loadTask = nil
+                schedulePrefetchAfterDisplay(around: targetMonth, generation: generation)
+                return
+            }
         }
 
-        if !forceRefresh || !hadDisplayedMonth {
+        if cachedMonth == nil && (!forceRefresh || !hadDisplayedMonth) {
             clearDisplayedMonth()
         }
         if forceRefresh {
@@ -726,6 +896,197 @@ final class CalendarEventManagerModel: ObservableObject {
         )
     }
 
+    private var persistentCacheNamespace: String {
+        let notionMetadata = (try? JSONEncoder().encode(notionMetadataProperties))?
+            .base64EncodedString() ?? ""
+        let configuration = [
+            destination.rawValue,
+            appleCalendarIdentifier,
+            googleCalendarID,
+            String(googleShowJapaneseHolidays),
+            notionDataSourceID,
+            notionDateProperty,
+            notionTitleProperty,
+            notionTagProperty,
+            notionTagValue,
+            notionNotesProperty,
+            notionLocationProperty,
+            notionURLProperty,
+            notionMetadata,
+            localeIdentifier
+        ]
+        let data = (try? JSONEncoder().encode(configuration)) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func persistentCacheFileURL(for yearMonth: YearMonth) -> URL? {
+        guard let applicationSupportURL = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else {
+            return nil
+        }
+
+        let directoryURL = applicationSupportURL
+            .appendingPathComponent("Shift Upload/CalendarEventCache", isDirectory: true)
+        var namespaceURL = directoryURL.appendingPathComponent(
+            persistentCacheNamespace,
+            isDirectory: true
+        )
+        do {
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true
+            )
+            if !didPrunePersistentCache {
+                prunePersistentCache(in: directoryURL)
+                didPrunePersistentCache = true
+            }
+            try FileManager.default.createDirectory(
+                at: namespaceURL,
+                withIntermediateDirectories: true
+            )
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try? namespaceURL.setResourceValues(resourceValues)
+        } catch {
+            return nil
+        }
+
+        return namespaceURL.appendingPathComponent(
+            String(format: "%04d-%02d.json", yearMonth.year, yearMonth.month)
+        )
+    }
+
+    private func prunePersistentCache(in directoryURL: URL) {
+        guard let namespaces = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let expirationDate = Date().addingTimeInterval(-Self.persistentCacheLifetime)
+        for namespaceURL in namespaces {
+            guard let files = try? FileManager.default.contentsOfDirectory(
+                at: namespaceURL,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            for fileURL in files {
+                let modifiedAt = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast
+                if modifiedAt < expirationDate {
+                    try? FileManager.default.removeItem(at: fileURL)
+                }
+            }
+            if (try? FileManager.default.contentsOfDirectory(atPath: namespaceURL.path).isEmpty) == true {
+                try? FileManager.default.removeItem(at: namespaceURL)
+            }
+        }
+    }
+
+    private func loadPersistentMonth(for yearMonth: YearMonth) -> MonthCacheEntry? {
+        guard let url = persistentCacheFileURL(for: yearMonth),
+              let data = try? Data(contentsOf: url),
+              let cached = try? JSONDecoder().decode(PersistedMonthCache.self, from: data),
+              cached.version == 1 else {
+            return nil
+        }
+
+        guard Date().timeIntervalSince(cached.entry.fetchedAt) <= Self.persistentCacheLifetime else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        return cached.entry
+    }
+
+    private func persistMonth(_ entry: MonthCacheEntry, for yearMonth: YearMonth) {
+        guard let url = persistentCacheFileURL(for: yearMonth),
+              let data = try? JSONEncoder().encode(PersistedMonthCache(version: 1, entry: entry)) else {
+            return
+        }
+#if os(iOS)
+        try? data.write(
+            to: url,
+            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+        )
+#else
+        try? data.write(to: url, options: .atomic)
+#endif
+    }
+
+    private func clearPersistentCacheForCurrentConfiguration() {
+        guard let applicationSupportURL = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) else {
+            return
+        }
+        let directoryURL = applicationSupportURL
+            .appendingPathComponent("Shift Upload/CalendarEventCache", isDirectory: true)
+            .appendingPathComponent(persistentCacheNamespace, isDirectory: true)
+        try? FileManager.default.removeItem(at: directoryURL)
+    }
+
+    private func isPersistentCacheStale(_ entry: MonthCacheEntry) -> Bool {
+        Date().timeIntervalSince(entry.fetchedAt) > Self.persistentCacheRefreshInterval
+    }
+
+    private func enqueueBackgroundCacheRefresh(for yearMonth: YearMonth) {
+        guard backgroundCacheRefreshMonths.insert(yearMonth).inserted else { return }
+        backgroundCacheRefreshQueue.append(yearMonth)
+        guard backgroundCacheRefreshTask == nil else { return }
+
+        let requestedCacheGeneration = cacheGeneration
+        let refreshToken = UUID()
+        backgroundCacheRefreshToken = refreshToken
+        backgroundCacheRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, !self.backgroundCacheRefreshQueue.isEmpty {
+                let targetMonth = self.backgroundCacheRefreshQueue.removeFirst()
+                do {
+                    let refreshedMonth = try await self.fetchMonth(targetMonth)
+                    guard !Task.isCancelled,
+                          self.cacheGeneration == requestedCacheGeneration,
+                          self.backgroundCacheRefreshToken == refreshToken else {
+                        if self.backgroundCacheRefreshToken == refreshToken {
+                            self.backgroundCacheRefreshMonths.remove(targetMonth)
+                        }
+                        continue
+                    }
+                    self.store(refreshedMonth, for: targetMonth)
+                    self.cachedMonthRevision += 1
+                } catch {
+                    // Keep displaying the last successfully cached data while offline.
+                }
+                if self.backgroundCacheRefreshToken == refreshToken {
+                    self.backgroundCacheRefreshMonths.remove(targetMonth)
+                }
+            }
+            if self.cacheGeneration == requestedCacheGeneration,
+               self.backgroundCacheRefreshToken == refreshToken {
+                self.backgroundCacheRefreshTask = nil
+                self.backgroundCacheRefreshToken = nil
+            }
+        }
+    }
+
+    private func cancelBackgroundCacheRefreshes() {
+        backgroundCacheRefreshTask?.cancel()
+        backgroundCacheRefreshTask = nil
+        backgroundCacheRefreshToken = nil
+        backgroundCacheRefreshQueue.removeAll()
+        backgroundCacheRefreshMonths.removeAll()
+    }
+
     private func display(_ cachedMonth: MonthCacheEntry) {
         calendarColor = cachedMonth.calendarColor
         var displayedEvents = cachedMonth.events
@@ -875,6 +1236,11 @@ final class CalendarEventManagerModel: ObservableObject {
         didWarmInitialNeighbors = false
         monthCache.removeAll()
         queuedPrefetchMonths.removeAll()
+        backgroundCacheRefreshTask?.cancel()
+        backgroundCacheRefreshTask = nil
+        backgroundCacheRefreshToken = nil
+        backgroundCacheRefreshQueue.removeAll()
+        backgroundCacheRefreshMonths.removeAll()
         prefetchKickoffTask?.cancel()
         prefetchKickoffTask = nil
         prefetchTasks.values.forEach { $0.cancel() }
@@ -892,13 +1258,17 @@ final class CalendarEventManagerModel: ObservableObject {
 
     private func store(_ cachedMonth: MonthCacheEntry, for yearMonth: YearMonth) {
         monthCache[yearMonth] = cachedMonth
+        persistMonth(cachedMonth, for: yearMonth)
         if yearMonth == self.yearMonth {
             display(cachedMonth)
         }
     }
 
     private func removeCachedMonth(for yearMonth: YearMonth) {
-        guard monthCache.removeValue(forKey: yearMonth) != nil else { return }
+        monthCache.removeValue(forKey: yearMonth)
+        if let url = persistentCacheFileURL(for: yearMonth) {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     func requestDelete(_ event: CalendarEventRecord) {
@@ -954,6 +1324,7 @@ final class CalendarEventManagerModel: ObservableObject {
                 shouldAnimateEventBandReveal = false
                 events.removeAll { $0.id == target.id }
                 loadedDays = Set(events.map(\.day))
+                clearPersistentCacheForCurrentConfiguration()
                 invalidateMonthCache()
                 load(forceRefresh: true)
                 message = ShiftHubLocalization.string(
