@@ -1118,6 +1118,7 @@ private struct ShiftDefinitionRegistrationView: View {
     @State private var startDate: Date
     @State private var endDate: Date
     @State private var validationMessage: String?
+    @FocusState private var isTextFieldFocused: Bool
 
     init(
         locale: Locale,
@@ -1195,10 +1196,6 @@ private struct ShiftDefinitionRegistrationView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(localized(isEditing ? "イベントを編集" : "イベントを登録"))
                         .font(.title.bold())
-
-                    Text(localized(isEditing ? "イベントタイトルと時間を編集します。" : "イベントタイトルと時間を保存します。"))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
                 }
 
                 Spacer()
@@ -1226,6 +1223,7 @@ private struct ShiftDefinitionRegistrationView: View {
 
                 TextField(localized("タイトル"), text: $title, axis: .vertical)
                     .textFieldStyle(.plain)
+                    .focused($isTextFieldFocused)
                     .lineLimit(1...5)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
@@ -1267,6 +1265,7 @@ private struct ShiftDefinitionRegistrationView: View {
             Form {
                 Section {
                     TextField(localized("タイトル"), text: $title, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .lineLimit(1...5)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
@@ -1362,6 +1361,10 @@ private struct ShiftDefinitionRegistrationView: View {
         )
 #endif
         .environment(\.locale, locale)
+        .calHubKeyboardDismissal()
+        .onTapGesture {
+            isTextFieldFocused = false
+        }
         .alert(
             Text(localized("保存できません")),
             isPresented: isValidationAlertPresented
@@ -1744,6 +1747,7 @@ struct CalendarSettingsView: View {
     @State private var notionProperties: [NotionPropertyOption] = []
     @State private var notionPropertyMessage = ""
     @State private var isLoadingNotionProperties = false
+    @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1939,10 +1943,12 @@ struct CalendarSettingsView: View {
 
                                 SecureField("ntn_から始まるトークン", text: $notionToken)
                                     .textFieldStyle(.roundedBorder)
+                                    .focused($isTextFieldFocused)
                             }
 
                             TextField("データベースID", text: $notionDataSourceID)
                                 .textFieldStyle(.roundedBorder)
+                                .focused($isTextFieldFocused)
 
                             if !notionDatabaseName.isEmpty {
                                 Label("接続先: \(notionDatabaseName)", systemImage: "checkmark.circle.fill")
@@ -1993,6 +1999,10 @@ struct CalendarSettingsView: View {
 #else
         .frame(minWidth: 680, minHeight: 620)
 #endif
+        .calHubKeyboardDismissal()
+        .onTapGesture {
+            isTextFieldFocused = false
+        }
         .onAppear {
             appleCalendarProvider.setLocaleIdentifier(locale.identifier)
             googleCalendarProvider.setLocaleIdentifier(locale.identifier)
@@ -2059,10 +2069,12 @@ struct CalendarSettingsView: View {
             HStack(spacing: 8) {
                 TextField("休", text: source, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isTextFieldFocused)
                 Text("→")
                     .foregroundStyle(.secondary)
                 TextField("off", text: destination, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isTextFieldFocused)
             }
 
             Text("任意の文字列を、登録時に別の文字列へ変換できます。")

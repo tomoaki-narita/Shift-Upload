@@ -36,6 +36,23 @@ private extension View {
     }
 }
 
+private struct CalHubKeyboardDismissalModifier: ViewModifier {
+    func body(content: Content) -> some View {
+#if os(iOS)
+        content
+            .scrollDismissesKeyboard(.interactively)
+#else
+        content
+#endif
+    }
+}
+
+extension View {
+    func calHubKeyboardDismissal() -> some View {
+        modifier(CalHubKeyboardDismissalModifier())
+    }
+}
+
 private struct CalHubSegmentLayout: Layout {
     let selectedIndex: Int?
 
@@ -69,8 +86,14 @@ private struct CalHubSegmentLayout: Layout {
 
         let sizes = buttonSubviews.map { $0.sizeThatFits(.unspecified) }
         let naturalWidth = sizes.reduce(CGFloat.zero) { $0 + $1.width }
-        let extraWidth = max(bounds.width - naturalWidth, 0) / CGFloat(buttonSubviews.count)
-        let widths = sizes.map { $0.width + extraWidth }
+        let widths: [CGFloat]
+        if naturalWidth > bounds.width, naturalWidth > 0 {
+            let scale = bounds.width / naturalWidth
+            widths = sizes.map { $0.width * scale }
+        } else {
+            let extraWidth = (bounds.width - naturalWidth) / CGFloat(buttonSubviews.count)
+            widths = sizes.map { $0.width + extraWidth }
+        }
 
         if let selectedIndex,
            widths.indices.contains(selectedIndex) {
@@ -101,39 +124,55 @@ private struct CalHubSegmentLayout: Layout {
 
 struct CalHubSegmentedControl: View {
     let options: [String]
+    let systemImages: [String]?
     let animationDuration: Double
     @Binding var selection: String
 
     init(
         options: [String],
         selection: Binding<String>,
+        systemImages: [String]? = nil,
         animationDuration: Double = 0.16
     ) {
         self.options = options
+        self.systemImages = systemImages
         self.animationDuration = animationDuration
         _selection = selection
     }
 
     var body: some View {
         GeometryReader { proxy in
+            let itemHorizontalPadding: CGFloat = systemImages == nil ? 8 : 4
+
             CalHubSegmentLayout(selectedIndex: options.firstIndex(of: selection)) {
                 Capsule()
                     .fill(Color.secondary.opacity(0.55))
                     .allowsHitTesting(false)
 
-                ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                ForEach(Array(options.enumerated()), id: \.offset) { index, option in
                     Button {
                         withAnimation(.easeOut(duration: animationDuration)) {
                             selection = option
                         }
                     } label: {
-                        Text(option.isEmpty ? "未選択" : option)
-                            .font(.system(size: 11))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.65)
-                            .padding(.horizontal, 8)
-                            .frame(maxWidth: .infinity, minHeight: 24)
-                            .contentShape(Rectangle())
+                        Group {
+                            if let systemImage = systemImages,
+                               systemImage.indices.contains(index) {
+                                Image(systemName: systemImage[index])
+#if os(macOS)
+                                    .font(.system(size: 16, weight: .medium))
+#endif
+                                    .accessibilityLabel(option.isEmpty ? "未選択" : option)
+                            } else {
+                                Text(option.isEmpty ? "未選択" : option)
+                                    .font(.system(size: 11))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.65)
+                            }
+                        }
+                        .padding(.horizontal, itemHorizontalPadding)
+                        .frame(maxWidth: .infinity, minHeight: 24)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.primary)
@@ -296,6 +335,7 @@ struct DateTimeEventRegistrationView: View {
     @State private var tagValue = ""
     @State private var propertyValues: [String: String] = [:]
     @State private var validationMessage: String?
+    @FocusState private var isTextFieldFocused: Bool
 
     init(
         initialStartDate: Date,
@@ -437,14 +477,6 @@ struct DateTimeEventRegistrationView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(localized(isEditing ? "イベントを編集" : "イベントを登録"))
                         .font(.title.bold())
-
-                    Text(localized(
-                        isEditing
-                            ? "イベントタイトルと時間を編集します。"
-                            : "タイトルと日時を指定して登録します。"
-                    ))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
                 }
 
                 Spacer()
@@ -473,6 +505,7 @@ struct DateTimeEventRegistrationView: View {
 
                     TextField(localized("タイトル"), text: $title, axis: .vertical)
                         .textFieldStyle(.plain)
+                        .focused($isTextFieldFocused)
                         .lineLimit(1...5)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
@@ -537,6 +570,7 @@ struct DateTimeEventRegistrationView: View {
             Form {
                 Section {
                     TextField(localized("タイトル"), text: $title, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .lineLimit(1...5)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
@@ -662,6 +696,10 @@ struct DateTimeEventRegistrationView: View {
         )
 #endif
         .environment(\.locale, locale)
+        .calHubKeyboardDismissal()
+        .onTapGesture {
+            isTextFieldFocused = false
+        }
         .onChange(of: isAllDay) {
             let calendar = Calendar.current
             if isAllDay {
@@ -680,6 +718,7 @@ struct DateTimeEventRegistrationView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextField(metadataFieldLabels.tag, text: $tagValue, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle(lineLimit: 1...2)
                 }
             }
@@ -690,6 +729,7 @@ struct DateTimeEventRegistrationView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextField(metadataFieldLabels.location, text: $location, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle()
                 }
             }
@@ -700,6 +740,7 @@ struct DateTimeEventRegistrationView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextField(metadataFieldLabels.url, text: $url, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle(lineLimit: 1...3)
 #if os(iOS)
                         .keyboardType(.URL)
@@ -715,6 +756,7 @@ struct DateTimeEventRegistrationView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextField(metadataFieldLabels.notes, text: $notes, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle(lineLimit: 1...6)
                 }
             }
@@ -744,6 +786,7 @@ struct DateTimeEventRegistrationView: View {
                     }
                 } else {
                     TextField(property.displayName(for: locale), text: metadataPropertyBinding(for: property), axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle(lineLimit: property.type == "url" ? 1...3 : 1...6)
 #if os(iOS)
                         .keyboardType(property.type == "url" ? .URL : .default)
@@ -799,10 +842,6 @@ struct ShiftSelectionView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(localized("イベントを選択"))
                         .font(.title2.bold())
-
-                    Text(localized("登録するイベントをイベント設定から選択します。"))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
                 }
 
                 Spacer()
@@ -956,6 +995,7 @@ struct RegistrationPreviewView: View {
     @State private var tagValue = ""
     @State private var propertyValues: [String: String] = [:]
     @State private var validationMessage: String?
+    @FocusState private var isTextFieldFocused: Bool
 
     init(
         preview: RegistrationPreview,
@@ -1068,6 +1108,7 @@ struct RegistrationPreviewView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextField(metadataFieldLabels.tag, text: $tagValue, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle(lineLimit: 1...2)
                 }
             }
@@ -1078,6 +1119,7 @@ struct RegistrationPreviewView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextField(metadataFieldLabels.location, text: $location, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle()
                 }
             }
@@ -1088,6 +1130,7 @@ struct RegistrationPreviewView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextField(metadataFieldLabels.url, text: $url, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle(lineLimit: 1...3)
 #if os(iOS)
                         .keyboardType(.URL)
@@ -1103,6 +1146,7 @@ struct RegistrationPreviewView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextField(metadataFieldLabels.notes, text: $notes, axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle(lineLimit: 1...6)
                 }
             }
@@ -1132,6 +1176,7 @@ struct RegistrationPreviewView: View {
                     }
                 } else {
                     TextField(property.displayName(for: locale), text: metadataPropertyBinding(for: property), axis: .vertical)
+                        .focused($isTextFieldFocused)
                         .calHubMetadataTextFieldStyle(lineLimit: property.type == "url" ? 1...3 : 1...6)
 #if os(iOS)
                         .keyboardType(property.type == "url" ? .URL : .default)
@@ -1167,10 +1212,6 @@ struct RegistrationPreviewView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(localized("登録内容を確認"))
                         .font(.title.bold())
-
-                    Text(localized("登録前に内容を確認してください。"))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 12)
@@ -1354,6 +1395,10 @@ struct RegistrationPreviewView: View {
         .frame(width: 560, height: 640)
 #endif
         .environment(\.locale, locale)
+        .calHubKeyboardDismissal()
+        .onTapGesture {
+            isTextFieldFocused = false
+        }
         .onAppear {
             if tagValue.isEmpty {
                 tagValue = metadataFieldLabels.tagDefaultValue

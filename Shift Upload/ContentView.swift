@@ -176,6 +176,7 @@ struct ContentView: View {
     @State private var displayMode: ShiftDisplayMode = .calendar
     @State private var selectedCalendarDisplayColor: CalendarDisplayColor?
     @State private var isCloudKitStateLoaded = false
+    @FocusState private var isKeyboardFieldFocused: Bool
 #if os(macOS)
     @State private var isPDFDropTargeted = false
 #endif
@@ -609,6 +610,7 @@ struct ContentView: View {
             extractedRowPanel
         }
         .onTapGesture {
+            isKeyboardFieldFocused = false
             if isRegistrationDestinationMenuPresented {
                 isRegistrationDestinationMenuPresented = false
             }
@@ -628,6 +630,7 @@ struct ContentView: View {
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .calHubKeyboardDismissal()
         .overlayPreferenceValue(CalendarOverlayAnchorKey.self) { anchors in
             GeometryReader { geometry in
                 if isRegistrationDestinationMenuPresented, let anchor = anchors.destination {
@@ -843,6 +846,7 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             TextField("Name...", text: $workerNameDraft)
+                .focused($isKeyboardFieldFocused)
                 .textFieldStyle(.plain)
                 .onSubmit {
                     performWorkerSearch()
@@ -1529,6 +1533,7 @@ struct ContentView: View {
                 .frame(minHeight: 72, maxHeight: 100)
 #else
                 TextField(localizedMessage("イベント名"), text: $editedExtractedShiftText)
+                    .focused($isKeyboardFieldFocused)
                     .textFieldStyle(.roundedBorder)
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.primary)
@@ -1634,6 +1639,7 @@ struct ContentView: View {
 
             if hasShift {
                 TextField(localizedMessage("イベント名"), text: $editedExtractedShiftText)
+                    .focused($isKeyboardFieldFocused)
                     .textFieldStyle(.roundedBorder)
                     .padding(.bottom, fieldBottomPadding)
             }
@@ -1674,6 +1680,10 @@ struct ContentView: View {
             .padding(.top, 12)
             }
         }
+        .calHubKeyboardDismissal()
+        .onTapGesture {
+            isKeyboardFieldFocused = false
+        }
     }
 
     private func extractedShiftActionMenu(for cell: ExtractedShiftCell, day: Int) -> some View {
@@ -1700,6 +1710,7 @@ struct ContentView: View {
                 .padding(.vertical, 12)
 
             TextField(localizedMessage("イベント名"), text: $editedExtractedShiftText)
+                .focused($isKeyboardFieldFocused)
                 .textFieldStyle(.roundedBorder)
                 .padding(.bottom, 10)
 
@@ -1735,6 +1746,10 @@ struct ContentView: View {
         }
         .padding(16)
         .frame(minWidth: 280, alignment: .leading)
+        .calHubKeyboardDismissal()
+        .onTapGesture {
+            isKeyboardFieldFocused = false
+        }
     }
 
     private func extractedShiftDetail(for cell: ExtractedShiftCell) -> String? {
