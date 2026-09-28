@@ -282,7 +282,9 @@ struct ContentView: View {
                 syncCloudSettings()
             }
         }
-        .task(id: notionMetadataDiscoveryKey) {
+        .task(id: notionMetadataDiscoveryTaskID) {
+            guard !isSynchronizing,
+                  !isCloudSyncEnabled || isCloudKitStateLoaded else { return }
             await discoverNotionMetadataPropertiesIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .shiftHubScanStoredSchedule)) { notification in
@@ -450,6 +452,10 @@ struct ContentView: View {
         return notionDataSourceID
     }
 
+    private var notionMetadataDiscoveryTaskID: String {
+        "\(notionMetadataDiscoveryKey)|\(isCloudSyncEnabled)|\(isCloudKitStateLoaded)|\(isSynchronizing)"
+    }
+
     private func discoverNotionMetadataPropertiesIfNeeded() async {
         guard CalendarDestination(rawValue: calendarDestination) == .notion,
               let token = KeychainStore.string(for: "notion-access-token") else {
@@ -466,6 +472,12 @@ struct ContentView: View {
                 databaseID: trimmedDataSourceID,
                 localeIdentifier: locale.identifier
             )
+            guard !Task.isCancelled,
+                  CalendarDestination(rawValue: calendarDestination) == .notion,
+                  notionDataSourceID.trimmingCharacters(in: .whitespacesAndNewlines) == trimmedDataSourceID else {
+                return
+            }
+
             let allowAutomaticSelection = notionMetadataMappingVersion < 1
             if allowAutomaticSelection {
                 notionLocationProperty = ""

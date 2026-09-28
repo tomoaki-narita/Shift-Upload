@@ -1011,6 +1011,31 @@ nonisolated final class AppleCalendarEventClient {
 }
 
 struct NotionCalendarEventClient {
+    private static let fractionalISO8601Format = Date.ISO8601FormatStyle(
+        includingFractionalSeconds: true
+    )
+    private static let standardISO8601Format = Date.ISO8601FormatStyle(
+        includingFractionalSeconds: false
+    )
+    private static let timeFormat = Date.FormatStyle(
+        date: nil,
+        time: nil,
+        locale: Locale(identifier: "ja_JP"),
+        calendar: Calendar(identifier: .gregorian),
+        timeZone: .autoupdatingCurrent,
+        capitalizationContext: .unknown
+    )
+    .hour(.defaultDigits(amPM: .omitted))
+    .minute(.twoDigits)
+    private static let dateOnlyFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
     let token: String
     let dataSourceID: String
     let dateProperty: String
@@ -1153,20 +1178,28 @@ struct NotionCalendarEventClient {
                     propertyValues: dynamicValues
                 )
                 let isAllDay = !start.contains("T")
-                let startDate = isAllDay ? dateOnlyDate(from: start) : parseISO8601Date(start)
+                let startDate = isAllDay
+                    ? Self.dateOnlyDate(from: start)
+                    : Self.parseISO8601Date(start)
                 guard let startDate else { continue }
-                let detail: String
+
+                let end = dateValue["end"] as? String
                 let endDate: Date?
-                if start.contains("T"),
-                   let end = dateValue["end"] as? String,
-                   end.contains("T") {
-                    detail = timeRangeText(start: start, end: end)
-                    endDate = parseISO8601Date(end)
-                } else {
-                    detail = isAllDay ? "終日" : timeText(from: start)
+                if let end {
                     endDate = isAllDay
-                        ? (dateValue["end"] as? String).flatMap { dateOnlyDate(from: $0) }
-                        : nil
+                        ? Self.dateOnlyDate(from: end)
+                        : (end.contains("T") ? Self.parseISO8601Date(end) : nil)
+                } else {
+                    endDate = nil
+                }
+
+                let detail: String
+                if isAllDay {
+                    detail = "終日"
+                } else if let endDate {
+                    detail = Self.timeRangeText(start: startDate, end: endDate)
+                } else {
+                    detail = Self.timeText(from: startDate)
                 }
 
                 let startsInMonth = startDate >= monthStart && startDate < nextMonthStart
@@ -1174,9 +1207,14 @@ struct NotionCalendarEventClient {
                     && (endDate.map { $0 > monthStart } ?? false)
                 guard startsInMonth || continuesIntoMonth else { continue }
 
-                let day = startsInMonth
-                    ? (dayInSelectedMonth(from: start, yearMonth: yearMonth) ?? 1)
-                    : 1
+                let day: Int
+                if startsInMonth {
+                    day = (isAllDay
+                        ? dayInSelectedMonth(from: start, yearMonth: yearMonth)
+                        : dayInSelectedMonth(from: startDate, yearMonth: yearMonth)) ?? 1
+                } else {
+                    day = 1
+                }
                 records.append(CalendarEventRecord(
                     id: identifier,
                     day: day,
@@ -1433,48 +1471,15 @@ struct NotionCalendarEventClient {
         .joined()
     }
 
-    private func timeText(from value: String) -> String {
-        if let date = parseISO8601Date(value) {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "ja_JP")
-            formatter.timeZone = .current
-            formatter.dateFormat = "H:mm"
-            return formatter.string(from: date)
-        }
-
-        let time = value.split(separator: "T").dropFirst().first.map(String.init) ?? value
-        return String(time.prefix(5))
+    private static func timeText(from date: Date) -> String {
+        date.formatted(timeFormat)
     }
 
-    private func timeRangeText(start: String, end: String) -> String {
-        guard let startDate = parseISO8601Date(start),
-              let endDate = parseISO8601Date(end) else {
-            return timeText(from: start)
-        }
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ja_JP")
-        formatter.timeZone = .current
-        formatter.dateFormat = "H:mm"
-        return "\(formatter.string(from: startDate))-\(formatter.string(from: endDate))"
+    private static func timeRangeText(start: Date, end: Date) -> String {
+        "\(timeText(from: start))-\(timeText(from: end))"
     }
 
     private func dayInSelectedMonth(from value: String, yearMonth: YearMonth) -> Int? {
-        if value.contains("T"), let date = parseISO8601Date(value) {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = .current
-            let components = calendar.dateComponents([.year, .month, .day], from: date)
-
-            guard components.year == yearMonth.year,
-                  components.month == yearMonth.month,
-                  let day = components.day,
-                  (1...yearMonth.numberOfDays).contains(day) else {
-                return nil
-            }
-
-            return day
-        }
-
         let dateText = String(value.prefix(10))
         let components = dateText.split(separator: "-").compactMap { Int($0) }
         guard components.count == 3,
@@ -1487,25 +1492,30 @@ struct NotionCalendarEventClient {
         return components[2]
     }
 
-    private func parseISO8601Date(_ value: String) -> Date? {
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractionalFormatter.date(from: value) {
-            return date
+    private func dayInSelectedMonth(from date: Date, yearMonth: YearMonth) -> Int? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+
+        guard components.year == yearMonth.year,
+              components.month == yearMonth.month,
+              let day = components.day,
+              (1...yearMonth.numberOfDays).contains(day) else {
+            return nil
         }
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        return day
     }
 
-    private func dateOnlyDate(from value: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: String(value.prefix(10)))
+    private static func parseISO8601Date(_ value: String) -> Date? {
+        if let date = try? fractionalISO8601Format.parse(value) {
+            return date
+        }
+        return try? standardISO8601Format.parse(value)
+    }
+
+    private static func dateOnlyDate(from value: String) -> Date? {
+        dateOnlyFormatter.date(from: String(value.prefix(10)))
     }
 
     private func hasConfiguredTag(in property: Any?) -> Bool {
