@@ -139,6 +139,15 @@ private enum CalendarDayActionsSheet: Identifiable {
     }
 }
 
+private struct SelectedEventDeletionItem: Identifiable {
+    let selection: CalendarDaySelection
+    let event: CalendarEventRecord
+
+    var id: String {
+        "\(selection.year)-\(selection.month)-\(selection.day)-\(event.id)"
+    }
+}
+
 private let calendarWeekPagingLogger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "ShiftUpload",
     category: "WeekPaging"
@@ -392,6 +401,8 @@ private struct MonthPageRenderKey: Equatable {
     let yearMonth: YearMonth
     let eventSignature: Int
     let size: CGSize
+    let leadingInset: CGFloat
+    let colorScheme: ColorScheme
     let isCurrentMonth: Bool
     let displayMode: String
     let localeIdentifier: String
@@ -924,6 +935,10 @@ struct CalendarEventManagerView: View {
     @State private var pendingDayActionsSelection: CalendarDaySelection?
     @State private var isDaySelectionMode = false
     @State private var selectedCalendarDays: Set<CalendarDaySelection> = []
+    @State private var selectedEventsByDay: [CalendarDaySelection: [CalendarEventRecord]] = [:]
+    @State private var pendingSelectedEventDeletionItems: [SelectedEventDeletionItem] = []
+    @State private var isSelectedEventDeletionPresented = false
+    @State private var selectedEventDeletionError: String?
     @State private var selectedEventForActions: CalendarEventRecord?
     @State private var eventBeingEdited: CalendarEventRecord?
     @State private var selectedBandEventForActions: CalendarBandEventSelection?
@@ -986,7 +1001,11 @@ struct CalendarEventManagerView: View {
     // large number of event-band views when switching from month to week.
     // This matches the model's six-month neighbor cache on either side.
     private static let weekPageMonthRadius = 6
+#if os(iOS)
+    private static let calendarControlHeight: CGFloat = 30
+#else
     private static let calendarControlHeight: CGFloat = 34
+#endif
 
     private var calendarDayActionsSheetBinding: Binding<CalendarDayActionsSheet?> {
         Binding(
@@ -1514,6 +1533,7 @@ struct CalendarEventManagerView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .disabled(calendarDisplayMode == .year)
             .help(isDaySelectionMode ? "複数選択を解除" : "複数選択")
         }
 
@@ -1529,7 +1549,7 @@ struct CalendarEventManagerView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .help("勤務表")
+            .help("PDFスキャン")
         }
 
         ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -1936,10 +1956,10 @@ struct CalendarEventManagerView: View {
                     + "events=\(model.events.count) "
                     + "pageCount=\(weekPageTemplates.count)"
             calendarRenderingLogger.notice("\(logMessage, privacy: .public)")
-            withAnimation(.easeInOut(duration: 0.25)) {
-                weekContentInset = mode == .week
-                    ? max(0, 40 - calendarBaseHorizontalInset)
-                    : 0
+            if mode != .week {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    weekContentInset = 0
+                }
             }
 
             guard mode == .week else {
@@ -2012,6 +2032,9 @@ struct CalendarEventManagerView: View {
         calendarAlertView
         .sheet(isPresented: $isShiftSelectionPresented) {
             shiftSelectionSheetContent
+        }
+        .sheet(isPresented: $isSelectedEventDeletionPresented) {
+            selectedEventDeletionSheetContent
         }
     }
 
@@ -2086,6 +2109,7 @@ struct CalendarEventManagerView: View {
                         .frame(width: 36, height: 36)
                 }
                 .buttonStyle(ToolbarIconButtonStyleD())
+                .disabled(calendarDisplayMode == .year)
                 .accessibilityLabel(isDaySelectionMode ? "複数選択を解除" : "複数選択")
 
                 Button {
@@ -2095,7 +2119,7 @@ struct CalendarEventManagerView: View {
                         .frame(width: 36, height: 36)
                 }
                 .buttonStyle(ToolbarIconButtonStyleD())
-                .accessibilityLabel("勤務表")
+                .accessibilityLabel("PDFスキャン")
 
                 Button {
                     leaveDaySelectionModeAndOpen(onOpenSettings)
@@ -2145,6 +2169,7 @@ struct CalendarEventManagerView: View {
 
             Button {
                 selectedCalendarDays.removeAll()
+                selectedEventsByDay.removeAll()
             } label: {
                 Image(systemName: "arrow.counterclockwise")
                     .font(.caption.weight(.semibold))
@@ -2177,6 +2202,25 @@ struct CalendarEventManagerView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(ShiftHubLocalization.string("イベント一覧から選択", locale: locale))
             .disabled(selectedCalendarDays.isEmpty)
+
+            Button {
+                presentSelectedEventDeletionList()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(selectedEventDeletionItems.isEmpty ? Color.secondary : Color.red)
+                    .frame(width: 30, height: 30)
+                    .background(.background.secondary.opacity(0.72), in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(.primary.opacity(0.12), lineWidth: 1)
+                    }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ShiftHubLocalization.string("選択したイベントを削除", locale: locale))
+            .help(ShiftHubLocalization.string("選択したイベントを削除", locale: locale))
+            .disabled(selectedEventDeletionItems.isEmpty || model.isDeleting)
         }
 #if os(iOS)
         .padding(.horizontal, 16)
@@ -2185,6 +2229,129 @@ struct CalendarEventManagerView: View {
         .padding(.horizontal, 24)
         .padding(.bottom, 8)
 #endif
+    }
+
+    private var selectedEventDeletionItems: [SelectedEventDeletionItem] {
+        selectedCalendarDays
+            .sorted {
+                if $0.year != $1.year { return $0.year < $1.year }
+                if $0.month != $1.month { return $0.month < $1.month }
+                return $0.day < $1.day
+            }
+            .flatMap { selection in
+                (selectedEventsByDay[selection] ?? [])
+                    .filter { !$0.isReadOnly }
+                    .map { SelectedEventDeletionItem(selection: selection, event: $0) }
+            }
+    }
+
+    private var selectedEventDeletionSheetContent: some View {
+        NavigationStack {
+            List {
+                Section {
+                    if pendingSelectedEventDeletionItems.isEmpty {
+                        Text(localized("選択日に削除できるイベントがありません。"))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(pendingSelectedEventDeletionItems) { item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(model.dayHeader(
+                                    for: item.selection.day,
+                                    yearMonth: item.selection.yearMonth,
+                                    locale: locale
+                                ))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+
+                                Text(item.event.title)
+                                    .font(.body)
+
+                                if !item.event.detail.isEmpty {
+                                    Text(item.event.detail)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                } header: {
+                    Text(localized("選択したイベントを削除しますか？"))
+                }
+
+                if let selectedEventDeletionError {
+                    Section {
+                        Text(selectedEventDeletionError)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle(localized("イベントを削除"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("キャンセル")) {
+                        isSelectedEventDeletionPresented = false
+                    }
+                    .disabled(model.isDeleting)
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(role: .destructive) {
+                        deletePendingSelectedEvents()
+                    } label: {
+                        if model.isDeleting {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 48, height: 20)
+                        } else {
+                            Text(localized("削除"))
+                                .foregroundStyle(Color.red)
+                                .frame(width: 48, height: 20)
+                        }
+                    }
+                    .disabled(pendingSelectedEventDeletionItems.isEmpty || model.isDeleting)
+                }
+            }
+        }
+#if os(iOS)
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+#else
+        .frame(minWidth: 420, minHeight: 420)
+#endif
+    }
+
+    private func presentSelectedEventDeletionList() {
+        pendingSelectedEventDeletionItems = selectedEventDeletionItems
+        selectedEventDeletionError = nil
+        guard !pendingSelectedEventDeletionItems.isEmpty else { return }
+        isSelectedEventDeletionPresented = true
+    }
+
+    private func deletePendingSelectedEvents() {
+        var seenEventIDs = Set<String>()
+        let events = pendingSelectedEventDeletionItems.compactMap { item -> CalendarEventRecord? in
+            guard seenEventIDs.insert(item.event.id).inserted else { return nil }
+            return item.event
+        }
+        guard !events.isEmpty else { return }
+
+        selectedEventDeletionError = nil
+        model.deleteEvents(events) { failedEvents in
+            let failedIDs = Set(failedEvents.map(\.id))
+            pendingSelectedEventDeletionItems.removeAll { !failedIDs.contains($0.event.id) }
+
+            if failedEvents.isEmpty {
+                isSelectedEventDeletionPresented = false
+                exitDaySelectionMode()
+                pendingSelectedEventDeletionItems = []
+            } else {
+                for selection in Array(selectedEventsByDay.keys) {
+                    selectedEventsByDay[selection]?.removeAll { !failedIDs.contains($0.id) }
+                }
+                selectedEventDeletionError = model.message
+            }
+        }
     }
 
     private var calendarDestinationMenu: some View {
@@ -2363,6 +2530,13 @@ struct CalendarEventManagerView: View {
                         timelineHeight: timelineHeight
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .onAppear {
+                        let targetInset = max(0, 40 - calendarBaseHorizontalInset)
+                        guard weekContentInset != targetInset else { return }
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            weekContentInset = targetInset
+                        }
+                    }
                 }
             } else {
                 yearCalendarView
@@ -2787,6 +2961,7 @@ struct CalendarEventManagerView: View {
                                         )
                                         .frame(height: timelineHeight, alignment: .top)
                                     }
+                                    .animation(.easeInOut(duration: 0.25), value: weekContentInset)
                                 } else {
                                     Color.clear
                                 }
@@ -3536,12 +3711,33 @@ struct CalendarEventManagerView: View {
     }
 
     private func setCalendarDisplayMode(_ mode: CalendarDisplayMode) {
+        guard calendarDisplayMode != mode else { return }
+
+        if mode == .year, isDaySelectionMode {
+            exitDaySelectionMode()
+        }
+
         if calendarDisplayMode == .week {
-            let day = Calendar.current.component(.day, from: calendarFocusDate)
-            calendarFocusDate = calendarDate(
-                yearMonth: model.yearMonth,
-                day: min(day, model.yearMonth.numberOfDays)
-            )
+            let calendar = Calendar.current
+            let visibleMonthDate = weekPageID.flatMap { weekStart in
+                (0..<7)
+                    .compactMap { calendar.date(byAdding: .day, value: $0, to: weekStart) }
+                    .first { date in
+                        let components = calendar.dateComponents([.year, .month], from: date)
+                        return components.year == model.yearMonth.year
+                            && components.month == model.yearMonth.month
+                    }
+            }
+
+            if let visibleMonthDate {
+                calendarFocusDate = visibleMonthDate
+            } else {
+                let day = calendar.component(.day, from: calendarFocusDate)
+                calendarFocusDate = calendarDate(
+                    yearMonth: model.yearMonth,
+                    day: min(day, model.yearMonth.numberOfDays)
+                )
+            }
         }
 
         if calendarDisplayMode == .year,
@@ -3553,7 +3749,7 @@ struct CalendarEventManagerView: View {
         let components = Calendar.current.dateComponents([.year, .month], from: calendarFocusDate)
         guard let year = components.year,
               let month = components.month else {
-            calendarDisplayMode = mode
+            updateCalendarDisplayMode(mode)
             return
         }
 
@@ -3587,7 +3783,20 @@ struct CalendarEventManagerView: View {
             }
         }
 
-        calendarDisplayMode = mode
+        updateCalendarDisplayMode(mode)
+    }
+
+    private func updateCalendarDisplayMode(_ mode: CalendarDisplayMode) {
+        guard calendarDisplayMode != mode else { return }
+
+        if mode == .week {
+            weekContentInset = 0
+            withAnimation(.easeInOut(duration: 0.25)) {
+                calendarDisplayMode = mode
+            }
+        } else {
+            calendarDisplayMode = mode
+        }
     }
 
     private func dateByReplacingYear(of date: Date, with year: Int) -> Date {
@@ -4184,7 +4393,7 @@ struct CalendarEventManagerView: View {
             yearMonth: yearMonth,
             day: day
         )
-        if selection.yearMonth == model.yearMonth {
+        if selection.yearMonth == model.yearMonth || calendarDisplayMode == .week {
             selectedBandEventForActions = selection
         } else {
             pendingBandEventForActions = selection
@@ -4841,6 +5050,8 @@ struct CalendarEventManagerView: View {
                                         yearMonth: pageMonth,
                                         eventSignature: pageEvents.signature,
                                         size: geometry.size,
+                                        leadingInset: calendarBaseHorizontalInset + weekContentInset,
+                                        colorScheme: colorScheme,
                                         isCurrentMonth: pageMonth == model.yearMonth,
                                         displayMode: calendarDisplayMode.rawValue,
                                         localeIdentifier: locale.identifier,
@@ -5094,12 +5305,13 @@ struct CalendarEventManagerView: View {
 #if os(iOS)
         let gridSpacing: CGFloat = 5
         let columnSpacing: CGFloat = 4
-        let horizontalInsets: CGFloat = 24
 #else
         let gridSpacing: CGFloat = 8
         let columnSpacing: CGFloat = 8
-        let horizontalInsets: CGFloat = 48
 #endif
+        let leadingHorizontalInset = calendarBaseHorizontalInset + weekContentInset
+        let trailingHorizontalInset = calendarBaseHorizontalInset
+        let horizontalInsets = leadingHorizontalInset + trailingHorizontalInset
         let cardHeight = eventCalendarCardHeight(availableHeight: availableHeight)
         let bandMetrics = calendarEventBandMetrics(cardHeight: cardHeight)
 #if os(macOS)
@@ -5300,11 +5512,8 @@ struct CalendarEventManagerView: View {
                 }
 
             }
-#if os(iOS)
-            .padding(.horizontal, 12)
-#else
-            .padding(.horizontal, 24)
-#endif
+            .padding(.leading, leadingHorizontalInset)
+            .padding(.trailing, trailingHorizontalInset)
 #if os(iOS)
             .padding(.vertical, 4)
 #else
@@ -5475,6 +5684,18 @@ struct CalendarEventManagerView: View {
             month: gridDate.yearMonth.month,
             day: gridDate.day
         )
+        let deletableEventsForSelection = Array(
+            Dictionary(
+                (dayEvents + segmentsForDay.map(\.event))
+                    .filter {
+                        !$0.isReadOnly
+                            && $0.occurs(on: gridDate.date, fallbackYearMonth: gridDate.yearMonth)
+                    }
+                    .map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            .values
+        ).sorted(by: calendarEventComesBefore)
         let isToday = Calendar.current.isDateInToday(gridDate.date)
 #if os(iOS)
         let dateHeaderHeight: CGFloat = 14
@@ -5488,8 +5709,10 @@ struct CalendarEventManagerView: View {
                 }
                 if selectedCalendarDays.contains(selection) {
                     selectedCalendarDays.remove(selection)
+                    selectedEventsByDay.removeValue(forKey: selection)
                 } else {
                     selectedCalendarDays.insert(selection)
+                    selectedEventsByDay[selection] = deletableEventsForSelection
                 }
                 return
             }
@@ -5942,9 +6165,22 @@ struct CalendarEventManagerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func eventInformationCard(for event: CalendarEventRecord) -> some View {
+    private func eventInformationCard(
+        for event: CalendarEventRecord,
+        showsNavigationIndicator: Bool = false
+    ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             eventSummaryContent(for: event)
+                .padding(.trailing, showsNavigationIndicator ? 28 : 0)
+                .overlay(alignment: .trailing) {
+                    if showsNavigationIndicator {
+                        Image(systemName: "info.circle")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(10)
+                            .allowsHitTesting(false)
+                    }
+                }
             eventMetadataDetails(for: event, showsBackground: false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5956,9 +6192,15 @@ struct CalendarEventManagerView: View {
     }
 
 #if os(iOS) || os(macOS)
-    private func scrollableEventInformationCard(for event: CalendarEventRecord) -> some View {
+    private func scrollableEventInformationCard(
+        for event: CalendarEventRecord,
+        showsNavigationIndicator: Bool = false
+    ) -> some View {
         ScrollView(.vertical) {
-            eventInformationCard(for: event)
+            eventInformationCard(
+                for: event,
+                showsNavigationIndicator: showsNavigationIndicator
+            )
         }
         .scrollIndicators(.visible)
         .frame(maxHeight: 360, alignment: .topLeading)
@@ -5970,14 +6212,7 @@ struct CalendarEventManagerView: View {
         day: Int,
         yearMonth: YearMonth?
     ) -> some View {
-        scrollableEventInformationCard(for: event)
-            .overlay(alignment: .topTrailing) {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(10)
-                    .allowsHitTesting(false)
-            }
+        scrollableEventInformationCard(for: event, showsNavigationIndicator: true)
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .onTapGesture {
                 presentEventActions(for: event, day: day, yearMonth: yearMonth)
@@ -6300,6 +6535,7 @@ struct CalendarEventManagerView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+                .padding(.top, 12)
             } else {
                 eventActions(for: event)
                     .padding(.top, 12)
@@ -6510,6 +6746,7 @@ struct CalendarEventManagerView: View {
         isYearMonthPickerPresented = false
         withAnimation(.easeInOut(duration: 0.25)) {
             selectedCalendarDays.removeAll()
+            selectedEventsByDay.removeAll()
             isDaySelectionMode = true
         }
     }
@@ -6525,6 +6762,7 @@ struct CalendarEventManagerView: View {
     private func exitDaySelectionMode() {
         withAnimation(.easeInOut(duration: 0.25)) {
             selectedCalendarDays.removeAll()
+            selectedEventsByDay.removeAll()
             isDaySelectionMode = false
         }
     }
@@ -6543,12 +6781,36 @@ struct CalendarEventManagerView: View {
         let registeredYearMonths = Set(selections.map {
             YearMonth(year: $0.year, month: $0.month)
         })
+        let expectedEventCounts = Dictionary(uniqueKeysWithValues: selections.map { selection in
+            (
+                selection,
+                model.events(for: selection.day, yearMonth: selection.yearMonth).count + 1
+            )
+        })
         onRegisterShifts(
             selections,
             title,
             RegistrationCompletion {
                 model.invalidateCachedMonths(registeredYearMonths)
-                model.load(forceRefresh: true)
+                Task { @MainActor in
+                    for attempt in 0..<3 {
+                        if attempt > 0 {
+                            try? await Task.sleep(
+                                nanoseconds: UInt64(attempt) * 1_000_000_000
+                            )
+                        }
+
+                        _ = await model.refreshCachedMonths(for: registeredYearMonths)
+                        let isUpToDate = expectedEventCounts.allSatisfy { entry in
+                            let selection = entry.key
+                            return model.events(
+                                for: selection.day,
+                                yearMonth: selection.yearMonth
+                            ).count >= entry.value
+                        }
+                        if isUpToDate { return }
+                    }
+                }
             }
         )
     }

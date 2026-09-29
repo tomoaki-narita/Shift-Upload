@@ -2723,7 +2723,7 @@ private enum GoogleCalendarError: LocalizedError {
         case .invalidDate:
             return "イベントの日付を作成できませんでした。"
         case .missingYearMonth:
-            return "勤務表の年月を取得できませんでした。"
+            return "PDFから年月を取得できませんでした。"
         }
     }
 }
@@ -3073,7 +3073,7 @@ private enum AppleCalendarRegistrationError: LocalizedError {
         case .calendarNotFound:
             return "登録先のAppleカレンダーが見つからないか、書き込みできません。"
         case .missingYearMonth:
-            return "勤務表の年月を取得できませんでした。"
+            return "PDFから年月を取得できませんでした。"
         case .invalidDate(let day):
             return "日付を作成できませんでした: \(day)"
         case .invalidResponse:

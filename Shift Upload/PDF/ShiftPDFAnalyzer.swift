@@ -1881,7 +1881,7 @@ enum ShiftOCRAnalyzerError: LocalizedError {
         case .unsupportedLayout:
             return "横型または縦型のPDFのみ対応しています"
         case .unreadableFile:
-            return "勤務表ファイルを開けませんでした。"
+            return "PDFファイルを開けませんでした。"
         }
     }
 }

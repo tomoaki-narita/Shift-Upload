@@ -513,8 +513,18 @@ final class CalendarEventManagerModel: ObservableObject {
     func events(for day: Int, yearMonth: YearMonth? = nil) -> [CalendarEventRecord] {
         let targetYearMonth = yearMonth ?? self.yearMonth
         let sourceEvents = yearMonth.map { cachedEvents(for: $0) } ?? events
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        guard let targetDate = calendar.date(from: DateComponents(
+            year: targetYearMonth.year,
+            month: targetYearMonth.month,
+            day: day
+        )) else {
+            return []
+        }
+
         return sourceEvents
-            .filter { $0.starts(on: day, in: targetYearMonth) }
+            .filter { $0.occurs(on: targetDate, fallbackYearMonth: targetYearMonth) }
             .sorted(by: calendarEventComesBefore)
     }
 
@@ -1544,6 +1554,28 @@ final class CalendarEventManagerModel: ObservableObject {
         store(MonthCacheEntry(events: events, calendarColor: calendarColor), for: yearMonth)
     }
 
+    private func prepareMonthCachesAfterDeleting(eventID: String) {
+        for cachedMonth in Array(displayFallbackMonthCache.keys) {
+            guard let entry = displayFallbackMonthCache[cachedMonth] else { continue }
+            displayFallbackMonthCache[cachedMonth] = MonthCacheEntry(
+                events: entry.events.filter { $0.id != eventID },
+                calendarColor: entry.calendarColor,
+                fetchedAt: entry.fetchedAt
+            )
+        }
+        for cachedMonth in Array(monthCache.keys) {
+            guard let entry = monthCache[cachedMonth] else { continue }
+            monthCache[cachedMonth] = MonthCacheEntry(
+                events: entry.events.filter { $0.id != eventID },
+                calendarColor: entry.calendarColor,
+                fetchedAt: entry.fetchedAt
+            )
+        }
+        for (cachedMonth, entry) in displayFallbackMonthCache where monthCache[cachedMonth] == nil {
+            monthCache[cachedMonth] = entry
+        }
+    }
+
     private func store(_ cachedMonth: MonthCacheEntry, for yearMonth: YearMonth) {
         monthCache[yearMonth] = cachedMonth
         displayFallbackMonthCache.removeValue(forKey: yearMonth)
@@ -1586,39 +1618,14 @@ final class CalendarEventManagerModel: ObservableObject {
             guard let self else { return }
 
             do {
-                switch destination {
-                case .apple:
-                    try AppleCalendarEventClient(
-                        calendarIdentifier: appleCalendarIdentifier
-                    ).deleteEvent(identifier: target.id)
-                case .google:
-                    guard GoogleTokenStore.load() != nil else {
-                        throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
-                    }
-
-                    try await GoogleCalendarAPIClient(
-                        clientID: GoogleOAuthConfiguration.clientID
-                    ).deleteEvent(calendarID: googleCalendarID, eventID: target.id)
-                case .notion:
-                    guard let token = KeychainStore.string(for: "notion-access-token") else {
-                        throw CalendarEventManagementError.invalidSettings("Notionのアクセストークンを設定してください。")
-                    }
-
-                    try await NotionCalendarEventClient(
-                        token: token,
-                        dataSourceID: notionDataSourceID,
-                        dateProperty: notionDateProperty,
-                        titleProperty: notionTitleProperty,
-                        tagProperty: notionTagProperty,
-                        tagValue: notionTagValue
-                    ).deletePage(identifier: target.id)
-                }
+                try await deleteRemoteEvent(target)
 
                 shouldAnimateEventBandReveal = false
                 events.removeAll { $0.id == target.id }
                 loadedDays = Set(events.map(\.day))
+                prepareMonthCachesAfterDeleting(eventID: target.id)
                 clearPersistentCacheForCurrentConfiguration()
-                invalidateMonthCache()
+                invalidateMonthCache(preservingNearbyDisplay: true)
                 load(forceRefresh: true)
                 message = ShiftHubLocalization.string(
                     "イベントを削除しました。",
@@ -1635,6 +1642,102 @@ final class CalendarEventManagerModel: ObservableObject {
             }
 
             isDeleting = false
+        }
+    }
+
+    func deleteEvents(
+        _ targets: [CalendarEventRecord],
+        completion: (([CalendarEventRecord]) -> Void)? = nil
+    ) {
+        guard !isDeleting else { return }
+        var seenIDs = Set<String>()
+        let deletableTargets = targets.filter {
+            !$0.isReadOnly && seenIDs.insert($0.id).inserted
+        }
+        guard !deletableTargets.isEmpty else {
+            completion?(targets)
+            return
+        }
+
+        isDeleting = true
+        message = ""
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            var deletedIDs = Set<String>()
+            var failedEvents: [CalendarEventRecord] = []
+            var firstError: Error?
+
+            for event in deletableTargets {
+                do {
+                    try await deleteRemoteEvent(event)
+                    deletedIDs.insert(event.id)
+                } catch {
+                    failedEvents.append(event)
+                    firstError = firstError ?? error
+                }
+            }
+
+            if !deletedIDs.isEmpty {
+                shouldAnimateEventBandReveal = false
+                events.removeAll { deletedIDs.contains($0.id) }
+                loadedDays = Set(events.map(\.day))
+                for eventID in deletedIDs {
+                    prepareMonthCachesAfterDeleting(eventID: eventID)
+                }
+                clearPersistentCacheForCurrentConfiguration()
+                invalidateMonthCache(preservingNearbyDisplay: true)
+                load(forceRefresh: true)
+            }
+
+            if failedEvents.isEmpty {
+                message = ShiftHubLocalization.format(
+                    "%@件のイベントを削除しました。",
+                    locale: Locale(identifier: localeIdentifier),
+                    arguments: "\(deletedIDs.count)"
+                )
+            } else {
+                message = ShiftHubLocalization.format(
+                    "一部のイベントを削除できませんでした: %@",
+                    locale: Locale(identifier: localeIdentifier),
+                    arguments: firstError?.localizedDescription ?? "不明なエラー"
+                )
+            }
+
+            pendingDeletion = nil
+            isDeleting = false
+            completion?(failedEvents)
+        }
+    }
+
+    private func deleteRemoteEvent(_ target: CalendarEventRecord) async throws {
+        switch destination {
+        case .apple:
+            try AppleCalendarEventClient(
+                calendarIdentifier: appleCalendarIdentifier
+            ).deleteEvent(identifier: target.id)
+        case .google:
+            guard GoogleTokenStore.load() != nil else {
+                throw CalendarEventManagementError.invalidSettings("Googleの認証設定を確認してください。")
+            }
+
+            try await GoogleCalendarAPIClient(
+                clientID: GoogleOAuthConfiguration.clientID
+            ).deleteEvent(calendarID: googleCalendarID, eventID: target.id)
+        case .notion:
+            guard let token = KeychainStore.string(for: "notion-access-token") else {
+                throw CalendarEventManagementError.invalidSettings("Notionのアクセストークンを設定してください。")
+            }
+
+            try await NotionCalendarEventClient(
+                token: token,
+                dataSourceID: notionDataSourceID,
+                dateProperty: notionDateProperty,
+                titleProperty: notionTitleProperty,
+                tagProperty: notionTagProperty,
+                tagValue: notionTagValue
+            ).deletePage(identifier: target.id)
         }
     }
 }

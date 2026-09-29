@@ -195,15 +195,12 @@ struct YearMonth: Hashable {
 
 enum ShiftDisplayMode: String, CaseIterable, Identifiable {
     case calendar
-    case timeline
     case list
 
     var id: String { rawValue }
 
     var title: LocalizedStringKey {
         switch self {
-        case .timeline:
-            return "横並び"
         case .calendar:
             return "カレンダー"
         case .list:
@@ -213,8 +210,6 @@ enum ShiftDisplayMode: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .timeline:
-            return "rectangle"
         case .calendar:
             return "calendar"
         case .list:

@@ -341,7 +341,7 @@ private struct ShiftHubMacSettingsView: View {
             ShiftHubMacSettingsSectionCard {
                 Text(localized("このアプリについて"))
                     .font(.headline)
-                Text(localized("イベント設定に保存したイベントを、Appleカレンダー、Googleカレンダー、Notionデータベースへ登録・変更・削除できるアプリです。勤務表のPDFを読み込み、日付ごとのイベントを抽出して登録できます。"))
+                Text(localized("イベント設定に保存したイベントを、Appleカレンダー、Googleカレンダー、Notionデータベースへ登録・変更・削除できるアプリです。PDFをスキャンして、日付ごとのイベントを抽出して登録できます。"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -408,8 +408,8 @@ private struct ShiftHubMacSettingsView: View {
                     .font(.headline)
 
                 ShiftHubMacAboutFeatureRow(
-                    title: localized("勤務表入力条件"),
-                    detail: localized("文字を選択・コピーできる文字情報を持つPDFのみ対応しています。PDFを開いたときに文字を選択できないスキャン画像だけのPDFは対象外です。職員名と1日から月末までの日付が表形式で配置され、日付が連続して並ぶ勤務表を使用してください。日付が横方向に並ぶ形式と、日付が縦方向に並び職員名が上部に並ぶ形式に対応しています。PDFページの縦横比ではなく、文字の配置から横型・縦型を自動判定します。表の構造や日付の並びを判別できないPDFには対応していません。")
+                    title: localized("PDFファイルの条件"),
+                    detail: localized("文字を選択・コピーできる文字情報を持つPDFのみ対応しています。PDFを開いたときに文字を選択できないスキャン画像だけのPDFは対象外です。名前と1日から月末までの日付が表形式で配置され、日付が連続して並ぶPDFが対象です。日付が横方向に並ぶ形式と、日付が縦方向に並び名前が上部に並ぶ形式に対応しています。PDFページの縦横比ではなく、文字の配置から横型・縦型を自動判定します。表の構造や日付の並びを判別できないPDFには対応していません。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
@@ -745,7 +745,7 @@ private struct ShiftHubAboutView: View {
             }
 
             Section("このアプリについて") {
-                Text("イベント設定に保存したイベントを、Appleカレンダー、Googleカレンダー、Notionデータベースへ登録・変更・削除できるアプリです。勤務表のPDFを読み込み、日付ごとのイベントを抽出して登録できます。")
+                Text("イベント設定に保存したイベントを、Appleカレンダー、Googleカレンダー、Notionデータベースへ登録・変更・削除できるアプリです。PDFをスキャンして、日付ごとのイベントを抽出して登録できます。")
             }
 
             Section("主な機能") {
@@ -767,7 +767,7 @@ private struct ShiftHubAboutView: View {
                 )
                 ShiftHubAboutRow(
                     title: "登録時の文字変換",
-                    detail: "任意の文字列を、登録時に別の文字列へ変換できます。勤務表の休み表示などに利用できます。"
+                    detail: "任意の文字列を、登録時に別の文字列へ変換できます。PDF上の休み表示などに利用できます。"
                 )
                 ShiftHubAboutRow(
                     title: "イベント管理",
@@ -801,8 +801,8 @@ private struct ShiftHubAboutView: View {
 
             Section("対応形式と注意点") {
                 ShiftHubAboutRow(
-                    title: "勤務表入力条件",
-                    detail: "文字を選択・コピーできる文字情報を持つPDFのみ対応しています。PDFを開いたときに文字を選択できないスキャン画像だけのPDFは対象外です。職員名と1日から月末までの日付が表形式で配置され、日付が連続して並ぶ勤務表を使用してください。日付が横方向に並ぶ形式と、日付が縦方向に並び職員名が上部に並ぶ形式に対応しています。PDFページの縦横比ではなく、文字の配置から横型・縦型を自動判定します。表の構造や日付の並びを判別できないPDFには対応していません。"
+                    title: "PDFファイルの条件",
+                    detail: "文字を選択・コピーできる文字情報を持つPDFのみ対応しています。PDFを開いたときに文字を選択できないスキャン画像だけのPDFは対象外です。名前と1日から月末までの日付が表形式で配置され、日付が連続して並ぶPDFが対象です。日付が横方向に並ぶ形式と、日付が縦方向に並び名前が上部に並ぶ形式に対応しています。PDFページの縦横比ではなく、文字の配置から横型・縦型を自動判定します。表の構造や日付の並びを判別できないPDFには対応していません。"
                 )
                 ShiftHubAboutRow(
                     title: "年月の判定",
@@ -846,9 +846,9 @@ private struct ShiftHubAboutView: View {
             }
 
             Section("プライバシーポリシー") {
-                Text("勤務表、イベント設定、登録先の設定は、この端末に保存されます。iCloud同期を有効にした場合は、同期対象の設定と保存済みPDFがユーザー専用のiCloud領域に保存されます。")
+                Text("スキャンしたPDF、イベント設定、登録先の設定は、この端末に保存されます。iCloud同期を有効にした場合は、同期対象の設定と保存済みPDFがユーザー専用のiCloud領域に保存されます。")
                 Text("Appleカレンダー、Googleカレンダー、Notionの情報は、ユーザーが接続・取得・登録を実行した場合にのみ、それぞれのサービスへ送信されます。Notionのアクセストークンなどの認証情報は端末の安全な保存領域で管理されます。")
-                Text("このアプリは、ユーザーが選択した勤務表やカレンダーの内容を広告目的で利用しません。各サービスの利用やデータ保存については、それぞれのサービスのポリシーも適用されます。")
+                Text("このアプリは、ユーザーが選択したPDFやカレンダーの内容を広告目的で利用しません。各サービスの利用やデータ保存については、それぞれのサービスのポリシーも適用されます。")
             }
 
             Section("著作権") {

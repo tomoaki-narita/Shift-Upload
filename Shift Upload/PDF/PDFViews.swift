@@ -34,7 +34,7 @@ struct SavedScheduleListView: View {
                     Text(ShiftHubLocalization.string("履歴", locale: displayLocale))
                         .font(.title2.bold())
 
-                    Text(ShiftHubLocalization.string("保存した勤務表を選択して解析します。", locale: displayLocale))
+                    Text(ShiftHubLocalization.string("保存したPDFを選択して解析します。", locale: displayLocale))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -58,10 +58,10 @@ struct SavedScheduleListView: View {
 
             if schedules.isEmpty {
                 ContentUnavailableView(
-                    ShiftHubLocalization.string("保存した勤務表がありません", locale: displayLocale),
+                    ShiftHubLocalization.string("保存したPDFがありません", locale: displayLocale),
                     systemImage: "folder",
                     description: Text(
-                        ShiftHubLocalization.string("勤務表を選択すると、ここに保存されます。", locale: displayLocale)
+                        ShiftHubLocalization.string("PDFを選択すると、ここに保存されます。", locale: displayLocale)
                     )
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

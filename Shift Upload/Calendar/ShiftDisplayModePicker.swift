@@ -24,8 +24,8 @@ struct ShiftDisplayModePicker: View {
             }
         }
 #if os(iOS)
-        .frame(height: 33)
-        .background(Color(uiColor: .secondarySystemFill), in: Capsule())
+        .frame(height: 30)
+        .background(Color.secondary.opacity(0.22), in: Capsule())
 #else
         .frame(height: 25)
         .background(Color.primary.opacity(0.06), in: Capsule(style: .continuous))
@@ -76,7 +76,7 @@ struct ShiftDisplayModePicker: View {
     private func selectionBackground(isSelected: Bool) -> some View {
         if isSelected {
             Capsule(style: .continuous)
-                .fill(Color.primary.opacity(0.3))
+                .fill(Color.secondary.opacity(0.55))
                 .padding(3)
                 .matchedGeometryEffect(
                     id: "shift-display-mode-selection",

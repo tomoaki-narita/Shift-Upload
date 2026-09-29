@@ -170,7 +170,7 @@ struct ContentView: View {
     @State private var isImportAlertPresented = false
     @State private var importAlertTitle = ""
     @State private var importAlertMessage = ""
-    @State private var statusMessage = "勤務表のPDFを選択"
+    @State private var statusMessage = "ファイルからPDFを選択"
     @State private var isProcessing = false
     @State private var isSynchronizing = false
     @State private var displayMode: ShiftDisplayMode = .calendar
@@ -522,7 +522,7 @@ struct ContentView: View {
     }
 
     private var loadedScheduleClearedMessageKey: String? {
-        let key = "勤務表の読み込みを解除しました。"
+        let key = "PDFのスキャンを解除しました。"
         let englishValue = ShiftHubLocalization.string(key, locale: Locale(identifier: "en"))
         return statusMessage == key || statusMessage == englishValue ? key : nil
     }
@@ -642,6 +642,9 @@ struct ContentView: View {
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background {
+            scanScreenBackground.ignoresSafeArea()
+        }
         .calHubKeyboardDismissal()
         .overlayPreferenceValue(CalendarOverlayAnchorKey.self) { anchors in
             GeometryReader { geometry in
@@ -665,6 +668,37 @@ struct ContentView: View {
                         .position(
                             x: destinationFrame.maxX - 90,
                             y: destinationFrame.minY + 50 + 58
+                        )
+                        .zIndex(1)
+                    }
+                }
+            }
+            .allowsHitTesting(isRegistrationDestinationMenuPresented)
+        }
+#endif
+#if os(macOS)
+        .overlayPreferenceValue(CalendarOverlayAnchorKey.self) { anchors in
+            GeometryReader { geometry in
+                if isRegistrationDestinationMenuPresented, let anchor = anchors.destination {
+                    let destinationFrame = geometry[anchor]
+
+                    ZStack(alignment: .topLeading) {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                isRegistrationDestinationMenuPresented = false
+                            }
+
+                        CalendarDestinationPopup(
+                            selection: CalendarDestination(rawValue: calendarDestination),
+                            isPresented: $isRegistrationDestinationMenuPresented,
+                            onSelect: { destination in
+                                calendarDestination = destination.rawValue
+                            }
+                        )
+                        .position(
+                            x: destinationFrame.maxX - 100,
+                            y: destinationFrame.minY + 108
                         )
                         .zIndex(1)
                     }
@@ -820,6 +854,8 @@ struct ContentView: View {
                 Group {
                     if let key = loadedScheduleClearedMessageKey {
                         Text(LocalizedStringKey(key))
+                    } else if statusMessage == "ファイルからPDFを選択" {
+                        Text(LocalizedStringKey(statusMessage))
                     } else {
                         Text(verbatim: statusMessage)
                     }
@@ -871,7 +907,7 @@ struct ContentView: View {
                 }
         }
         .padding(.horizontal, 10)
-        .frame(height: 36)
+        .frame(height: 32)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
@@ -904,38 +940,35 @@ struct ContentView: View {
 
     private var registrationDestinationMenu: some View {
 #if os(iOS)
-                CalendarDestinationSelector(
-                    selection: CalendarDestination(rawValue: calendarDestination),
-                    showsCalendarIcon: false,
-                    isPresented: $isRegistrationDestinationMenuPresented,
-                    rendersOverlay: false,
-                    buttonHeight: 34,
-                    onOpen: {},
-                    onSelect: { destination in
-                        calendarDestination = destination.rawValue
+        CalendarDestinationSelector(
+            selection: CalendarDestination(rawValue: calendarDestination),
+            showsCalendarIcon: true,
+            isPresented: $isRegistrationDestinationMenuPresented,
+            rendersOverlay: false,
+            buttonHeight: 30,
+            onOpen: {},
+            onSelect: { destination in
+                calendarDestination = destination.rawValue
             }
         )
         .anchorPreference(key: CalendarOverlayAnchorKey.self, value: .bounds) {
             CalendarOverlayAnchors(destination: $0)
         }
 #else
-        Menu {
-            ForEach(CalendarDestination.allCases) { destination in
-                Button {
-                    calendarDestination = destination.rawValue
-                } label: {
-                    Label(destination.title, systemImage: "calendar")
-                }
+        CalendarDestinationSelector(
+            selection: CalendarDestination(rawValue: calendarDestination),
+            showsCalendarIcon: true,
+            isPresented: $isRegistrationDestinationMenuPresented,
+            rendersOverlay: false,
+            buttonHeight: 34,
+            onOpen: {},
+            onSelect: { destination in
+                calendarDestination = destination.rawValue
             }
-        } label: {
-            HStack(spacing: 5) {
-                Text(CalendarDestination(rawValue: calendarDestination)?.title ?? "カレンダー")
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption.weight(.semibold))
-            }
+        )
+        .anchorPreference(key: CalendarOverlayAnchorKey.self, value: .bounds) {
+            CalendarOverlayAnchors(destination: $0)
         }
-        .buttonStyle(ToolbarSelectorButtonStyleD(buttonHeight: 34))
-        .accessibilityLabel("カレンダーを変更")
 #endif
     }
 
@@ -1001,7 +1034,7 @@ struct ContentView: View {
         Button {
             isImporterPresented = true
         } label: {
-            Label("勤務表を選択", systemImage: "doc.viewfinder")
+            Label("PDFを選択", systemImage: "doc.viewfinder")
         }
 #if os(iOS)
         .buttonStyle(ToolbarNavigationButtonStyleD(fillsAvailableWidth: true))
@@ -1042,7 +1075,7 @@ struct ContentView: View {
 
 #if os(iOS)
     private var mobileHeader: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             scheduleSelectionControls
             scheduleStatusRow
             registrationControls
@@ -1055,7 +1088,7 @@ struct ContentView: View {
             workerSearchField
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 8)
         .zIndex(1)
     }
 
@@ -1125,7 +1158,7 @@ struct ContentView: View {
                     Text(selectedYearMonth.displayText(for: locale))
                         .font(.title3.bold())
                 } else {
-                    Text("勤務表")
+                    Text("PDF")
                         .font(.title3.bold())
                 }
 
@@ -1133,7 +1166,7 @@ struct ContentView: View {
 
                 ShiftDisplayModePicker(
                     selection: $displayMode,
-                    selectedSymbolColor: selectedCalendarDisplayColor?.color ?? .accentColor
+                    selectedSymbolColor: .primary
                 )
                 .accessibilityLabel("表示形式")
 
@@ -1146,20 +1179,13 @@ struct ContentView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if selectedFileName.isEmpty {
-                            ContentUnavailableView(
-                                label: {
-                                    Label(
-                                        localizedMessage("勤務表を選択"),
-                                        systemImage: "doc.viewfinder"
-                                    )
-                                },
-                                description: {
-                                    Text(verbatim: localizedMessage("勤務表のPDFを選択"))
-                                }
-                            )
-                            .frame(maxWidth: .infinity, minHeight: 120)
+                            Image(systemName: "questionmark.app.dashed")
+                                .font(.system(size: 64))
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel(localizedMessage("PDFを選択"))
+                                .frame(maxWidth: .infinity, minHeight: 240)
                         } else if isProcessing {
-                            ProgressView("勤務表を解析中です...")
+                            ProgressView("PDFを解析中です...")
                                 .frame(maxWidth: .infinity, minHeight: 120)
                         } else if workerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             ContentUnavailableView(
@@ -1177,8 +1203,6 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, minHeight: 120)
                         } else {
                             switch displayMode {
-                            case .timeline:
-                                timelineShiftView
                             case .calendar:
                                 calendarShiftView(availableHeight: geometry.size.height)
                             case .list:
@@ -1188,6 +1212,9 @@ struct ContentView: View {
                     }
                     .padding(.trailing, 8)
                 }
+#if os(iOS)
+                .scrollDisabled(displayMode == .calendar)
+#endif
             }
             .frame(maxHeight: .infinity)
         }
@@ -1210,18 +1237,6 @@ struct ContentView: View {
 #endif
     }
 
-    private var timelineShiftView: some View {
-        let cardWidth: CGFloat = 60
-        let columns = [GridItem(.adaptive(minimum: cardWidth, maximum: cardWidth), spacing: 8)]
-
-        return LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(extractedCells) { cell in
-                shiftCellView(for: cell, width: cardWidth)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
     private var listShiftView: some View {
         let days = Array(Set(
             extractedCells
@@ -1238,7 +1253,12 @@ struct ContentView: View {
                 )
                 .frame(maxWidth: .infinity, minHeight: 120)
             } else {
-                ForEach(days, id: \.self) { day in
+                ForEach(Array(days.enumerated()), id: \.offset) { index, day in
+                    if index > 0 {
+                        Divider()
+                            .padding(.vertical, 4)
+                    }
+
                     Section {
                         ForEach(extractedCells.filter {
                             Int($0.dateText) == day &&
@@ -1309,15 +1329,18 @@ struct ContentView: View {
     private func calendarShiftView(availableHeight: CGFloat? = nil) -> some View {
 #if os(iOS)
         let columns = Array(repeating: GridItem(.flexible(minimum: 38), spacing: 4), count: 7)
+        let gridSpacing: CGFloat = 4
 #else
         let columns = Array(repeating: GridItem(.flexible(minimum: 72), spacing: 8), count: 7)
+        let gridSpacing: CGFloat = 8
 #endif
         let leadingBlankCount = selectedYearMonth?.leadingBlankCount ?? 0
+        let trailingBlankCount = max(0, 42 - leadingBlankCount - extractedCells.count)
 #if os(iOS)
-        let rowCount = max(1, Int(ceil(Double(leadingBlankCount + extractedCells.count) / 7.0)))
+        let rowCount = 6
         let weekdayHeaderHeight: CGFloat = 28
         let cardHeight = availableHeight.map { height in
-            max(52, min(78, (height - weekdayHeaderHeight - CGFloat(rowCount) * 8) / CGFloat(rowCount)))
+            max(36, min(78, (height - weekdayHeaderHeight - CGFloat(rowCount) * gridSpacing) / CGFloat(rowCount)))
         } ?? 78
 #else
         let rowCount = max(1, Int(ceil(Double(leadingBlankCount + extractedCells.count) / 7.0)))
@@ -1328,7 +1351,7 @@ struct ContentView: View {
 #endif
 
         return VStack(spacing: 8) {
-            LazyVGrid(columns: columns, spacing: 8, pinnedViews: [.sectionHeaders]) {
+            LazyVGrid(columns: columns, spacing: gridSpacing, pinnedViews: [.sectionHeaders]) {
                 Section {
                     ForEach(0..<leadingBlankCount, id: \.self) { _ in
                         Color.clear
@@ -1337,6 +1360,15 @@ struct ContentView: View {
 
                     ForEach(extractedCells) { cell in
                         calendarShiftCellView(for: cell, height: cardHeight)
+                    }
+
+                    let trailingBlankStart = leadingBlankCount + extractedCells.count
+                    ForEach(
+                        trailingBlankStart..<(trailingBlankStart + trailingBlankCount),
+                        id: \.self
+                    ) { _ in
+                        Color.clear
+                            .frame(height: cardHeight)
                     }
                 } header: {
                     calendarWeekdayHeader(columns: columns)
@@ -1360,100 +1392,47 @@ struct ContentView: View {
                     .padding(.vertical, 6)
             }
         }
+#if os(iOS)
+        .background(scanScreenBackground)
+#else
         .background(.background)
+#endif
     }
 
-    private func shiftCellView(for cell: ExtractedShiftCell, width: CGFloat) -> some View {
-        let day = Int(cell.dateText)
+    private var scanScreenBackground: Color {
+        colorScheme == .dark
+            ? Color(red: 0.1176, green: 0.1176, blue: 0.1176)
+            : .white
+    }
 
-        return Button {
-            guard let day else { return }
-            presentExtractedDayActions(for: cell, day: day)
-        } label: {
-            VStack(spacing: 0) {
-                VStack(spacing: 2) {
-                    Text(dayText(for: cell))
-#if os(iOS)
-                        .font(.caption.weight(.semibold))
-#else
-                        .font(.callout.weight(.semibold))
-#endif
-
-                    Text(weekdayText(for: cell))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 5)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-#if os(iOS)
-                .background(
-                    colorScheme == .dark
-                        ? Color.white.opacity(0.10)
-                        : Color.black.opacity(0.08)
-                )
-#else
-                .background(.background.secondary)
-#endif
-
-                Text(cell.valueText.isEmpty ? " " : cell.valueText)
-#if os(iOS)
-                    .font(.system(size: 11, weight: .regular))
-#else
-                    .font(.body)
-#endif
-                    .foregroundStyle(isRestShiftTitle(cell.valueText) ? .red : .primary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
-                    .minimumScaleFactor(0.72)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 8)
-            }
-            .contentShape(Rectangle())
-        }
-        .frame(width: width, height: 100)
-        .background(.background.secondary.opacity(0.45))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .padding(.trailing, 6)
-        .buttonStyle(CalendarDayCardButtonStyle())
-#if os(macOS)
-        .popover(
-            isPresented: Binding(
-                get: { selectedExtractedDayAction?.day == day },
-                set: { isPresented in
-                    if !isPresented, selectedExtractedDayAction?.day == day {
-                        selectedExtractedDayAction = nil
-                    }
-                }
-            )
-        ) {
-            extractedDayActionsPopover(for: day ?? 0)
-                .onDisappear {
-                    // 先に閉じたポップオーバーが、新しい日付の選択を解除しないようにする。
-                    if selectedExtractedDayAction?.day == day {
-                        selectedExtractedDayAction = nil
-                    }
-                }
-        }
-#endif
-        .disabled(day == nil || isProcessing || isRegisteringEvents)
+    private var scanCalendarCardBackground: Color {
+        colorScheme == .dark
+            ? Color(red: 0.15, green: 0.15, blue: 0.15)
+            : Color(red: 0.96, green: 0.96, blue: 0.96)
     }
 
     private func calendarShiftCellView(for cell: ExtractedShiftCell, height: CGFloat = 96) -> some View {
         let day = Int(cell.dateText)
+#if os(iOS)
+        let contentSpacing: CGFloat = 4
+#else
+        let contentSpacing: CGFloat = 8
+#endif
 
         return Button {
             guard let day else { return }
             presentExtractedDayActions(for: cell, day: day)
         } label: {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: contentSpacing) {
                 Text(dayText(for: cell))
 #if os(iOS)
                     .font(.caption.weight(.semibold))
 #else
                     .font(.body.weight(.semibold))
 #endif
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .allowsTightening(true)
 
                 Text(cell.valueText.isEmpty ? " " : cell.valueText)
 #if os(iOS)
@@ -1467,10 +1446,10 @@ struct ContentView: View {
                     .allowsTightening(true)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
-            .padding(10)
+            .padding(6)
             .frame(height: height, alignment: .top)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
+            .background(scanCalendarCardBackground, in: RoundedRectangle(cornerRadius: 6))
             .clipped()
             .contentShape(Rectangle())
         }
@@ -1935,7 +1914,7 @@ struct ContentView: View {
         pendingExtractedDayForEdit = nil
         editedExtractedShiftText = ""
         isRestRegistrationAlertPresented = false
-        statusMessage = localizedMessage("勤務表の読み込みを解除しました。")
+        statusMessage = localizedMessage("PDFのスキャンを解除しました。")
     }
 
     private func saveAndAnalyzeImportedFile(
@@ -1949,7 +1928,7 @@ struct ContentView: View {
         }
 
         isProcessing = true
-        statusMessage = localizedMessage("勤務表ファイルを確認中です。")
+        statusMessage = localizedMessage("PDFファイルを確認中です。")
 
         Task {
             defer {
@@ -1979,7 +1958,7 @@ struct ContentView: View {
                 if let analyzerError = error as? ShiftOCRAnalyzerError {
                     presentImportAlert(analyzerError)
                 } else {
-                    statusMessage = localizedMessage("勤務表を保存できませんでした: %@", arguments: localizedError(error))
+                    statusMessage = localizedMessage("PDFを保存できませんでした: %@", arguments: localizedError(error))
                 }
                 isProcessing = false
             }
@@ -2002,7 +1981,7 @@ struct ContentView: View {
             guard let url else {
                 Task { @MainActor in
                     statusMessage = localizedMessage(
-                        "勤務表を読み込めませんでした: %@",
+                        "PDFを読み込めませんでした: %@",
                         arguments: error.map { localizedError($0) } ?? "Unknown error"
                     )
                 }
@@ -2018,7 +1997,7 @@ struct ContentView: View {
             } catch {
                 Task { @MainActor in
                     statusMessage = localizedMessage(
-                        "勤務表を読み込めませんでした: %@",
+                        "PDFを読み込めませんでした: %@",
                         arguments: localizedError(error)
                     )
                 }
@@ -2042,13 +2021,13 @@ struct ContentView: View {
         do {
             let url = try StoredScheduleStore.fileURL(for: schedule)
             guard FileManager.default.fileExists(atPath: url.path) else {
-                statusMessage = localizedMessage("保存した勤務表が見つかりません。")
+                statusMessage = localizedMessage("保存したPDFが見つかりません。")
                 return
             }
             selectedScheduleID = schedule.id
             analyzeFile(at: url, displayName: schedule.fileName)
         } catch {
-            statusMessage = localizedMessage("保存した勤務表を開けませんでした: %@", arguments: localizedError(error))
+            statusMessage = localizedMessage("保存したPDFを開けませんでした: %@", arguments: localizedError(error))
         }
     }
 
@@ -2057,7 +2036,7 @@ struct ContentView: View {
             try StoredScheduleStore.deleteFile(for: schedule)
             savedSchedules.removeAll { $0.id == schedule.id }
         } catch {
-            statusMessage = localizedMessage("保存した勤務表を削除できませんでした: %@", arguments: localizedError(error))
+            statusMessage = localizedMessage("保存したPDFを削除できませんでした: %@", arguments: localizedError(error))
         }
     }
 
@@ -2075,7 +2054,7 @@ struct ContentView: View {
         pendingMissingShiftTitles = []
         ignoredMissingShiftTitles = []
         isMissingShiftSelectionPresented = false
-        statusMessage = localizedMessage("勤務表を解析中です。")
+        statusMessage = localizedMessage("PDFを解析中です。")
 
         Task {
             do {
@@ -2123,8 +2102,8 @@ struct ContentView: View {
             importAlertTitle = "対応していないPDFです"
             importAlertMessage = "文字データを持ち、日付が横または縦に連続して並ぶ表形式のPDFを選択してください。"
         case .unreadableFile:
-            importAlertTitle = "勤務表を読み込めません"
-            importAlertMessage = "勤務表ファイルを開けませんでした。"
+            importAlertTitle = "PDFをスキャンできません。"
+            importAlertMessage = "PDFファイルを開けませんでした。"
         }
 
         isImportAlertPresented = true
@@ -2132,7 +2111,7 @@ struct ContentView: View {
 
     private func prepareCalendarRegistration() {
         guard !extractedCells.isEmpty else {
-            statusMessage = localizedMessage("勤務表を読み込んでください。")
+            statusMessage = localizedMessage("PDFをスキャンしてください。")
             return
         }
 
@@ -2366,10 +2345,10 @@ struct ContentView: View {
         }
 
         if CalendarDestination(rawValue: calendarDestination) == .notion {
-            return "勤務表に含まれる「休」を、00:00〜23:59の時間付きデータとして登録できます。"
+            return "PDFからスキャンされた『休』を、00:00〜23:59の時間付きデータとして登録できます。"
         }
 
-        return "勤務表に含まれる「休」を、時間を指定しない終日イベントとして登録できます。"
+        return "PDFからスキャンされた『休』を、時間を指定しない終日イベントとして登録できます。"
     }
 
     private func registerAppleCalendarEvents(
@@ -2925,19 +2904,6 @@ struct ContentView: View {
         return String(day)
     }
 
-    private func weekdayText(for cell: ExtractedShiftCell) -> String {
-        guard let day = Int(cell.dateText),
-              let selectedYearMonth,
-              let weekdayIndex = selectedYearMonth.weekdayIndex(for: day) else {
-            return ""
-        }
-
-        let weekdays = locale.identifier.hasPrefix("en")
-            ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-            : ["日", "月", "火", "水", "木", "金", "土"]
-        return weekdays[weekdayIndex - 1]
-    }
-
     private static func yearMonth(from url: URL) -> YearMonth? {
         let fileName = url.deletingPathExtension().lastPathComponent
         let parts = fileName.split(separator: "-")
@@ -3214,7 +3180,7 @@ struct ToolbarSelectorButtonStyleD: ButtonStyle {
                 minHeight: buttonHeight,
                 maxHeight: buttonHeight
             )
-            .background(.white.opacity(configuration.isPressed ? 0.16 : 0.07), in: shape)
+            .background(Color.secondary.opacity(configuration.isPressed ? 0.32 : 0.22), in: shape)
             .overlay {
                 shape.stroke(.white.opacity(configuration.isPressed ? 0.34 : 0.14), lineWidth: 1)
             }
@@ -3246,8 +3212,8 @@ struct ToolbarNavigationButtonStyleD: ButtonStyle {
             .frame(
                 minWidth: 0,
                 maxWidth: fillsAvailableWidth ? .infinity : nil,
-                minHeight: 40,
-                maxHeight: 40,
+                minHeight: 32,
+                maxHeight: 32,
                 alignment: .center
             )
 #else
@@ -3258,7 +3224,7 @@ struct ToolbarNavigationButtonStyleD: ButtonStyle {
             .background(
                 accented
                     ? Color.accentColor.opacity(configuration.isPressed ? 0.23 : 0.13)
-                    : Color.white.opacity(configuration.isPressed ? 0.13 : 0.055),
+                    : Color.secondary.opacity(configuration.isPressed ? 0.32 : 0.22),
                 in: shape
             )
             .overlay {
@@ -3287,7 +3253,7 @@ struct ToolbarUtilityButtonStyleD: ButtonStyle {
             .foregroundStyle(Color.primary.opacity(configuration.isPressed ? 1 : 0.76))
             .padding(.horizontal, 10)
             .frame(minWidth: 36, minHeight: 32, maxHeight: 32)
-            .background(.white.opacity(configuration.isPressed ? 0.12 : 0.035), in: shape)
+            .background(Color.primary.opacity(configuration.isPressed ? 0.12 : 0.06), in: shape)
             .contentShape(shape)
             .opacity(isEnabled ? 1 : 0.45)
             .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
