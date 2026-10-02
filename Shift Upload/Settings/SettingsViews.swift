@@ -424,7 +424,7 @@ private struct ShiftHubMacSettingsView: View {
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("休の登録"),
-                    detail: localized("「休」は登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。")
+                    detail: localized("「休」は登録時に含めるか選択できます。イベント管理で設定した時間で登録し、終日設定の場合はNotionに日付のみで保存します。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
@@ -814,7 +814,7 @@ private struct ShiftHubAboutView: View {
                 )
                 ShiftHubAboutRow(
                     title: "休みデータの登録",
-                    detail: "設定した変換元の文字列は、登録時に含めるか選択できます。AppleカレンダーとGoogleカレンダーでは終日、Notionでは00:00-23:59の時間付きデータとして登録します。"
+                    detail: "設定した変換元の文字列は、登録時に含めるか選択できます。イベント管理で設定した時間で登録し、終日設定の場合はNotionに日付のみで保存します。"
                 )
                 ShiftHubAboutRow(
                     title: "日付カードの表示",
@@ -1107,7 +1107,7 @@ struct MissingShiftSelectionView: View {
 
 private struct ShiftDefinitionRegistrationView: View {
     let locale: Locale
-    let onSave: (String, Int, Int) -> Void
+    let onSave: (String, Int, Int, Bool) -> Void
     let isEditing: Bool
 
     @Environment(\.dismiss) private var dismiss
@@ -1117,13 +1117,14 @@ private struct ShiftDefinitionRegistrationView: View {
     @State private var title = ""
     @State private var startDate: Date
     @State private var endDate: Date
+    @State private var isAllDay: Bool
     @State private var validationMessage: String?
     @FocusState private var isTextFieldFocused: Bool
 
     init(
         locale: Locale,
         initialDefinition: ShiftDefinition? = nil,
-        onSave: @escaping (String, Int, Int) -> Void
+        onSave: @escaping (String, Int, Int, Bool) -> Void
     ) {
         self.locale = locale
         self.onSave = onSave
@@ -1131,6 +1132,7 @@ private struct ShiftDefinitionRegistrationView: View {
         _title = State(initialValue: initialDefinition?.title ?? "")
         _startDate = State(initialValue: Self.date(from: initialDefinition?.startMinutes ?? 510))
         _endDate = State(initialValue: Self.date(from: initialDefinition?.endMinutes ?? 1050))
+        _isAllDay = State(initialValue: initialDefinition?.isAllDay ?? false)
     }
 
     private func localized(_ key: String) -> String {
@@ -1177,7 +1179,7 @@ private struct ShiftDefinitionRegistrationView: View {
 
         let startMinutes = Self.minutes(from: startDate)
         let endMinutes = Self.minutes(from: endDate)
-        guard endMinutes >= startMinutes else {
+        guard isAllDay || endMinutes >= startMinutes else {
             validationMessage = localized("終了時刻は開始時刻以降にしてください。")
             return
         }
@@ -1185,7 +1187,8 @@ private struct ShiftDefinitionRegistrationView: View {
         onSave(
             trimmedTitle,
             startMinutes,
-            endMinutes
+            endMinutes,
+            isAllDay
         )
         dismiss()
     }
@@ -1237,27 +1240,31 @@ private struct ShiftDefinitionRegistrationView: View {
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                     }
 
-                Text(localized("開始時間と終了時間"))
-                    .font(.headline)
-                    .padding(.top, 8)
+                Toggle(localized("終日"), isOn: $isAllDay)
 
-                HStack(spacing: 8) {
-                    DatePicker(
-                        localized("開始"),
-                        selection: $startDate,
-                        displayedComponents: .hourAndMinute
-                    )
-                    .environment(\.locale, timePickerLocale)
+                if !isAllDay {
+                    Text(localized("開始時間と終了時間"))
+                        .font(.headline)
+                        .padding(.top, 8)
 
-                    Text("-")
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        DatePicker(
+                            localized("開始"),
+                            selection: $startDate,
+                            displayedComponents: .hourAndMinute
+                        )
+                        .environment(\.locale, timePickerLocale)
 
-                    DatePicker(
-                        localized("終了"),
-                        selection: $endDate,
-                        displayedComponents: .hourAndMinute
-                    )
-                    .environment(\.locale, timePickerLocale)
+                        Text("-")
+                            .foregroundStyle(.secondary)
+
+                        DatePicker(
+                            localized("終了"),
+                            selection: $endDate,
+                            displayedComponents: .hourAndMinute
+                        )
+                        .environment(\.locale, timePickerLocale)
+                    }
                 }
             }
             .padding(24)
@@ -1286,30 +1293,36 @@ private struct ShiftDefinitionRegistrationView: View {
 
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text(localized("開始"))
-                            Spacer()
-                            DatePicker(
-                                "",
-                                selection: $startDate,
-                                displayedComponents: .hourAndMinute
-                            )
-                            .labelsHidden()
-                            .environment(\.locale, timePickerLocale)
-                        }
+                        Toggle(localized("終日"), isOn: $isAllDay)
 
-                        Divider()
+                        if !isAllDay {
+                            Divider()
 
-                        HStack {
-                            Text(localized("終了"))
-                            Spacer()
-                            DatePicker(
-                                "",
-                                selection: $endDate,
-                                displayedComponents: .hourAndMinute
-                            )
-                            .labelsHidden()
-                            .environment(\.locale, timePickerLocale)
+                            HStack {
+                                Text(localized("開始"))
+                                Spacer()
+                                DatePicker(
+                                    "",
+                                    selection: $startDate,
+                                    displayedComponents: .hourAndMinute
+                                )
+                                .labelsHidden()
+                                .environment(\.locale, timePickerLocale)
+                            }
+
+                            Divider()
+
+                            HStack {
+                                Text(localized("終了"))
+                                Spacer()
+                                DatePicker(
+                                    "",
+                                    selection: $endDate,
+                                    displayedComponents: .hourAndMinute
+                                )
+                                .labelsHidden()
+                                .environment(\.locale, timePickerLocale)
+                            }
                         }
                     }
                     .padding(16)
@@ -1320,7 +1333,7 @@ private struct ShiftDefinitionRegistrationView: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                 } header: {
-                    Text(localized("開始時間と終了時間"))
+                    Text(localized("日時"))
                 }
 
                 Section {
@@ -1432,7 +1445,7 @@ struct ShiftDefinitionSettingsView: View {
 
 #if os(macOS)
                 Button("完了") {
-                    if definitions.contains(where: { $0.endMinutes < $0.startMinutes }) {
+                    if definitions.contains(where: { !$0.isAllDay && $0.endMinutes < $0.startMinutes }) {
                         isInvalidTimeAlertPresented = true
                     } else {
                         dismiss()
@@ -1529,12 +1542,13 @@ struct ShiftDefinitionSettingsView: View {
         }
 #endif
         .sheet(isPresented: $isRegistrationPresented) {
-            ShiftDefinitionRegistrationView(locale: locale) { title, startMinutes, endMinutes in
+            ShiftDefinitionRegistrationView(locale: locale) { title, startMinutes, endMinutes, isAllDay in
                 definitions.append(
                     ShiftDefinition(
                         title: title,
                         startMinutes: startMinutes,
-                        endMinutes: endMinutes
+                        endMinutes: endMinutes,
+                        isAllDay: isAllDay
                     )
                 )
             }
@@ -1543,13 +1557,14 @@ struct ShiftDefinitionSettingsView: View {
             ShiftDefinitionRegistrationView(
                 locale: locale,
                 initialDefinition: definition
-            ) { title, startMinutes, endMinutes in
+            ) { title, startMinutes, endMinutes, isAllDay in
                 guard let index = definitions.firstIndex(where: { $0.id == definition.id }) else {
                     return
                 }
                 definitions[index].title = title
                 definitions[index].startMinutes = startMinutes
                 definitions[index].endMinutes = endMinutes
+                definitions[index].isAllDay = isAllDay
             }
         }
         .alert("保存できません", isPresented: $isInvalidTimeAlertPresented) {
@@ -1724,6 +1739,10 @@ struct CalendarSettingsView: View {
     @AppStorage("googleCalendarName") private var googleCalendarName = ""
     @AppStorage("googleRestEventTitle") private var googleRestEventTitle = ""
     @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
+    @AppStorage(
+        CalHubWidgetSharedData.sundayInRedPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isSundayInRedEnabled = false
     @AppStorage("googleNotesEnabled") private var googleNotesEnabled = true
     @AppStorage("googleLocationEnabled") private var googleLocationEnabled = true
     @AppStorage("googleURLEnabled") private var googleURLEnabled = true
@@ -1968,6 +1987,10 @@ struct CalendarSettingsView: View {
                         }
                     }
 
+                    calendarSection("カレンダー表示", systemImage: "calendar") {
+                        Toggle("日曜日を赤で表示", isOn: $isSundayInRedEnabled)
+                    }
+
                     calendarSection("登録時の文字変換", systemImage: "textformat") {
                         switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
                         case .apple:
@@ -2046,6 +2069,9 @@ struct CalendarSettingsView: View {
         }
         .onChange(of: googleCalendarProvider.calendars) {
             updateGoogleCalendarName()
+        }
+        .onChange(of: isSundayInRedEnabled) {
+            CalHubWidgetSharedData.reloadTimelines()
         }
         .onChange(of: notionToken) {
             KeychainStore.set(notionToken, for: "notion-access-token")

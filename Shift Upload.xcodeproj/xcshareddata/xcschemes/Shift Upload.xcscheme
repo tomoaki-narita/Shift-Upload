@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "0826483B304FBF7600BEFF29"
-               BuildableName = "Shift Upload.app"
+               BuildableName = "Cal Hub.app"
                ReferencedContainer = "container:Shift Upload.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "0826483B304FBF7600BEFF29"
-            BuildableName = "Shift Upload.app"
+            BuildableName = "Cal Hub.app"
             ReferencedContainer = "container:Shift Upload.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -61,7 +61,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "0826483B304FBF7600BEFF29"
-            BuildableName = "Shift Upload.app"
+            BuildableName = "Cal Hub.app"
             ReferencedContainer = "container:Shift Upload.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

@@ -6,15 +6,72 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A10000000000000000000020 /* Shift Upload/WidgetCalendarSharedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000010 /* Shift Upload/WidgetCalendarSharedData.swift */; };
+		A10000000000000000000021 /* Shift Upload/WidgetCalendarSharedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000010 /* Shift Upload/WidgetCalendarSharedData.swift */; };
+		A10000000000000000000038 /* CalHubWidgetExtension-iOS.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* CalHubWidgetExtension-iOS.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A10000000000000000000039 /* CalHubWidgetExtension-macOS.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* CalHubWidgetExtension-macOS.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A10000000000000000000040 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08264834304FBF7600BEFF29 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000044;
+			remoteInfo = "CalHubWidgetExtension-iOS";
+		};
+		A10000000000000000000041 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08264834304FBF7600BEFF29 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000045;
+			remoteInfo = "CalHubWidgetExtension-macOS";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A10000000000000000000036 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A10000000000000000000039 /* CalHubWidgetExtension-macOS.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000037 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A10000000000000000000038 /* CalHubWidgetExtension-iOS.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		0826483C304FBF7600BEFF29 /* Shift Upload.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Shift Upload.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		0826483C304FBF7600BEFF29 /* Cal Hub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Cal Hub.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Shift Hub iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000010 /* Shift Upload/WidgetCalendarSharedData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shift Upload/WidgetCalendarSharedData.swift"; sourceTree = "<group>"; };
+		A10000000000000000000011 /* CalHubWidgetExtension-iOS.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "CalHubWidgetExtension-iOS.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000012 /* CalHubWidgetExtension-macOS.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "CalHubWidgetExtension-macOS.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		0826483E304FBF7600BEFF29 /* Shift Upload */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Shift Upload";
+			sourceTree = "<group>";
+		};
+		A10000000000000000000004 /* CalHubWidgetExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = CalHubWidgetExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +91,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000000000000000000030 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000031 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -41,17 +112,29 @@
 			isa = PBXGroup;
 			children = (
 				0826483E304FBF7600BEFF29 /* Shift Upload */,
+				A10000000000000000000004 /* CalHubWidgetExtension */,
 				0826483D304FBF7600BEFF29 /* Products */,
+				08BF252C306D219600E854CE /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
 		0826483D304FBF7600BEFF29 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				0826483C304FBF7600BEFF29 /* Shift Upload.app */,
+				0826483C304FBF7600BEFF29 /* Cal Hub.app */,
 				08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */,
+				A10000000000000000000011 /* CalHubWidgetExtension-iOS.appex */,
+				A10000000000000000000012 /* CalHubWidgetExtension-macOS.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		08BF252C306D219600E854CE /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000010 /* Shift Upload/WidgetCalendarSharedData.swift */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -64,10 +147,12 @@
 				08264838304FBF7600BEFF29 /* Sources */,
 				08264839304FBF7600BEFF29 /* Frameworks */,
 				0826483A304FBF7600BEFF29 /* Resources */,
+				A10000000000000000000036 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A10000000000000000000043 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				0826483E304FBF7600BEFF29 /* Shift Upload */,
@@ -75,8 +160,8 @@
 			name = "Shift Upload";
 			packageProductDependencies = (
 			);
-			productName = "Shift Upload";
-			productReference = 0826483C304FBF7600BEFF29 /* Shift Upload.app */;
+			productName = "Cal Hub";
+			productReference = 0826483C304FBF7600BEFF29 /* Cal Hub.app */;
 			productType = "com.apple.product-type.application";
 		};
 		08264854304FBF7600BEFF29 /* Shift Hub iOS */ = {
@@ -86,10 +171,12 @@
 				08264852304FBF7600BEFF29 /* Sources */,
 				08264851304FBF7600BEFF29 /* Frameworks */,
 				08264853304FBF7600BEFF29 /* Resources */,
+				A10000000000000000000037 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A10000000000000000000042 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				0826483E304FBF7600BEFF29 /* Shift Upload */,
@@ -100,6 +187,50 @@
 			productName = "Shift Hub iOS";
 			productReference = 08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A10000000000000000000044 /* CalHubWidgetExtension-iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000046 /* Build configuration list for PBXNativeTarget "CalHubWidgetExtension-iOS" */;
+			buildPhases = (
+				A10000000000000000000034 /* Sources */,
+				A10000000000000000000030 /* Frameworks */,
+				A10000000000000000000032 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000004 /* CalHubWidgetExtension */,
+			);
+			name = "CalHubWidgetExtension-iOS";
+			packageProductDependencies = (
+			);
+			productName = "CalHubWidgetExtension-iOS";
+			productReference = A10000000000000000000011 /* CalHubWidgetExtension-iOS.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		A10000000000000000000045 /* CalHubWidgetExtension-macOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000047 /* Build configuration list for PBXNativeTarget "CalHubWidgetExtension-macOS" */;
+			buildPhases = (
+				A10000000000000000000035 /* Sources */,
+				A10000000000000000000031 /* Frameworks */,
+				A10000000000000000000033 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000004 /* CalHubWidgetExtension */,
+			);
+			name = "CalHubWidgetExtension-macOS";
+			packageProductDependencies = (
+			);
+			productName = "CalHubWidgetExtension-macOS";
+			productReference = A10000000000000000000012 /* CalHubWidgetExtension-macOS.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -121,7 +252,26 @@
 					};
 					08264854304FBF7600BEFF29 = {
 						SystemCapabilities = {
+							com.apple.ApplicationGroups = {
+								enabled = 1;
+							};
 							com.apple.iCloud = {
+								enabled = 1;
+							};
+						};
+					};
+					A10000000000000000000044 = {
+						CreatedOnToolsVersion = 26.6;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups = {
+								enabled = 1;
+							};
+						};
+					};
+					A10000000000000000000045 = {
+						CreatedOnToolsVersion = 26.6;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups = {
 								enabled = 1;
 							};
 						};
@@ -145,6 +295,8 @@
 			targets = (
 				0826483B304FBF7600BEFF29 /* Shift Upload */,
 				08264854304FBF7600BEFF29 /* Shift Hub iOS */,
+				A10000000000000000000044 /* CalHubWidgetExtension-iOS */,
+				A10000000000000000000045 /* CalHubWidgetExtension-macOS */,
 			);
 		};
 /* End PBXProject section */
@@ -158,6 +310,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		08264853304FBF7600BEFF29 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000032 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000033 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -181,7 +347,36 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000000000000000000034 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000020 /* Shift Upload/WidgetCalendarSharedData.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000035 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000021 /* Shift Upload/WidgetCalendarSharedData.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A10000000000000000000042 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000044 /* CalHubWidgetExtension-iOS */;
+			targetProxy = A10000000000000000000040 /* PBXContainerItemProxy */;
+		};
+		A10000000000000000000043 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000045 /* CalHubWidgetExtension-macOS */;
+			targetProxy = A10000000000000000000041 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		08264845304FBF7700BEFF29 /* Debug */ = {
@@ -325,7 +520,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Shift Upload-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Cal Hub";
 				INFOPLIST_KEY_CFBundleName = "Cal Hub";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "勤務イベントを登録するカレンダーを選択するために使用します。";
@@ -336,7 +532,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Upload";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Cal Hub";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -362,7 +558,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Shift Upload-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Cal Hub";
 				INFOPLIST_KEY_CFBundleName = "Cal Hub";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "勤務イベントを登録するカレンダーを選択するために使用します。";
@@ -373,7 +570,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Upload";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Cal Hub";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -409,6 +606,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS";
 				PRODUCT_NAME = "Shift Hub iOS";
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -452,6 +650,118 @@
 			};
 			name = Release;
 		};
+		A10000000000000000000048 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "CalHubWidgetExtension/CalHubWidgetExtension-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "CalHubWidgetExtension-iOS-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS.Widget";
+				PRODUCT_NAME = "CalHubWidgetExtension-iOS";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A10000000000000000000049 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "CalHubWidgetExtension/CalHubWidgetExtension-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "CalHubWidgetExtension-iOS-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS.Widget";
+				PRODUCT_NAME = "CalHubWidgetExtension-iOS";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A1000000000000000000004A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = CalHubWidgetExtension/CalHubWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "CalHubWidgetExtension-macOS-Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Upload.Widget";
+				PRODUCT_NAME = "CalHubWidgetExtension-macOS";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A1000000000000000000004B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = CalHubWidgetExtension/CalHubWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "CalHubWidgetExtension-macOS-Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Upload.Widget";
+				PRODUCT_NAME = "CalHubWidgetExtension-macOS";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -478,6 +788,24 @@
 			buildConfigurations = (
 				08264856304FBF7600BEFF29 /* Debug */,
 				08264857304FBF7600BEFF29 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000046 /* Build configuration list for PBXNativeTarget "CalHubWidgetExtension-iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000048 /* Debug */,
+				A10000000000000000000049 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000047 /* Build configuration list for PBXNativeTarget "CalHubWidgetExtension-macOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1000000000000000000004A /* Debug */,
+				A1000000000000000000004B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

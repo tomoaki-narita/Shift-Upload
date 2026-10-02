@@ -475,12 +475,22 @@ final class NotionPageWriter {
 
             if title == registeredRestSourceTitle {
                 guard includeRest else { continue }
+                let definition = definitionByTitle[normalizedTitle(registeredRestTitle)] ?? definitionByTitle[title]
+                let startMinutes: Int?
+                let endMinutes: Int?
+                if let definition {
+                    startMinutes = definition.isAllDay ? nil : definition.startMinutes
+                    endMinutes = definition.isAllDay ? nil : definition.endMinutes
+                } else {
+                    startMinutes = 0
+                    endMinutes = 1439
+                }
                 try await createPage(
                     title: registeredRestTitle,
                     yearMonth: yearMonth,
                     dayText: cell.dateText,
-                    startMinutes: 0,
-                    endMinutes: 1439,
+                    startMinutes: startMinutes,
+                    endMinutes: endMinutes,
                     token: token,
                     dataSourceID: dataSourceID,
                     titleProperty: titleProperty,
@@ -508,8 +518,8 @@ final class NotionPageWriter {
                 title: title,
                 yearMonth: yearMonth,
                 dayText: cell.dateText,
-                startMinutes: definition.startMinutes,
-                endMinutes: definition.endMinutes,
+                startMinutes: definition.isAllDay ? nil : definition.startMinutes,
+                endMinutes: definition.isAllDay ? nil : definition.endMinutes,
                 token: token,
                 dataSourceID: dataSourceID,
                 titleProperty: titleProperty,
@@ -1177,18 +1187,19 @@ struct NotionCalendarEventClient {
                     tagValue: parsedTagValue,
                     propertyValues: dynamicValues
                 )
-                let isAllDay = !start.contains("T")
-                let startDate = isAllDay
+                let end = dateValue["end"] as? String
+                let startIsDateOnly = !start.contains("T")
+                let isAllDay = startIsDateOnly || Self.isAllDayTimeRange(start: start, end: end)
+                let startDate = startIsDateOnly
                     ? Self.dateOnlyDate(from: start)
                     : Self.parseISO8601Date(start)
                 guard let startDate else { continue }
 
-                let end = dateValue["end"] as? String
                 let endDate: Date?
                 if let end {
-                    endDate = isAllDay
+                    endDate = !end.contains("T")
                         ? Self.dateOnlyDate(from: end)
-                        : (end.contains("T") ? Self.parseISO8601Date(end) : nil)
+                        : Self.parseISO8601Date(end)
                 } else {
                     endDate = nil
                 }
@@ -1209,7 +1220,7 @@ struct NotionCalendarEventClient {
 
                 let day: Int
                 if startsInMonth {
-                    day = (isAllDay
+                    day = (startIsDateOnly
                         ? dayInSelectedMonth(from: start, yearMonth: yearMonth)
                         : dayInSelectedMonth(from: startDate, yearMonth: yearMonth)) ?? 1
                 } else {
@@ -1518,6 +1529,29 @@ struct NotionCalendarEventClient {
         dateOnlyFormatter.date(from: String(value.prefix(10)))
     }
 
+    private static func isAllDayTimeRange(start: String, end: String?) -> Bool {
+        guard let end,
+              let startDate = parseISO8601Date(start),
+              let endDate = parseISO8601Date(end) else {
+            return false
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .autoupdatingCurrent
+        let startComponents = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: startDate)
+        let endComponents = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: endDate)
+
+        return startComponents.year == endComponents.year
+            && startComponents.month == endComponents.month
+            && startComponents.day == endComponents.day
+            && startComponents.hour == 0
+            && startComponents.minute == 0
+            && startComponents.second == 0
+            && endComponents.hour == 23
+            && endComponents.minute == 59
+            && endComponents.second == 0
+    }
+
     private func hasConfiguredTag(in property: Any?) -> Bool {
         let expected = tagValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !expected.isEmpty,
@@ -1594,6 +1628,8 @@ enum GoogleTokenStore {
     nonisolated private static let account = "google-calendar-oauth-tokens"
 
     nonisolated static func load() -> GoogleOAuthTokens? {
+        KeychainStore.set(GoogleOAuthConfiguration.clientID, for: "google-oauth-client-id")
+        KeychainStore.set(GoogleOAuthConfiguration.clientSecret ?? "", for: "google-oauth-client-secret")
         guard let value = KeychainStore.string(for: account),
               let data = value.data(using: .utf8) else {
             return nil
@@ -2651,13 +2687,23 @@ struct GoogleCalendarEventWriter {
 
             if title == registeredRestSourceTitle {
                 guard includeRest else { continue }
+                let definition = definitionByTitle[normalizedTitle(registeredRestTitle)] ?? definitionByTitle[title]
+                let startMinutes: Int?
+                let endMinutes: Int?
+                if let definition {
+                    startMinutes = definition.isAllDay ? nil : definition.startMinutes
+                    endMinutes = definition.isAllDay ? nil : definition.endMinutes
+                } else {
+                    startMinutes = nil
+                    endMinutes = nil
+                }
                 try await client.createEvent(
                     calendarID: calendarID,
                     title: registeredRestTitle,
                     yearMonth: yearMonth,
                     day: day,
-                    startMinutes: nil,
-                    endMinutes: nil,
+                    startMinutes: startMinutes,
+                    endMinutes: endMinutes,
                     metadata: metadata
                 )
                 savedCount += 1
@@ -2676,8 +2722,8 @@ struct GoogleCalendarEventWriter {
                 title: title,
                 yearMonth: yearMonth,
                 day: day,
-                startMinutes: definition.startMinutes,
-                endMinutes: definition.endMinutes,
+                startMinutes: definition.isAllDay ? nil : definition.startMinutes,
+                endMinutes: definition.isAllDay ? nil : definition.endMinutes,
                 metadata: metadata
             )
             savedCount += 1
@@ -2883,13 +2929,26 @@ final class AppleCalendarEventWriter {
 
             if title == registeredRestSourceTitle {
                 guard includeRest else { continue }
-                try saveAllDayEvent(
-                    title: registeredRestTitle,
-                    yearMonth: yearMonth,
-                    dayText: cell.dateText,
-                    calendar: calendar,
-                    metadata: metadata
-                )
+                let definition = definitionByTitle[normalizedTitle(registeredRestTitle)] ?? definitionByTitle[title]
+                if let definition, !definition.isAllDay {
+                    try saveTimedEvent(
+                        title: registeredRestTitle,
+                        yearMonth: yearMonth,
+                        dayText: cell.dateText,
+                        startMinutes: definition.startMinutes,
+                        endMinutes: definition.endMinutes,
+                        calendar: calendar,
+                        metadata: metadata
+                    )
+                } else {
+                    try saveAllDayEvent(
+                        title: registeredRestTitle,
+                        yearMonth: yearMonth,
+                        dayText: cell.dateText,
+                        calendar: calendar,
+                        metadata: metadata
+                    )
+                }
                 savedCount += 1
                 continue
             }
@@ -2901,15 +2960,25 @@ final class AppleCalendarEventWriter {
                 continue
             }
 
-            try saveTimedEvent(
-                title: title,
-                yearMonth: yearMonth,
-                dayText: cell.dateText,
-                startMinutes: definition.startMinutes,
-                endMinutes: definition.endMinutes,
-                calendar: calendar,
-                metadata: metadata
-            )
+            if definition.isAllDay {
+                try saveAllDayEvent(
+                    title: title,
+                    yearMonth: yearMonth,
+                    dayText: cell.dateText,
+                    calendar: calendar,
+                    metadata: metadata
+                )
+            } else {
+                try saveTimedEvent(
+                    title: title,
+                    yearMonth: yearMonth,
+                    dayText: cell.dateText,
+                    startMinutes: definition.startMinutes,
+                    endMinutes: definition.endMinutes,
+                    calendar: calendar,
+                    metadata: metadata
+                )
+            }
             savedCount += 1
         }
 

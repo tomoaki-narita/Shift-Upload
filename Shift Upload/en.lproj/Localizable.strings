@@ -21,9 +21,6 @@
 "Googleカレンダーへ登録" = "Register in Google Calendar";
 "Notionデータベースへ登録" = "Register in Notion database";
 "カレンダーへ登録中です..." = "Registering events...";
-"「休」も登録しますか？" = "Register days off too?";
-"休も登録" = "Register days off";
-"イベントだけ登録" = "Register events only";
 "キャンセル" = "Cancel";
 "表示" = "View";
 "表示形式" = "View mode";
@@ -91,6 +88,8 @@
 "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。保存済みイベントの一覧から登録できるほか、トップ画面ではタイトルと開始・終了日時を指定したイベントを登録できます。PDFスキャンと複数選択は同日登録に対応します。" = "Choose Apple Calendar, Google Calendar, or a Notion database as the destination. You can register from the saved event list, or specify a title and start and end date and time on the home screen. PDF scanning and multiple selection support same-day registration.";
 "タイトルと日時を指定して登録します。" = "Register an event with a title and date and time.";
 "イベントタイトルと時間を編集します。" = "Edit the event title and time.";
+"「休」は登録時に含めるか選択できます。イベント管理で設定した時間で登録し、終日設定の場合はNotionに日付のみで保存します。" = "Choose whether to include days off when registering. Days off use the time set in Event Management; all-day entries are stored as dates only in Notion.";
+"設定した変換元の文字列は、登録時に含めるか選択できます。イベント管理で設定した時間で登録し、終日設定の場合はNotionに日付のみで保存します。" = "Choose whether to include the configured source text when registering. It uses the time set in Event Management; all-day entries are stored as dates only in Notion.";
 "イベントタイトルを入力してください。" = "Enter an event title.";
 "保存できません" = "Cannot save";
 "詳細" = "Details";
@@ -213,6 +212,8 @@
 "登録先" = "Destination";
 "ここで選択したカレンダーを、イベントの登録先として使用します。" = "The selected calendar will be used for events.";
 "日本の祝日を表示" = "Show Japanese holidays";
+"カレンダー表示" = "Calendar display";
+"日曜日を赤で表示" = "Show Sundays in red";
 "Googleカレンダーの「日本の祝日」を、登録先と一緒に表示します。" = "Show Google Calendar's Japanese holidays together with the registration calendar.";
 "Appleカレンダー" = "Apple Calendar";
 "Googleカレンダー" = "Google Calendar";

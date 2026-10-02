@@ -31,6 +31,40 @@ private struct CalHubDateActionSheetHeightPreferenceKey: PreferenceKey {
     }
 }
 
+#if os(iOS)
+private struct IpadWindowMinimumSizeConfigurator: UIViewRepresentable {
+    func makeUIView(context: Context) -> IpadWindowMinimumSizeView {
+        let view = IpadWindowMinimumSizeView()
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: IpadWindowMinimumSizeView, context: Context) {
+        uiView.applyMinimumSize()
+    }
+}
+
+@MainActor
+private final class IpadWindowMinimumSizeView: UIView {
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        applyMinimumSize()
+    }
+
+    func applyMinimumSize() {
+        guard let windowScene = window?.windowScene,
+              windowScene.traitCollection.userInterfaceIdiom == .pad,
+              let restrictions = windowScene.sizeRestrictions else { return }
+
+        restrictions.minimumSize = CGSize(
+            width: max(375, restrictions.minimumSize.width),
+            height: max(667, restrictions.minimumSize.height)
+        )
+    }
+}
+#endif
+
 struct CalHubDateActionSheetContainer<Content: View>: View {
     private let content: Content
 #if os(iOS)
@@ -146,12 +180,12 @@ struct ContentView: View {
     @State private var isSettingsPresented = false
     @State private var isShiftUploadPresented = false
     @State private var isMissingShiftSelectionPresented = false
-    @State private var isRestRegistrationAlertPresented = false
     @State private var registrationPreview: RegistrationPreview?
     @State private var isRegisteringEvents = false
     @State private var selectedFileName = ""
     @State private var selectedScheduleID: UUID?
     @State private var selectedYearMonth: YearMonth?
+    @State private var widgetNavigationRequest: CalHubWidgetNavigation?
     @State private var recognizedItems: [RecognizedTextItem] = []
     @State private var extractedCells: [ExtractedShiftCell] = []
     @State private var workerNameDraft = ""
@@ -193,7 +227,33 @@ struct ContentView: View {
                 AppSettingsView(definitions: $shiftDefinitions)
             }
         }
+        .task {
+            CalHubWidgetSharedData.reloadTimelines()
+        }
+        .onOpenURL { url in
+            guard let date = CalHubWidgetSharedData.date(from: url) else { return }
+            Task { @MainActor in
+                isShiftUploadPresented = false
+                isSettingsPresented = false
+                widgetNavigationRequest = CalHubWidgetNavigation(
+                    date: date,
+                    eventID: CalHubWidgetSharedData.eventID(from: url),
+                    registerEvent: CalHubWidgetSharedData.requestsEventRegistration(from: url),
+                    opensCalendar: CalHubWidgetSharedData.requestsCalendarView(from: url)
+                )
+                let components = Calendar.current.dateComponents([.year, .month], from: date)
+                if let year = components.year, let month = components.month {
+                    selectedYearMonth = YearMonth(year: year, month: month)
+                }
+            }
+        }
         .environment(\.locale, Locale(identifier: appLanguage))
+#if os(iOS)
+        .background {
+            IpadWindowMinimumSizeConfigurator()
+                .frame(width: 0, height: 0)
+        }
+#endif
 #if os(macOS)
         .frame(minWidth: 720, minHeight: 720)
 #endif
@@ -537,6 +597,7 @@ struct ContentView: View {
             CalendarEventManagerView(
                 destination: destination,
                 initialYearMonth: selectedYearMonth,
+                widgetNavigationRequest: widgetNavigationRequest,
                 appleCalendarIdentifier: appleCalendarIdentifier,
                 googleCalendarID: googleCalendarID,
                 appleCalendarName: appleCalendarName,
@@ -626,19 +687,6 @@ struct ContentView: View {
             if isRegistrationDestinationMenuPresented {
                 isRegistrationDestinationMenuPresented = false
             }
-        }
-        .alert("「休」も登録しますか？", isPresented: $isRestRegistrationAlertPresented) {
-            Button("休も登録") {
-                registerSelectedCalendar(includeRest: true)
-            }
-
-            Button("イベントだけ登録") {
-                registerSelectedCalendar(includeRest: false)
-            }
-
-            Button("キャンセル", role: .cancel) {}
-        } message: {
-            Text(restRegistrationMessage)
         }
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1752,13 +1800,19 @@ struct ContentView: View {
         let normalizedTitle = normalizedShiftTitle(cell.valueText)
         guard !normalizedTitle.isEmpty else { return nil }
 
-        if isRestShiftTitle(cell.valueText) {
-            return localizedMessage("終日")
+        if let definition = shiftDefinitions.first(where: {
+            normalizedShiftTitle($0.title) == normalizedTitle
+        }) {
+            return definition.isAllDay ? localizedMessage("終日") : definition.timeRangeText
         }
 
-        return shiftDefinitions.first {
-            normalizedShiftTitle($0.title) == normalizedTitle
-        }?.timeRangeText
+        if isRestShiftTitle(cell.valueText) {
+            return CalendarDestination(rawValue: calendarDestination) == .notion
+                ? "00:00-23:59"
+                : localizedMessage("終日")
+        }
+
+        return nil
     }
 
     private func presentExtractedDayActions(for cell: ExtractedShiftCell, day: Int) {
@@ -1913,7 +1967,6 @@ struct ContentView: View {
         isExtractedShiftSelectionPresented = false
         pendingExtractedDayForEdit = nil
         editedExtractedShiftText = ""
-        isRestRegistrationAlertPresented = false
         statusMessage = localizedMessage("PDFのスキャンを解除しました。")
     }
 
@@ -2120,15 +2173,10 @@ struct ContentView: View {
             return
         }
 
-        let hasRestDays = extractedCells.contains { isRestShiftTitle($0.valueText) }
-        if hasRestDays {
-            isRestRegistrationAlertPresented = true
-        } else {
-            registerSelectedCalendar(includeRest: false)
-        }
+        registerSelectedCalendar()
     }
 
-    private func registerSelectedCalendar(includeRest: Bool) {
+    private func registerSelectedCalendar() {
         guard let targetYearMonth = selectedYearMonth else {
             statusMessage = localizedMessage("登録する年月を選択してください。")
             return
@@ -2137,7 +2185,7 @@ struct ContentView: View {
         registrationPreview = makeRegistrationPreview(
             cells: extractedCells,
             yearMonth: targetYearMonth,
-            includeRest: includeRest
+            includeRest: true
         )
     }
 
@@ -2255,13 +2303,26 @@ struct ContentView: View {
                     continue
                 }
 
+                let definition = definitionByTitle[normalizedShiftTitle(restTitle)] ?? definitionByTitle[title]
+                let startMinutes: Int?
+                let endMinutes: Int?
+                if let definition {
+                    startMinutes = definition.isAllDay ? nil : definition.startMinutes
+                    endMinutes = definition.isAllDay ? nil : definition.endMinutes
+                } else if destination == .notion {
+                    startMinutes = 0
+                    endMinutes = 1_439
+                } else {
+                    startMinutes = nil
+                    endMinutes = nil
+                }
                 events.append(
                     RegistrationPreviewEvent(
                         yearMonth: yearMonth,
                         day: day,
                         title: restTitle,
-                        startMinutes: nil,
-                        endMinutes: nil
+                        startMinutes: startMinutes,
+                        endMinutes: endMinutes
                     )
                 )
                 continue
@@ -2286,9 +2347,10 @@ struct ContentView: View {
                 continue
             }
 
-            guard (0...1_439).contains(definition.startMinutes),
-                  (0...1_439).contains(definition.endMinutes),
-                  definition.endMinutes >= definition.startMinutes else {
+            guard definition.isAllDay
+                    || ((0...1_439).contains(definition.startMinutes)
+                        && (0...1_439).contains(definition.endMinutes)
+                        && definition.endMinutes >= definition.startMinutes) else {
                 invalidItems.append(title)
                 continue
             }
@@ -2298,8 +2360,8 @@ struct ContentView: View {
                     yearMonth: yearMonth,
                     day: day,
                     title: title,
-                    startMinutes: definition.startMinutes,
-                    endMinutes: definition.endMinutes
+                    startMinutes: definition.isAllDay ? nil : definition.startMinutes,
+                    endMinutes: definition.isAllDay ? nil : definition.endMinutes
                 )
             )
         }
@@ -2333,22 +2395,6 @@ struct ContentView: View {
         return trimmedTitle.isEmpty
             ? (sourceTitle.isEmpty ? "休" : sourceTitle)
             : trimmedTitle
-    }
-
-    private var restRegistrationMessage: String {
-        if locale.identifier.hasPrefix("en") {
-            if CalendarDestination(rawValue: calendarDestination) == .notion {
-                return "Days off will be registered with a 00:00-23:59 time range."
-            }
-
-            return "Days off will be registered as all-day events without a specified time."
-        }
-
-        if CalendarDestination(rawValue: calendarDestination) == .notion {
-            return "PDFからスキャンされた『休』を、00:00〜23:59の時間付きデータとして登録できます。"
-        }
-
-        return "PDFからスキャンされた『休』を、時間を指定しない終日イベントとして登録できます。"
     }
 
     private func registerAppleCalendarEvents(
@@ -3324,7 +3370,7 @@ struct ShiftDefinitionRowView: View {
                 .font(.callout)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(definition.timeRangeText)
+            Text(definition.isAllDay ? ShiftHubLocalization.string("終日", locale: locale) : definition.timeRangeText)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -3351,7 +3397,7 @@ struct ShiftDefinitionRowView: View {
             Text(definition.title)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(definition.timeRangeText)
+            Text(definition.isAllDay ? ShiftHubLocalization.string("終日", locale: locale) : definition.timeRangeText)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

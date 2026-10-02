@@ -149,20 +149,31 @@ struct CalendarEventRecord: Codable, Identifiable, Hashable {
     }
 
     func menuDetail(locale: Locale) -> String {
-        guard spansMultipleDays,
-              let startDate,
-              let endDate else {
+        if spansMultipleDays, let startDate, let endDate {
+            let formatter = DateFormatter()
+            formatter.locale = locale
+            formatter.timeZone = .current
+            formatter.dateFormat = isAllDay
+                ? "MM-dd"
+                : "MM-dd \(locale.identifier.hasPrefix("en") ? "h:mm a" : "H:mm")"
+            return "\(formatter.string(from: startDate)) - \(formatter.string(from: endDate))"
+        }
+
+        if isAllDay {
             if detail.isEmpty || detail == "終日" || detail == "All day" {
                 return ShiftHubLocalization.string("終日", locale: locale)
             }
             return detail
         }
 
+        guard let startDate else { return detail }
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.locale = locale
         formatter.timeZone = .current
-        formatter.dateFormat = isAllDay ? "MM-dd" : "MM-dd H:mm"
-        return "\(formatter.string(from: startDate)) - \(formatter.string(from: endDate))"
+        formatter.dateFormat = locale.identifier.hasPrefix("en") ? "h:mm a" : "H:mm"
+        let startText = formatter.string(from: startDate)
+        guard let endDate else { return startText }
+        return "\(startText)-\(formatter.string(from: endDate))"
     }
 
     func starts(on day: Int, in yearMonth: YearMonth) -> Bool {

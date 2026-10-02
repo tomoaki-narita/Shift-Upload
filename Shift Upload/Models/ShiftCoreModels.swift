@@ -6,22 +6,25 @@ struct ShiftDefinition: Identifiable, Codable, Equatable {
     var title: String
     var startMinutes: Int
     var endMinutes: Int
+    var isAllDay: Bool
 
     var timeRangeText: String {
         "\(Self.timeText(from: startMinutes))-\(Self.timeText(from: endMinutes))"
     }
 
-    init(id: UUID = UUID(), title: String, startMinutes: Int, endMinutes: Int) {
+    init(id: UUID = UUID(), title: String, startMinutes: Int, endMinutes: Int, isAllDay: Bool = false) {
         self.id = id
         self.title = title
         self.startMinutes = startMinutes
         self.endMinutes = endMinutes
+        self.isAllDay = isAllDay
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        isAllDay = try container.decodeIfPresent(Bool.self, forKey: .isAllDay) ?? false
 
         if let startMinutes = try container.decodeIfPresent(Int.self, forKey: .startMinutes),
            let endMinutes = try container.decodeIfPresent(Int.self, forKey: .endMinutes) {
@@ -42,6 +45,7 @@ struct ShiftDefinition: Identifiable, Codable, Equatable {
         try container.encode(title, forKey: .title)
         try container.encode(startMinutes, forKey: .startMinutes)
         try container.encode(endMinutes, forKey: .endMinutes)
+        try container.encode(isAllDay, forKey: .isAllDay)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -50,6 +54,7 @@ struct ShiftDefinition: Identifiable, Codable, Equatable {
         case timeRange
         case startMinutes
         case endMinutes
+        case isAllDay
     }
 
     private static func timeText(from minutes: Int) -> String {

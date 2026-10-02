@@ -276,20 +276,34 @@ struct SingleShiftRegistrationView: View {
                 }
 
                 Picker("イベント", selection: $selectedTitle) {
-                    Text("休（終日）")
+                    let restDefinition = definitions.first {
+                        $0.title.trimmingCharacters(in: .whitespacesAndNewlines) == "休"
+                    }
+                    Text(restDefinition.map {
+                        "休  \($0.isAllDay ? "終日" : $0.timeRangeText)"
+                    } ?? "休（終日）")
                         .tag("休")
 
-                    ForEach(definitions) { definition in
-                        Text("\(definition.title)  \(definition.timeRangeText)")
+                    ForEach(definitions.filter {
+                        $0.title.trimmingCharacters(in: .whitespacesAndNewlines) != "休"
+                    }) { definition in
+                        Text("\(definition.title)  \(definition.isAllDay ? "終日" : definition.timeRangeText)")
                             .tag(definition.title)
                     }
                 }
 
                 if selectedTitle == "休" {
-                    Text("終日イベントとして登録します。")
-                        .foregroundStyle(.secondary)
+                    if let definition = definitions.first(where: {
+                        $0.title.trimmingCharacters(in: .whitespacesAndNewlines) == "休"
+                    }) {
+                        Text(definition.isAllDay ? "終日イベントとして登録します。" : "登録時間: \(definition.timeRangeText)")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("終日イベントとして登録します。")
+                            .foregroundStyle(.secondary)
+                    }
                 } else if let definition = definitions.first(where: { $0.title == selectedTitle }) {
-                    Text("登録時間: \(definition.timeRangeText)")
+                    Text(definition.isAllDay ? "終日イベントとして登録します。" : "登録時間: \(definition.timeRangeText)")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -857,18 +871,25 @@ struct ShiftSelectionView: View {
 
             ScrollView {
                 LazyVStack(spacing: 8) {
+                    let restDefinition = definitions.first {
+                        $0.title.trimmingCharacters(in: .whitespacesAndNewlines) == "休"
+                    }
                     shiftSelectionRow(
                         title: "休",
-                        detail: localized("終日"),
-                        symbol: "moon.zzz.fill",
+                        detail: restDefinition.map {
+                            $0.isAllDay ? localized("終日") : $0.timeRangeText
+                        } ?? localized("終日"),
+                        symbol: restDefinition?.isAllDay == false ? "clock.fill" : "moon.zzz.fill",
                         tint: .red
                     )
 
-                    ForEach(definitions) { definition in
+                    ForEach(definitions.filter {
+                        $0.title.trimmingCharacters(in: .whitespacesAndNewlines) != "休"
+                    }) { definition in
                         shiftSelectionRow(
                             title: definition.title,
-                            detail: definition.timeRangeText,
-                            symbol: "clock.fill",
+                            detail: definition.isAllDay ? localized("終日") : definition.timeRangeText,
+                            symbol: definition.isAllDay ? "sun.max.fill" : "clock.fill",
                             tint: tint
                         )
                     }

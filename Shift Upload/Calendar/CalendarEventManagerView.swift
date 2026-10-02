@@ -406,11 +406,13 @@ private struct MonthPageRenderKey: Equatable {
     let isCurrentMonth: Bool
     let displayMode: String
     let localeIdentifier: String
+    let isSundayInRedEnabled: Bool
     let isSelectionMode: Bool
     let selectedDays: Set<CalendarDaySelection>
     let isDeleting: Bool
     let isPopoverPresented: Bool
     let selectedBandEventID: String?
+    let selectedWidgetEventID: String?
     let selectedDay: Int?
     let selectedWeekDay: CalendarDaySelection?
     let isDayActionsPopoverPresented: Bool
@@ -885,6 +887,7 @@ struct CalendarDestinationSelector: View {
 
 struct CalendarEventManagerView: View {
     let destination: CalendarDestination
+    let widgetNavigationRequest: CalHubWidgetNavigation?
     let appleCalendarIdentifier: String
     let googleCalendarID: String
     let notionDataSourceID: String
@@ -917,14 +920,23 @@ struct CalendarEventManagerView: View {
     @Environment(\.locale) private var locale
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+#if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+#endif
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
     @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
+    @AppStorage(
+        CalHubWidgetSharedData.sundayInRedPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isSundayInRedEnabled = false
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: CalendarEventManagerModel
     @State private var selectedYear: Int
     @State private var selectedMonth: Int
     @State private var isYearScrollActive = false
     @State private var calendarFocusDate: Date
+    @State private var pendingWidgetNavigation: CalHubWidgetNavigation?
+    @State private var lastHandledWidgetNavigationID: UUID?
     @State private var yearModeReturnFocusDate: Date?
     @State private var isShiftSelectionPresented = false
     @State private var isDateTimeEventRegistrationPresented = false
@@ -945,6 +957,7 @@ struct CalendarEventManagerView: View {
     @State private var selectedWeekDayForActions: CalendarDaySelection?
 #if os(macOS)
     @State private var selectedTimelineEventForActions: CalendarBandEventSelection?
+    @State private var selectedWidgetEventForActions: CalendarBandEventSelection?
 #endif
     @State private var pendingBandEventForActions: CalendarBandEventSelection?
 #if os(iOS)
@@ -1029,6 +1042,7 @@ struct CalendarEventManagerView: View {
     init(
         destination: CalendarDestination,
         initialYearMonth: YearMonth?,
+        widgetNavigationRequest: CalHubWidgetNavigation? = nil,
         appleCalendarIdentifier: String,
         googleCalendarID: String,
         appleCalendarName: String,
@@ -1058,8 +1072,20 @@ struct CalendarEventManagerView: View {
         onSynchronize: @escaping () -> Void,
         isTitlebarLogoVisible: Bool
     ) {
-        let initial = initialYearMonth ?? .current
+        let widgetFocusDate = widgetNavigationRequest?.date
+        let focusComponents = widgetFocusDate.map {
+            Calendar.current.dateComponents([.year, .month], from: $0)
+        }
+        let initial: YearMonth
+        if let focusComponents,
+           let year = focusComponents.year,
+           let month = focusComponents.month {
+            initial = YearMonth(year: year, month: month)
+        } else {
+            initial = initialYearMonth ?? .current
+        }
         self.destination = destination
+        self.widgetNavigationRequest = widgetNavigationRequest
         self.appleCalendarIdentifier = appleCalendarIdentifier
         self.googleCalendarID = googleCalendarID
         self.notionDataSourceID = notionDataSourceID
@@ -1093,13 +1119,13 @@ struct CalendarEventManagerView: View {
         _weekPageTemplates = State(initialValue: Self.makeWeekPageTemplates(around: initial))
         _selectedYear = State(initialValue: initial.year)
         _selectedMonth = State(initialValue: initial.month)
-        _calendarFocusDate = State(initialValue: initial == .current
+        _calendarFocusDate = State(initialValue: widgetFocusDate ?? (initial == .current
             ? Date()
             : Calendar.current.date(from: DateComponents(
                 year: initial.year,
                 month: initial.month,
                 day: 1
-            )) ?? Date())
+            )) ?? Date()))
         _monthPageID = State(initialValue: Self.monthPageRadius)
         _pendingMonthPageID = State(initialValue: nil)
         _isMonthScrollActive = State(initialValue: false)
@@ -1141,6 +1167,7 @@ struct CalendarEventManagerView: View {
         selectedWeekDayForActions = nil
 #if os(macOS)
         selectedTimelineEventForActions = nil
+        selectedWidgetEventForActions = nil
 #endif
         eventBeingEdited = event
     }
@@ -1619,7 +1646,13 @@ struct CalendarEventManagerView: View {
                         .layoutPriority(1)
 #endif
 
+#if os(iOS)
+                    if horizontalSizeClass != .regular {
+                        Spacer(minLength: 0)
+                    }
+#else
                     Spacer(minLength: 0)
+#endif
 
                     monthNavigationControls
 
@@ -1846,6 +1879,14 @@ struct CalendarEventManagerView: View {
 #endif
         .onAppear {
             handleInitialCalendarAppearance()
+            if let widgetNavigationRequest {
+                handleWidgetNavigation(widgetNavigationRequest)
+            }
+            resolvePendingWidgetNavigation()
+        }
+        .onChange(of: widgetNavigationRequest) { _, request in
+            guard let request else { return }
+            handleWidgetNavigation(request)
         }
         .task(id: yearEventsTaskID) {
             guard let taskID = yearEventsTaskID else { return }
@@ -1865,6 +1906,7 @@ struct CalendarEventManagerView: View {
             onCalendarColorChange(color)
         }
         .onChange(of: model.events) { _, events in
+            resolvePendingWidgetNavigation()
             let logMessage =
                 "events changed model=\(model.diagnosticID.prefix(6)) count=\(events.count) "
                     + "month=\(model.yearMonth.year)-\(model.yearMonth.month)"
@@ -1878,6 +1920,11 @@ struct CalendarEventManagerView: View {
                 beginEventBandReveal()
             } else {
                 showAllEventBandsImmediately()
+            }
+        }
+        .onChange(of: model.isLoading) { _, isLoading in
+            if !isLoading {
+                resolvePendingWidgetNavigation()
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -2656,7 +2703,10 @@ struct CalendarEventManagerView: View {
                     .padding(.leading, 4)
                     .padding(.top, 6)
 #else
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(
+                        size: horizontalSizeClass == .regular ? 26 : 20,
+                        weight: .semibold
+                    ))
 #endif
                     .foregroundStyle(
                         today.year == yearMonth.year && today.month == yearMonth.month
@@ -2680,11 +2730,13 @@ struct CalendarEventManagerView: View {
                     let dateLabelCenterOffset = min(dateCellHeight * 0.3, dateLabelSize * 0.65)
                     let markerTopOffset = dateLabelCenterOffset + dateLabelSize * 0.55 + dateLabelGap
 #else
-                    let markerSize: CGFloat = 2
+                    let markerSize: CGFloat = horizontalSizeClass == .regular ? 3 : 2
                     let markerBottomInset: CGFloat = 1
-                    let dateLabelSize: CGFloat = 8
+                    let dateLabelSize: CGFloat = horizontalSizeClass == .regular ? 14 : 8
                     let dateLabelCenterOffset = (dateCellHeight - 2) / 2
-                    let markerTopOffset = dateCellHeight - markerSize - markerBottomInset
+                    let markerTopOffset = horizontalSizeClass == .regular
+                        ? dateLabelCenterOffset + dateLabelSize * 0.55 + 1
+                        : dateCellHeight - markerSize - markerBottomInset
 #endif
                     let todayNumber = today.year == yearMonth.year && today.month == yearMonth.month
                         ? today.day
@@ -2702,12 +2754,12 @@ struct CalendarEventManagerView: View {
                             let cellCenterX = (CGFloat(column) + 0.5) * cellWidth
 
                             let label = Text("\(day)")
-#if os(macOS)
                                 .font(.system(size: dateLabelSize, weight: .regular, design: .rounded))
-#else
-                                .font(.system(size: 8, weight: .regular, design: .rounded))
-#endif
-                                .foregroundColor(todayNumber == day ? .red : .primary)
+                                .foregroundColor(
+                                    todayNumber == day || (isSundayInRedEnabled && column == 0)
+                                        ? .red
+                                        : .primary
+                                )
                             context.draw(
                                 label,
                                 at: CGPoint(x: cellCenterX, y: cellTop + dateLabelCenterOffset),
@@ -2812,6 +2864,75 @@ struct CalendarEventManagerView: View {
         calendarDisplayMode = .month
     }
 
+    private func handleWidgetNavigation(_ request: CalHubWidgetNavigation) {
+        guard lastHandledWidgetNavigationID != request.id else { return }
+        lastHandledWidgetNavigationID = request.id
+        pendingWidgetNavigation = request
+        let components = Calendar.current.dateComponents([.year, .month], from: request.date)
+        guard let year = components.year, let month = components.month else { return }
+        let targetYearMonth = YearMonth(year: year, month: month)
+        if model.yearMonth != targetYearMonth {
+            selectYearMonth(targetYearMonth)
+        } else {
+            calendarFocusDate = request.date
+            if request.opensCalendar {
+                setCalendarDisplayMode(.month)
+            }
+        }
+        resolvePendingWidgetNavigation()
+    }
+
+    private func resolvePendingWidgetNavigation() {
+        guard didLoadInitialMonth,
+              let request = pendingWidgetNavigation,
+              !model.isLoading else { return }
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: request.date)
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day else { return }
+        let yearMonth = YearMonth(year: year, month: month)
+        guard model.yearMonth == yearMonth else { return }
+
+        if request.opensCalendar {
+            pendingWidgetNavigation = nil
+            selectedDayForActions = nil
+#if os(macOS)
+            isDayActionsPopoverPresented = false
+#endif
+            return
+        }
+
+        if request.registerEvent {
+            pendingWidgetNavigation = nil
+            presentDateTimeEventRegistration(forDay: day)
+            return
+        }
+
+        let dayEvents = model.events(for: day, yearMonth: yearMonth)
+        if let eventID = request.eventID,
+           let event = dayEvents.first(where: { $0.id == eventID }) {
+            pendingWidgetNavigation = nil
+#if os(macOS)
+            selectedBandEventForActions = nil
+            selectedTimelineEventForActions = nil
+            selectedWidgetEventForActions = CalendarBandEventSelection(
+                event: event,
+                yearMonth: yearMonth,
+                day: day
+            )
+#else
+            presentEventActions(for: event, day: day, yearMonth: yearMonth)
+#endif
+            return
+        }
+
+        pendingWidgetNavigation = nil
+        selectedDayForActions = day
+#if os(macOS)
+        isDayActionsPopoverPresented = true
+#endif
+    }
+
     private var displayedYearFooterTitle: String {
         locale.identifier.hasPrefix("en") ? String(selectedYear) : "\(selectedYear)年"
     }
@@ -2884,7 +3005,7 @@ struct CalendarEventManagerView: View {
                 - verticalInsets
                 - CGFloat(max(rowCount - 1, 0)) * gridSpacing
         ) / CGFloat(max(rowCount, 1))
-        return min(80, max(52, fittedCardHeight))
+        return max(52, fittedCardHeight)
 #else
         let gridSpacing: CGFloat = 8
         let rowCount = 6
@@ -5042,9 +5163,11 @@ struct CalendarEventManagerView: View {
                                     let isDayActionsPopoverPresentedForPage = isDayActionsPopoverPresented
                                     let selectedBandSelection = selectedBandEventForActions
                                         ?? selectedTimelineEventForActions
+                                    let selectedWidgetEvent = selectedWidgetEventForActions
 #else
                                     let isDayActionsPopoverPresentedForPage = false
                                     let selectedBandSelection = selectedBandEventForActions
+                                    let selectedWidgetEvent: CalendarBandEventSelection? = nil
 #endif
                                     let renderKey = MonthPageRenderKey(
                                         yearMonth: pageMonth,
@@ -5055,12 +5178,17 @@ struct CalendarEventManagerView: View {
                                         isCurrentMonth: pageMonth == model.yearMonth,
                                         displayMode: calendarDisplayMode.rawValue,
                                         localeIdentifier: locale.identifier,
+                                        isSundayInRedEnabled: isSundayInRedEnabled,
                                         isSelectionMode: isDaySelectionMode,
                                         selectedDays: selectedCalendarDays,
                                         isDeleting: model.isDeleting,
                                         isPopoverPresented: isBandPopoverPresented,
                                         selectedBandEventID: selectedBandSelection.map {
                                             "\($0.id)-\($0.yearMonth.year)-\($0.yearMonth.month)"
+                                        },
+                                        selectedWidgetEventID: selectedWidgetEvent.flatMap {
+                                            guard $0.yearMonth == pageMonth else { return nil }
+                                            return "\($0.event.id)-\($0.yearMonth.year)-\($0.yearMonth.month)-\($0.day)"
                                         },
                                         selectedDay: selectedDayForActions,
                                         selectedWeekDay: selectedWeekDayForActions,
@@ -5601,10 +5729,11 @@ struct CalendarEventManagerView: View {
             : ["日", "月", "火", "水", "木", "金", "土"]
 
         return LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(weekdays, id: \.self) { weekday in
+            ForEach(weekdays.indices, id: \.self) { index in
+                let weekday = weekdays[index]
                 Text(weekday)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSundayInRedEnabled && index == 0 ? Color.red : Color.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
             }
@@ -5697,6 +5826,7 @@ struct CalendarEventManagerView: View {
             .values
         ).sorted(by: calendarEventComesBefore)
         let isToday = Calendar.current.isDateInToday(gridDate.date)
+        let isSunday = Calendar.current.component(.weekday, from: gridDate.date) == 1
 #if os(iOS)
         let dateHeaderHeight: CGFloat = 14
 #else
@@ -5795,6 +5925,9 @@ struct CalendarEventManagerView: View {
 #else
                         .font(.body.weight(.semibold))
 #endif
+                        .foregroundStyle(
+                            isSundayInRedEnabled && isSunday && !isToday ? Color.red : Color.primary
+                        )
                         .lineLimit(1)
                         .minimumScaleFactor(0.65)
                         .allowsTightening(true)
@@ -5802,7 +5935,7 @@ struct CalendarEventManagerView: View {
                             if isToday {
                                 Circle()
                                     .fill(Color.red.opacity(0.35))
-                                    .padding(-2)
+                                    .padding(-4)
                             }
                         }
                     Spacer(minLength: 0)
@@ -5868,15 +6001,24 @@ struct CalendarEventManagerView: View {
                 .popover(
                     isPresented: Binding(
                         get: {
-                            (isWeekModeCard || gridDate.isInDisplayedMonth)
-                                && !isSelectionMode
-                                && isDayActionsPopoverPresented
-                                && (isWeekModeCard
-                                    ? selectedWeekDayForActions == selection
-                                    : selectedDayForActions == gridDate.day)
-                                && selectedBandEventForActions == nil
+                            let hasWidgetEventForThisDay = selectedWidgetEventForActions.map {
+                                $0.yearMonth == gridDate.yearMonth && $0.day == gridDate.day
+                            } ?? false
+                            return (isWeekModeCard || gridDate.isInDisplayedMonth)
+                                && (hasWidgetEventForThisDay
+                                    || (!isSelectionMode
+                                        && isDayActionsPopoverPresented
+                                        && (isWeekModeCard
+                                            ? selectedWeekDayForActions == selection
+                                            : selectedDayForActions == gridDate.day)
+                                        && selectedBandEventForActions == nil))
                         },
                         set: { isPresented in
+                            if !isPresented,
+                               selectedWidgetEventForActions?.yearMonth == gridDate.yearMonth,
+                               selectedWidgetEventForActions?.day == gridDate.day {
+                                selectedWidgetEventForActions = nil
+                            }
                             if isWeekModeCard {
                                 if !isPresented && selectedWeekDayForActions == selection {
                                     isDayActionsPopoverPresented = false
@@ -5891,13 +6033,23 @@ struct CalendarEventManagerView: View {
                         }
                     )
                 ) {
-                    dayActionsPopover(
-                        for: gridDate.day,
-                        yearMonth: isWeekModeCard ? gridDate.yearMonth : nil,
-                        additionalEvents: isWeekModeCard
-                            ? dayEvents + segmentsForDay.map(\.event)
-                            : segmentsForDay.map(\.event)
-                    )
+                    if let widgetSelection = selectedWidgetEventForActions,
+                       widgetSelection.yearMonth == gridDate.yearMonth,
+                       widgetSelection.day == gridDate.day {
+                        bandEventActionsPopover(
+                            for: widgetSelection.event,
+                            day: widgetSelection.day,
+                            yearMonth: widgetSelection.yearMonth
+                        )
+                    } else {
+                        dayActionsPopover(
+                            for: gridDate.day,
+                            yearMonth: isWeekModeCard ? gridDate.yearMonth : nil,
+                            additionalEvents: isWeekModeCard
+                                ? dayEvents + segmentsForDay.map(\.event)
+                                : segmentsForDay.map(\.event)
+                        )
+                    }
                 }
 #endif
             } else {
@@ -5945,7 +6097,7 @@ struct CalendarEventManagerView: View {
                 uniquingKeysWith: { first, _ in first }
             )
             .values
-        )
+        ).sorted(by: calendarEventComesBefore)
         let actionableEvents = dayEvents.filter { !$0.isReadOnly }
         let displayOnlyEvents = dayEvents.filter(\.isReadOnly)
 
@@ -6624,6 +6776,7 @@ struct CalendarEventManagerView: View {
                 selectedBandEventForActions = nil
 #if os(macOS)
                 selectedTimelineEventForActions = nil
+                selectedWidgetEventForActions = nil
 #endif
                 presentShiftSelection(for: event, deleteExisting: true)
             } label: {
@@ -6685,6 +6838,9 @@ struct CalendarEventManagerView: View {
         selectedDayForActions = nil
         selectedWeekDayForActions = nil
         selectedBandEventForActions = nil
+#if os(macOS)
+        selectedWidgetEventForActions = nil
+#endif
         pendingShiftRegistration = PendingShiftRegistration(
             day: event.day,
             event: event,

@@ -8,6 +8,7 @@ private let calendarFetchLogger = Logger(
     category: "CalendarFetch"
 )
 
+@MainActor
 final class CalendarEventManagerModel: ObservableObject {
     private struct MonthCacheEntry: Codable {
         let events: [CalendarEventRecord]
@@ -107,6 +108,9 @@ final class CalendarEventManagerModel: ObservableObject {
     private var backgroundCacheRefreshMonths = Set<YearMonth>()
     private var didPrunePersistentCache = false
     private var isMonthScrollActive = false
+#if DEBUG
+    private var debugPublisherMonitor: AnyCancellable?
+#endif
 
     // Retain a wider memory window and prepare the next few swipe destinations.
     private static let cacheMonthRadius = 6
@@ -147,6 +151,16 @@ final class CalendarEventManagerModel: ObservableObject {
         self.notionLocationProperty = notionLocationProperty
         self.notionURLProperty = notionURLProperty
         self.notionMetadataProperties = notionMetadataProperties
+#if DEBUG
+        let modelID = diagnosticID
+        debugPublisherMonitor = objectWillChange.sink { _ in
+            guard !Thread.isMainThread else { return }
+            let stack = Thread.callStackSymbols.prefix(24).joined(separator: "\n")
+            calendarFetchLogger.error(
+                "off-main calendar publisher model=\(modelID) stack=\(stack, privacy: .public)"
+            )
+        }
+#endif
     }
 
     func updateYearMonth(_ yearMonth: YearMonth) {
@@ -808,6 +822,7 @@ final class CalendarEventManagerModel: ObservableObject {
         if loadedNeighborCache {
             cachedMonthRevision += 1
         }
+        publishWidgetSnapshotIfRelevant(YearMonth.current)
 
         if let cachedMonth {
             let cacheLogMessage =
@@ -1580,12 +1595,87 @@ final class CalendarEventManagerModel: ObservableObject {
         monthCache[yearMonth] = cachedMonth
         displayFallbackMonthCache.removeValue(forKey: yearMonth)
         persistMonth(cachedMonth, for: yearMonth)
+        publishWidgetSnapshotIfRelevant(yearMonth)
         if yearMonth == self.yearMonth {
             display(cachedMonth)
         } else if monthDistance(yearMonth, from: self.yearMonth) <= 1
             || persistentCachePreloadAnchor.map({ monthDistance(yearMonth, from: $0) <= 1 }) == true {
             cachedMonthRevision += 1
         }
+    }
+
+    private func publishWidgetSnapshotIfRelevant(_ storedMonth: YearMonth) {
+        let currentMonth = YearMonth.current
+        let nextMonth = currentMonth.addingMonths(1)
+        guard storedMonth == currentMonth || storedMonth == nextMonth,
+              monthCache[currentMonth] != nil || displayFallbackMonthCache[currentMonth] != nil else {
+            return
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        guard let today = calendar.dateInterval(of: .day, for: .now)?.start,
+              let endOfNextMonth = calendar.date(
+                from: DateComponents(year: nextMonth.year, month: nextMonth.month, day: 1)
+              ) else { return }
+
+        let sourceEvents = [(currentMonth, cachedEvents(for: currentMonth)),
+                            (nextMonth, cachedEvents(for: nextMonth))]
+            .flatMap { item in item.1.map { (item.0, $0) } }
+        var seenEventIDs = Set<String>()
+        let events = sourceEvents
+            .filter { seenEventIDs.insert($0.1.id).inserted }
+            .compactMap { item -> CalHubWidgetEvent? in
+                let (month, event) = item
+                let eventDate = event.startDate ?? calendar.date(from: DateComponents(
+                    year: month.year,
+                    month: month.month,
+                    day: event.day
+                ))
+                guard let eventDate,
+                      (event.endDate ?? eventDate) >= today,
+                      eventDate < endOfNextMonth else { return nil }
+                return CalHubWidgetEvent(
+                    id: event.id,
+                    title: event.title,
+                    detail: event.detail,
+                    date: calendar.startOfDay(for: eventDate),
+                    startDate: event.startDate,
+                    endDate: event.endDate,
+                    isAllDay: event.isAllDay,
+                    isRestEvent: event.isRestEvent,
+                    red: event.calendarColor?.red,
+                    green: event.calendarColor?.green,
+                    blue: event.calendarColor?.blue
+                )
+            }
+            .enumerated()
+            .sorted { lhs, rhs in
+                let lhsStart = lhs.element.startDate ?? lhs.element.date
+                let rhsStart = rhs.element.startDate ?? rhs.element.date
+                if lhsStart != rhsStart { return lhsStart < rhsStart }
+                let titleOrder = lhs.element.title.localizedStandardCompare(rhs.element.title)
+                return titleOrder == .orderedSame ? lhs.offset < rhs.offset : titleOrder == .orderedAscending
+            }
+            .map(\.element)
+
+        CalHubWidgetSharedData.save(CalHubWidgetSnapshot(
+            configurationKey: persistentCacheNamespace,
+            localeIdentifier: localeIdentifier,
+            updatedAt: .now,
+            events: events,
+            sourceKind: destination.rawValue,
+            appleCalendarIdentifier: destination == .apple ? appleCalendarIdentifier : nil,
+            remoteConfiguration: CalHubWidgetRemoteConfiguration(
+                googleCalendarID: googleCalendarID,
+                googleShowJapaneseHolidays: googleShowJapaneseHolidays,
+                notionDataSourceID: notionDataSourceID,
+                notionDateProperty: notionDateProperty,
+                notionTitleProperty: notionTitleProperty,
+                notionTagProperty: notionTagProperty,
+                notionTagValue: notionTagValue
+            )
+        ))
     }
 
     private func removeCachedMonth(for yearMonth: YearMonth) {
