@@ -822,7 +822,11 @@ final class CalendarEventManagerModel: ObservableObject {
         if loadedNeighborCache {
             cachedMonthRevision += 1
         }
+#if os(iOS)
+        prepareWatchSyncSnapshot()
+#else
         publishWidgetSnapshotIfRelevant(YearMonth.current)
+#endif
 
         if let cachedMonth {
             let cacheLogMessage =
@@ -1659,7 +1663,7 @@ final class CalendarEventManagerModel: ObservableObject {
             }
             .map(\.element)
 
-        CalHubWidgetSharedData.save(CalHubWidgetSnapshot(
+        let snapshot = CalHubWidgetSnapshot(
             configurationKey: persistentCacheNamespace,
             localeIdentifier: localeIdentifier,
             updatedAt: .now,
@@ -1675,8 +1679,32 @@ final class CalendarEventManagerModel: ObservableObject {
                 notionTagProperty: notionTagProperty,
                 notionTagValue: notionTagValue
             )
-        ))
+        )
+        CalHubWidgetSharedData.save(snapshot)
+#if os(iOS)
+        CalHubWatchSyncManager.shared.publish(snapshot)
+#endif
     }
+
+#if os(iOS)
+    private func prepareWatchSyncSnapshot() {
+        let currentMonth = YearMonth.current
+        let nextMonth = currentMonth.addingMonths(1)
+
+        for month in [currentMonth, nextMonth] where monthCache[month] == nil {
+            if let cachedMonth = loadPersistentMonth(for: month) {
+                monthCache[month] = cachedMonth
+                if isPersistentCacheStale(cachedMonth) {
+                    enqueueBackgroundCacheRefresh(for: month)
+                }
+            } else {
+                enqueueBackgroundCacheRefresh(for: month)
+            }
+        }
+
+        publishWidgetSnapshotIfRelevant(currentMonth)
+    }
+#endif
 
     private func removeCachedMonth(for yearMonth: YearMonth) {
         monthCache.removeValue(forKey: yearMonth)

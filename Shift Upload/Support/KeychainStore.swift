@@ -16,24 +16,34 @@ enum KeychainStore {
         return legacyValue
     }
 
-    nonisolated static func set(_ value: String, for account: String) {
+    @discardableResult
+    nonisolated static func set(_ value: String, for account: String) -> OSStatus {
         var query = baseQuery(for: account)
         query[kSecAttrAccessGroup as String] = sharedAccessGroup
 
         guard !value.isEmpty else {
-            SecItemDelete(query as CFDictionary)
-            return
+            let status = SecItemDelete(query as CFDictionary)
+            return status == errSecItemNotFound ? errSecSuccess : status
         }
 
         let attributes: [String: Any] = [
             kSecValueData as String: Data(value.utf8)
         ]
 
-        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecItemNotFound {
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let status: OSStatus
+        if updateStatus == errSecItemNotFound {
             var item = query
             item[kSecValueData as String] = Data(value.utf8)
-            SecItemAdd(item as CFDictionary, nil)
+            status = SecItemAdd(item as CFDictionary, nil)
+        } else {
+            status = updateStatus
         }
+
+        if status != errSecSuccess {
+            NSLog("Keychain write failed for account %@ (status %d)", account, status)
+        }
+        return status
     }
 
     nonisolated private static func string(for account: String, accessGroup: String?) -> String? {

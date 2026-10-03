@@ -81,39 +81,63 @@ enum CalHubRemoteSnapshotLoader {
         guard let url = URL(string: "https://api.notion.com/v1/databases/\(configuration.notionDataSourceID)/query") else {
             throw URLError(.badURL)
         }
-        var body: [String: Any] = [
-            "page_size": 100,
-            "filter": [
-                "property": configuration.notionDateProperty,
-                "date": [
-                    "on_or_after": dayString(range.start),
-                    "before": dayString(range.end)
-                ]
+        let dateFilter: [String: Any] = [
+            "property": configuration.notionDateProperty,
+            "date": [
+                "on_or_after": dayString(range.start),
+                "before": dayString(range.end)
             ]
         ]
+        let filter: [String: Any]
         if !configuration.notionTagProperty.isEmpty, !configuration.notionTagValue.isEmpty {
-            body["filter"] = [
+            filter = [
                 "and": [
-                    body["filter"] as Any,
+                    dateFilter,
                     [
                         "property": configuration.notionTagProperty,
                         "multi_select": ["contains": configuration.notionTagValue]
                     ]
                 ]
             ]
+        } else {
+            filter = dateFilter
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("2022-06-28", forHTTPHeaderField: "Notion-Version")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let data = try await responseData(for: request)
-        let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let pages = payload?["results"] as? [[String: Any]] ?? []
-        return pages.compactMap {
-            notionEvent($0, configuration: configuration, snapshot: snapshot)
-        }
+
+        var cursor: String?
+        var events: [CalHubWidgetEvent] = []
+        var requestedCursors = Set<String>()
+        var pageCount = 0
+        repeat {
+            if let cursor, !requestedCursors.insert(cursor).inserted { break }
+            pageCount += 1
+            guard pageCount <= 100 else { break }
+
+            var body: [String: Any] = [
+                "page_size": 100,
+                "filter": filter
+            ]
+            if let cursor {
+                body["start_cursor"] = cursor
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("2022-06-28", forHTTPHeaderField: "Notion-Version")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let data = try await responseData(for: request)
+            guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let pages = payload["results"] as? [[String: Any]] else {
+                throw URLError(.cannotParseResponse)
+            }
+            events.append(contentsOf: pages.compactMap {
+                notionEvent($0, configuration: configuration, snapshot: snapshot)
+            })
+            cursor = payload["has_more"] as? Bool == true
+                ? payload["next_cursor"] as? String
+                : nil
+        } while cursor != nil
+        return deduplicated(events)
     }
 
     private static func googleEvent(
@@ -235,6 +259,11 @@ enum CalHubRemoteSnapshotLoader {
     private static func parsedDate(_ value: String?) -> Date? {
         guard let value else { return nil }
         if value.contains("T") {
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = fractional.date(from: value) {
+                return date
+            }
             return ISO8601DateFormatter().date(from: value)
         }
         let formatter = DateFormatter()

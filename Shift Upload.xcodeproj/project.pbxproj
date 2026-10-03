@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		082E46A8306F664300EED5C3 /* CalHubWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 082E469E306F664200EED5C3 /* CalHubWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		082E46B4306F667100EED5C3 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 082E46B3306F667100EED5C3 /* WidgetKit.framework */; };
+		082E46B6306F667100EED5C3 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 082E46B5306F667100EED5C3 /* SwiftUI.framework */; };
+		082E46C1306F667200EED5C3 /* CalHubWatchWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 082E46B1306F667100EED5C3 /* CalHubWatchWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A10000000000000000000020 /* Shift Upload/WidgetCalendarSharedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000010 /* Shift Upload/WidgetCalendarSharedData.swift */; };
 		A10000000000000000000021 /* Shift Upload/WidgetCalendarSharedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000010 /* Shift Upload/WidgetCalendarSharedData.swift */; };
 		A10000000000000000000038 /* CalHubWidgetExtension-iOS.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* CalHubWidgetExtension-iOS.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -14,6 +18,20 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		082E46A6306F664300EED5C3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08264834304FBF7600BEFF29 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 082E469D306F664200EED5C3;
+			remoteInfo = "CalHubWatch Watch App";
+		};
+		082E46BF306F667200EED5C3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08264834304FBF7600BEFF29 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 082E46B0306F667100EED5C3;
+			remoteInfo = CalHubWatchWidgetExtension;
+		};
 		A10000000000000000000040 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 08264834304FBF7600BEFF29 /* Project object */;
@@ -31,6 +49,28 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		082E46AC306F664300EED5C3 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				082E46A8306F664300EED5C3 /* CalHubWatch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		082E46C6306F667200EED5C3 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				082E46C1306F667200EED5C3 /* CalHubWatchWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000036 /* Embed App Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -57,16 +97,43 @@
 
 /* Begin PBXFileReference section */
 		0826483C304FBF7600BEFF29 /* Cal Hub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Cal Hub.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		082E469E306F664200EED5C3 /* CalHubWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "CalHubWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		082E46B1306F667100EED5C3 /* CalHubWatchWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CalHubWatchWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		082E46B3306F667100EED5C3 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		082E46B5306F667100EED5C3 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Shift Hub iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000010 /* Shift Upload/WidgetCalendarSharedData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shift Upload/WidgetCalendarSharedData.swift"; sourceTree = "<group>"; };
 		A10000000000000000000011 /* CalHubWidgetExtension-iOS.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "CalHubWidgetExtension-iOS.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000012 /* CalHubWidgetExtension-macOS.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "CalHubWidgetExtension-macOS.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		082E46C2306F667200EED5C3 /* Exceptions for "CalHubWatchWidget" folder in "CalHubWatchWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 082E46B0306F667100EED5C3 /* CalHubWatchWidgetExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		0826483E304FBF7600BEFF29 /* Shift Upload */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Shift Upload";
+			sourceTree = "<group>";
+		};
+		082E469F306F664200EED5C3 /* CalHubWatch Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "CalHubWatch Watch App";
+			sourceTree = "<group>";
+		};
+		082E46B7306F667100EED5C3 /* CalHubWatchWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				082E46C2306F667200EED5C3 /* Exceptions for "CalHubWatchWidget" folder in "CalHubWatchWidgetExtension" target */,
+			);
+			path = CalHubWatchWidget;
 			sourceTree = "<group>";
 		};
 		A10000000000000000000004 /* CalHubWidgetExtension */ = {
@@ -88,6 +155,22 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		082E469B306F664200EED5C3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		082E46AE306F667100EED5C3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				082E46B6306F667100EED5C3 /* SwiftUI.framework in Frameworks */,
+				082E46B4306F667100EED5C3 /* WidgetKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -113,6 +196,9 @@
 			children = (
 				0826483E304FBF7600BEFF29 /* Shift Upload */,
 				A10000000000000000000004 /* CalHubWidgetExtension */,
+				082E469F306F664200EED5C3 /* CalHubWatch Watch App */,
+				082E46B7306F667100EED5C3 /* CalHubWatchWidget */,
+				082E46B2306F667100EED5C3 /* Frameworks */,
 				0826483D304FBF7600BEFF29 /* Products */,
 				08BF252C306D219600E854CE /* Recovered References */,
 			);
@@ -125,8 +211,19 @@
 				08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */,
 				A10000000000000000000011 /* CalHubWidgetExtension-iOS.appex */,
 				A10000000000000000000012 /* CalHubWidgetExtension-macOS.appex */,
+				082E469E306F664200EED5C3 /* CalHubWatch Watch App.app */,
+				082E46B1306F667100EED5C3 /* CalHubWatchWidgetExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		082E46B2306F667100EED5C3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				082E46B3306F667100EED5C3 /* WidgetKit.framework */,
+				082E46B5306F667100EED5C3 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		08BF252C306D219600E854CE /* Recovered References */ = {
@@ -172,11 +269,13 @@
 				08264851304FBF7600BEFF29 /* Frameworks */,
 				08264853304FBF7600BEFF29 /* Resources */,
 				A10000000000000000000037 /* Embed App Extensions */,
+				082E46AC306F664300EED5C3 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				A10000000000000000000042 /* PBXTargetDependency */,
+				082E46A7306F664300EED5C3 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				0826483E304FBF7600BEFF29 /* Shift Upload */,
@@ -187,6 +286,52 @@
 			productName = "Shift Hub iOS";
 			productReference = 08BA15AC3053F4E600BDA779 /* Shift Hub iOS.app */;
 			productType = "com.apple.product-type.application";
+		};
+		082E469D306F664200EED5C3 /* CalHubWatch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 082E46A9306F664300EED5C3 /* Build configuration list for PBXNativeTarget "CalHubWatch Watch App" */;
+			buildPhases = (
+				082E469A306F664200EED5C3 /* Sources */,
+				082E469B306F664200EED5C3 /* Frameworks */,
+				082E469C306F664200EED5C3 /* Resources */,
+				082E46C6306F667200EED5C3 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				082E46C0306F667200EED5C3 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				082E469F306F664200EED5C3 /* CalHubWatch Watch App */,
+			);
+			name = "CalHubWatch Watch App";
+			packageProductDependencies = (
+			);
+			productName = "CalHubWatch Watch App";
+			productReference = 082E469E306F664200EED5C3 /* CalHubWatch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		082E46B0306F667100EED5C3 /* CalHubWatchWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 082E46C3306F667200EED5C3 /* Build configuration list for PBXNativeTarget "CalHubWatchWidgetExtension" */;
+			buildPhases = (
+				082E46AD306F667100EED5C3 /* Sources */,
+				082E46AE306F667100EED5C3 /* Frameworks */,
+				082E46AF306F667100EED5C3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				082E46B7306F667100EED5C3 /* CalHubWatchWidget */,
+			);
+			name = CalHubWatchWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = CalHubWatchWidgetExtension;
+			productReference = 082E46B1306F667100EED5C3 /* CalHubWatchWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 		A10000000000000000000044 /* CalHubWidgetExtension-iOS */ = {
 			isa = PBXNativeTarget;
@@ -239,7 +384,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2660;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 					0826483B304FBF7600BEFF29 = {
@@ -259,6 +404,12 @@
 								enabled = 1;
 							};
 						};
+					};
+					082E469D306F664200EED5C3 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					082E46B0306F667100EED5C3 = {
+						CreatedOnToolsVersion = 27.0;
 					};
 					A10000000000000000000044 = {
 						CreatedOnToolsVersion = 26.6;
@@ -297,6 +448,8 @@
 				08264854304FBF7600BEFF29 /* Shift Hub iOS */,
 				A10000000000000000000044 /* CalHubWidgetExtension-iOS */,
 				A10000000000000000000045 /* CalHubWidgetExtension-macOS */,
+				082E469D306F664200EED5C3 /* CalHubWatch Watch App */,
+				082E46B0306F667100EED5C3 /* CalHubWatchWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -310,6 +463,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		08264853304FBF7600BEFF29 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		082E469C306F664200EED5C3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		082E46AF306F667100EED5C3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -347,6 +514,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		082E469A306F664200EED5C3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		082E46AD306F667100EED5C3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000034 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -366,6 +547,16 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		082E46A7306F664300EED5C3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 082E469D306F664200EED5C3 /* CalHubWatch Watch App */;
+			targetProxy = 082E46A6306F664300EED5C3 /* PBXContainerItemProxy */;
+		};
+		082E46C0306F667200EED5C3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 082E46B0306F667100EED5C3 /* CalHubWatchWidgetExtension */;
+			targetProxy = 082E46BF306F667200EED5C3 /* PBXContainerItemProxy */;
+		};
 		A10000000000000000000042 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = A10000000000000000000044 /* CalHubWidgetExtension-iOS */;
@@ -650,6 +841,144 @@
 			};
 			name = Release;
 		};
+		082E46AA306F664300EED5C3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "CalHubWatch Watch App/CalHubWatch.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Cal Hub";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "net.unwraps.Shift-Hub.iOS";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		082E46AB306F664300EED5C3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "CalHubWatch Watch App/CalHubWatch.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Cal Hub";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "net.unwraps.Shift-Hub.iOS";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		082E46C4306F667200EED5C3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = CalHubWatchWidget/CalHubWatchWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CalHubWatchWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Cal Hub";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS.watchkitapp.widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		082E46C5306F667200EED5C3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = CalHubWatchWidget/CalHubWatchWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DU562ND7L2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CalHubWatchWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Cal Hub";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.unwraps.Shift-Hub.iOS.watchkitapp.widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 		A10000000000000000000048 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -788,6 +1117,24 @@
 			buildConfigurations = (
 				08264856304FBF7600BEFF29 /* Debug */,
 				08264857304FBF7600BEFF29 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		082E46A9306F664300EED5C3 /* Build configuration list for PBXNativeTarget "CalHubWatch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				082E46AA306F664300EED5C3 /* Debug */,
+				082E46AB306F664300EED5C3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		082E46C3306F667200EED5C3 /* Build configuration list for PBXNativeTarget "CalHubWatchWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				082E46C4306F667200EED5C3 /* Debug */,
+				082E46C5306F667200EED5C3 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

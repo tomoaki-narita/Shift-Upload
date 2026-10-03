@@ -70,6 +70,7 @@ private struct CalHubWidgetProvider: TimelineProvider {
         }
 
         let eventStore = EKEventStore()
+        eventStore.refreshSourcesIfNecessary()
         guard let selectedCalendar = eventStore.calendar(withIdentifier: calendarIdentifier) else {
             return nil
         }
@@ -105,6 +106,17 @@ private struct CalHubWidgetProvider: TimelineProvider {
                 green: fallbackAccent?.green,
                 blue: fallbackAccent?.blue
             )
+        }
+
+        let tomorrow = systemCalendar.date(byAdding: .day, value: 1, to: startDate) ?? startDate
+        let cachedHasFutureEvents = cachedSnapshot.events.contains {
+            ($0.startDate ?? $0.date) >= tomorrow
+        }
+        let refreshedHasFutureEvents = events.contains {
+            ($0.startDate ?? $0.date) >= tomorrow
+        }
+        guard !cachedHasFutureEvents || refreshedHasFutureEvents else {
+            return nil
         }
 
         return CalHubWidgetSnapshot(
@@ -854,8 +866,12 @@ private struct CalHubWeeklyDayGroup: Identifiable {
     let events: [CalHubWidgetEvent]
     let allDayMarkerEvents: [CalHubWidgetEvent]
     let remainingCount: Int
+    let isMonthHeader: Bool
 
-    var id: Date { date }
+    var id: String {
+        let prefix = isMonthHeader ? "month" : "day"
+        return "\(prefix)-\(date.timeIntervalSinceReferenceDate)"
+    }
 }
 
 private struct CalHubWeeklyWidgetView: View {
@@ -927,7 +943,24 @@ private struct CalHubWeeklyWidgetView: View {
                 } else {
                     VStack(alignment: .leading, spacing: rowSpacing) {
                         ForEach(dayGroups) { group in
-                            HStack(alignment: .center, spacing: dateToEventSpacing) {
+                            if group.isMonthHeader {
+                                Link(destination: CalHubWidgetFormat.deepLink(group.date, opensCalendar: true)
+                                    ?? CalHubWidgetFormat.deepLink(group.date)!) {
+                                    Text(CalHubWidgetFormat.date(
+                                        group.date,
+                                        format: locale.identifier.hasPrefix("ja") ? "yyyy年M月" : "MMMM yyyy",
+                                        locale: locale
+                                    ))
+                                    .font(.system(size: labelSize, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .frame(height: availableRowHeight, alignment: .center)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                HStack(alignment: .top, spacing: dateToEventSpacing) {
                                 Link(destination: CalHubWidgetFormat.deepLink(group.date)
                                     ?? URL(string: "calhub://calendar")!) {
                                     HStack(spacing: dateLabelSpacing) {
@@ -1012,6 +1045,7 @@ private struct CalHubWeeklyWidgetView: View {
                                                     showsCapsule: !isAllDay,
                                                     reservesCapsuleSpace: !group.allDayMarkerEvents.isEmpty && !isAllDay,
                                                     capsuleTitleSpacing: 7,
+                                                    capsuleMatchesContentHeight: true,
                                                     textLeadingInset: isAllDay
                                                         ? CalHubWidgetLayout.capsuleTitleSpacing
                                                             - CalHubWidgetLayout.allDayMarkerSpacing
@@ -1038,6 +1072,7 @@ private struct CalHubWeeklyWidgetView: View {
                                     }
                                 }
                             }
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1061,18 +1096,17 @@ private struct CalHubWeeklyWidgetView: View {
         }
         let candidatesByDay = candidateDays.map { day in
             let dayEvents = CalHubWidgetFormat.events(on: day, snapshot: entry.snapshot)
-            let hasTimedEvents = dayEvents.contains { !CalHubWidgetFormat.isAllDaySpan($0) }
-            let titleEvents = hasTimedEvents
-                ? dayEvents.filter { !CalHubWidgetFormat.isAllDaySpan($0) }
-                : dayEvents
-            let unfinishedEvents = CalHubWidgetFormat.stableSorted(
-                titleEvents.filter {
-                    CalHubWidgetFormat.startsAfterNow($0, now: entry.date)
-                }
-            ) {
+            let timedEvents = dayEvents.filter { !CalHubWidgetFormat.isAllDaySpan($0) }
+            let unfinishedTimedEvents = timedEvents.filter {
+                CalHubWidgetFormat.startsAfterNow($0, now: entry.date)
+            }
+            let titleEvents = unfinishedTimedEvents.isEmpty
+                ? dayEvents.filter(CalHubWidgetFormat.isAllDaySpan)
+                : unfinishedTimedEvents
+            let displayedEvents = CalHubWidgetFormat.stableSorted(titleEvents) {
                 CalHubWidgetFormat.eventComesBefore($0, $1)
             }
-            return (date: day, allEvents: dayEvents, events: unfinishedEvents)
+            return (date: day, allEvents: dayEvents, events: displayedEvents)
         }
         #if os(macOS)
         let displayedRowLimit = 9
@@ -1081,16 +1115,37 @@ private struct CalHubWeeklyWidgetView: View {
         #endif
         var displayedRowCount = 0
         var dayGroups: [CalHubWeeklyDayGroup] = []
+        var previousDate = today
         for day in candidatesByDay {
             guard displayedRowCount < displayedRowLimit else { break }
+
+            let startsNewMonth = !calendar.isDate(
+                day.date,
+                equalTo: previousDate,
+                toGranularity: .month
+            )
+            if startsNewMonth {
+                guard displayedRowLimit - displayedRowCount >= 2 else { break }
+                dayGroups.append(CalHubWeeklyDayGroup(
+                    date: day.date,
+                    events: [],
+                    allDayMarkerEvents: [],
+                    remainingCount: 0,
+                    isMonthHeader: true
+                ))
+                displayedRowCount += 1
+            }
+
             let shownEvents = Array(day.events.prefix(displayedRowLimit - displayedRowCount))
             displayedRowCount += max(shownEvents.count, 1)
             dayGroups.append(CalHubWeeklyDayGroup(
                 date: day.date,
                 events: shownEvents,
                 allDayMarkerEvents: day.allEvents.filter(CalHubWidgetFormat.isAllDaySpan),
-                remainingCount: 0
+                remainingCount: 0,
+                isMonthHeader: false
             ))
+            previousDate = day.date
         }
         let remainingCount: Int
         if let lastGroup = dayGroups.last,
@@ -1105,7 +1160,8 @@ private struct CalHubWeeklyWidgetView: View {
                 date: lastGroup.date,
                 events: lastGroup.events,
                 allDayMarkerEvents: lastGroup.allDayMarkerEvents,
-                remainingCount: remainingCount
+                remainingCount: remainingCount,
+                isMonthHeader: lastGroup.isMonthHeader
             )
         }
 

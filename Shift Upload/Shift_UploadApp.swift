@@ -9,6 +9,12 @@ import SwiftUI
 
 @main
 struct Shift_UploadApp: App {
+    init() {
+#if os(iOS)
+        CalHubWatchSyncManager.shared.activate()
+#endif
+    }
+
     var body: some Scene {
 #if os(macOS)
         WindowGroup {

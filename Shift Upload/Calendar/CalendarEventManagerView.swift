@@ -2028,6 +2028,10 @@ struct CalendarEventManagerView: View {
                     ?? newPageID
             }
             handleWeekPageChange(from: oldPageID, to: newPageID)
+            Task { @MainActor in
+                await Task.yield()
+                resolvePendingWidgetNavigation()
+            }
         }
 #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willStartLiveResizeNotification)) { _ in
@@ -2871,6 +2875,24 @@ struct CalendarEventManagerView: View {
         let components = Calendar.current.dateComponents([.year, .month], from: request.date)
         guard let year = components.year, let month = components.month else { return }
         let targetYearMonth = YearMonth(year: year, month: month)
+        if calendarDisplayMode == .week, !request.opensCalendar {
+            calendarFocusDate = request.date
+            if model.yearMonth != targetYearMonth {
+                selectedYear = targetYearMonth.year
+                selectedMonth = targetYearMonth.month
+                model.updateYearMonth(targetYearMonth)
+                model.load()
+                monthPageAnchor = targetYearMonth
+                monthPageID = Self.monthPageRadius
+            }
+            scheduleWeekPageRebuild(anchorDate: request.date)
+            Task { @MainActor in
+                await Task.yield()
+                resolvePendingWidgetNavigation()
+            }
+            return
+        }
+
         if model.yearMonth != targetYearMonth {
             selectYearMonth(targetYearMonth)
         } else {
@@ -2892,6 +2914,15 @@ struct CalendarEventManagerView: View {
               let day = components.day else { return }
         let yearMonth = YearMonth(year: year, month: month)
         guard model.yearMonth == yearMonth else { return }
+
+        if calendarDisplayMode == .week {
+            guard let weekPageID,
+                  let weekEnd = Calendar.current.date(byAdding: .day, value: 7, to: weekPageID),
+                  request.date >= weekPageID,
+                  request.date < weekEnd else {
+                return
+            }
+        }
 
         if request.opensCalendar {
             pendingWidgetNavigation = nil
