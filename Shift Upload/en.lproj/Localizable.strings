@@ -1,4 +1,13 @@
 /* Main window */
+/* Color settings */
+"カラー設定" = "Color Settings";
+"カラー設定がありません" = "No color settings";
+"追加ボタンからカラー設定を登録してください。" = "Tap Add to create a color setting.";
+"タイトル未設定" = "Untitled";
+"カラー設定を追加" = "Add Color Setting";
+"カラー設定を編集" = "Edit Color Setting";
+"登録した文字列と完全一致するイベントに、選択した色を適用します。" = "Apply the selected color to events whose titles exactly match a registered string.";
+
 "日付ごとに登録" = "Register by date";
 "イベントを管理" = "Manage events";
 "イベント管理" = "Event Management";
@@ -122,11 +131,13 @@
 /* General settings */
 "アプリの表示と言語、イベント・カレンダー設定を管理します。" = "Manage the app language, events, and calendar settings.";
 "一般" = "General";
+"カラー" = "Color";
 "言語" = "Language";
 "日本語" = "日本語";
 "イベント設定" = "Event Settings";
 "検索" = "Search";
 "言語とiCloud同期を設定します。" = "Configure the language and iCloud sync.";
+"言語とiCloud同期を設定" = "Language and iCloud sync";
 "アプリの表示言語" = "App display language";
 "iCloud同期" = "iCloud Sync";
 "設定とPDFをiCloudで同期します。" = "Sync settings and PDFs with iCloud.";
@@ -134,8 +145,10 @@
 "カレンダー接続と登録先を設定" = "Calendar connections and destinations";
 "イベントタイトルと時間を管理します。" = "Manage event titles and times.";
 "イベントタイトルと開始・終了時刻を管理" = "Manage event titles and start/end times";
+"イベントタイトルごとの表示色を設定" = "Configure display colors for event titles";
 "カレンダー接続と登録先を設定します。" = "Configure calendar connections and destinations.";
 "アプリ情報、プライバシー、著作権。" = "App information, privacy, and copyright.";
+"アプリ情報・プライバシー・著作権" = "App information, privacy, and copyright";
 
 /* About */
 "About" = "About";
@@ -157,6 +170,9 @@
 "データベースIDを入力するとプロパティを取得します。Notionで対象データベースにインテグレーションを追加してください。" = "Enter a database ID to fetch properties. Add an integration to the target database in Notion.";
 "Appleカレンダー、Googleカレンダー、Notionデータベースを登録先として選択できます。勤務イベントは保存済みの開始・終了時刻で登録できます。" = "Choose Apple Calendar, Google Calendar, or a Notion database as the destination. Work events use the saved start and end times.";
 "Notionプロパティ設定" = "Notion Property Settings";
+"Notion DB" = "Notion DB";
+"接続先" = "Destination";
+"左の文字列を、右の文字列に変換して登録します。" = "Convert the text on the left to the text on the right when registering.";
 "Notionのタイトル列・日時列を選択し、編集可能なプロパティを登録画面に追加できます。セレクト系のデフォルト値は設定画面で指定でき、複数日登録にも使用されます。" = "Choose the Notion title and date properties, then add editable properties to the registration screen. Default values for select properties can be set in Settings and are also used for multiple-day registration.";
 "任意の文字列を、登録時に別の文字列へ変換できます。PDF上の休み表示などに利用できます。" = "Convert text to another value during registration, for example to match a day-off label in a PDF.";
 "月を移動し、日付ごとの通常イベントを確認、変更、削除できます。空の日付への新規登録、既存イベントの置き換えにも対応します。" = "Move between months and review, change, or delete regular events by date. You can add events to empty dates or replace existing events.";
@@ -206,7 +222,7 @@
 "削除" = "Delete";
 
 /* Calendar settings */
-"カレンダー設定" = "Calendar settings";
+"カレンダー設定" = "Calendar Settings";
 "イベント情報の登録先を設定します。" = "Configure where event information is registered.";
 "登録先カレンダー" = "Destination calendar";
 "登録先" = "Destination";
@@ -222,6 +238,7 @@
 "取得中です..." = "Fetching...";
 "デフォルトカレンダー" = "Default calendar";
 "現在の登録先: デフォルトカレンダー" = "Current destination: Default calendar";
+"現在の登録先" = "Current destination";
 "保存されている登録先カレンダーを確認できません。もう一度一覧を取得してください。" = "The saved destination could not be found. Fetch the calendar list again.";
 "OAuthクライアントID" = "OAuth client ID";
 "OAuthクライアントシークレット" = "OAuth client secret";
@@ -248,6 +265,12 @@
 "例: shift" = "Example: shift";
 "任意の文字列を、登録時に別の文字列へ変換できます。" = "You can convert any text to another text when registering.";
 "登録時の文字変換" = "Text conversion at registration";
+"PDFスキャン登録時の文字変換" = "Text conversion when registering PDF scans";
+"PDFスキャンの結果を登録するときだけ、指定した文字列を別の文字列に変換します。手動登録には適用されません。" = "Convert the specified text only when registering PDF scan results. This does not apply to manual registration.";
+"PDFスキャンで認識した文字列を、登録時に別の文字列へ変換します。手動登録には適用されません。" = "Convert recognized PDF scan text to another value during registration. This does not apply to manual registration.";
+"PDFスキャンで認識した左の文字列を、右の文字列に変換して登録します。" = "Convert the left text recognized in a PDF scan to the text on the right when registering.";
+"変換元" = "Source";
+"変換先" = "Destination";
 "取得した列から選択" = "Choose from fetched properties";
 "タイトル列" = "Title property";
 "日付列" = "Date property";

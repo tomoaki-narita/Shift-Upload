@@ -439,6 +439,8 @@ final class NotionPageWriter {
         tagValue: String,
         restTitle: String,
         includeRest: Bool,
+        applyTextConversion: Bool = true,
+        conversionRules: [PDFTextConversionRule] = [],
         restSourceTitle: String = "休",
         notesProperty: String = "",
         locationProperty: String = "",
@@ -459,9 +461,9 @@ final class NotionPageWriter {
         let registeredRestTitle = restTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "休"
             : restTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let registeredRestSourceTitle = normalizedTitle(restSourceTitle).isEmpty
-            ? "休"
-            : normalizedTitle(restSourceTitle)
+        let activeConversionRules = conversionRules.isEmpty
+            ? [PDFTextConversionRule(source: restSourceTitle, notionDestination: registeredRestTitle)]
+            : conversionRules
         var skippedTitles: [String] = []
         var savedCount = 0
 
@@ -473,9 +475,12 @@ final class NotionPageWriter {
             let title = normalizedTitle(cell.valueText)
             guard !title.isEmpty else { continue }
 
-            if title == registeredRestSourceTitle {
+            if let rule = activeConversionRules.first(where: {
+                normalizedTitle($0.source) == title || title == "休"
+            }) {
                 guard includeRest else { continue }
-                let definition = definitionByTitle[normalizedTitle(registeredRestTitle)] ?? definitionByTitle[title]
+                let convertedTitle = rule.notionDestination.isEmpty ? registeredRestTitle : rule.notionDestination
+                let definition = definitionByTitle[normalizedTitle(convertedTitle)] ?? definitionByTitle[title]
                 let startMinutes: Int?
                 let endMinutes: Int?
                 if let definition {
@@ -486,7 +491,7 @@ final class NotionPageWriter {
                     endMinutes = 1439
                 }
                 try await createPage(
-                    title: registeredRestTitle,
+                    title: applyTextConversion ? convertedTitle : title,
                     yearMonth: yearMonth,
                     dayText: cell.dateText,
                     startMinutes: startMinutes,
@@ -581,6 +586,7 @@ final class NotionPageWriter {
             tagProperty: tagProperty,
             fallback: tagValue
         )
+        let effectiveTagValues = NotionTagValueCodec.decode(effectiveTagValue)
         var properties: [String: Any] = [
             titleProperty: [
                 "title": [[
@@ -591,9 +597,9 @@ final class NotionPageWriter {
             dateProperty: ["date": dateValue]
         ]
         if !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           !effectiveTagValue.isEmpty {
+           !effectiveTagValues.isEmpty {
             properties[tagProperty] = [
-                "multi_select": [["name": effectiveTagValue]]
+                "multi_select": effectiveTagValues.map { ["name": $0] }
             ]
         }
         var eventProperties = properties
@@ -671,6 +677,7 @@ final class NotionPageWriter {
             tagProperty: tagProperty,
             fallback: tagValue
         )
+        let effectiveTagValues = NotionTagValueCodec.decode(effectiveTagValue)
         var properties: [String: Any] = [
             titleProperty: [
                 "title": [[
@@ -681,9 +688,9 @@ final class NotionPageWriter {
             dateProperty: ["date": dateValue]
         ]
         if !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           !effectiveTagValue.isEmpty {
+           !effectiveTagValues.isEmpty {
             properties[tagProperty] = [
-                "multi_select": [["name": effectiveTagValue]]
+                "multi_select": effectiveTagValues.map { ["name": $0] }
             ]
         }
         var eventProperties = properties
@@ -904,18 +911,33 @@ nonisolated final class AppleCalendarEventClient {
 
         return eventStore.events(matching: predicate).compactMap { event in
             guard let identifier = event.eventIdentifier,
-                  let day = Calendar.current.dateComponents([.day], from: event.startDate).day else {
+                  let eventStartDate = event.startDate,
+                  let day = Calendar.current.dateComponents([.day], from: eventStartDate).day else {
                 return nil
+            }
+
+            let eventEndDate = event.endDate ?? eventStartDate
+            let endDate: Date
+            if event.isAllDay {
+                let calendar = Calendar.current
+                let lastOccupiedSecond = calendar.date(
+                    byAdding: .second,
+                    value: -1,
+                    to: eventEndDate
+                ) ?? eventStartDate
+                endDate = calendar.startOfDay(for: max(lastOccupiedSecond, eventStartDate))
+            } else {
+                endDate = eventEndDate
             }
 
             return CalendarEventRecord(
                 id: identifier,
                 day: day,
                 title: event.title?.isEmpty == false ? event.title! : "無題",
-                detail: event.isAllDay ? "終日" : timeRangeText(start: event.startDate, end: event.endDate),
+                detail: event.isAllDay ? "終日" : timeRangeText(start: eventStartDate, end: eventEndDate),
                 isAllDay: event.isAllDay,
-                startDate: event.startDate,
-                endDate: event.isAllDay ? nil : event.endDate,
+                startDate: eventStartDate,
+                endDate: endDate,
                 metadata: CalendarEventMetadata(
                     notes: event.notes ?? "",
                     location: event.location ?? "",
@@ -1122,17 +1144,21 @@ struct NotionCalendarEventClient {
                     "before": dateText(yearMonth: yearMonth.nextMonth, day: 1)
                 ]
             ]
+            let configuredTagValues = NotionTagValueCodec.decode(tagValue)
             let shouldFilterByTag = !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && !tagValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !configuredTagValues.isEmpty
             var body: [String: Any] = ["page_size": 100]
             if shouldFilterByTag {
+                let tagFilters = configuredTagValues.map { value in
+                    [
+                        "property": tagProperty,
+                        "multi_select": ["contains": value]
+                    ] as [String: Any]
+                }
                 body["filter"] = [
                     "and": [
                         dateFilter,
-                        [
-                            "property": tagProperty,
-                            "multi_select": ["contains": tagValue]
-                        ]
+                        ["or": tagFilters]
                     ]
                 ]
             } else {
@@ -1313,10 +1339,11 @@ struct NotionCalendarEventClient {
         ]
         if !metadataProperties.contains(where: { $0.name == tagProperty }) {
             let effectiveTagValue = effectiveTagValue(metadata: metadata)
+            let effectiveTagValues = NotionTagValueCodec.decode(effectiveTagValue)
             if !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               !effectiveTagValue.isEmpty {
+               !effectiveTagValues.isEmpty {
                 properties[tagProperty] = [
-                    "multi_select": [["name": effectiveTagValue]]
+                    "multi_select": effectiveTagValues.map { ["name": $0] }
                 ]
             }
         }
@@ -1425,8 +1452,8 @@ struct NotionCalendarEventClient {
         case "multi_select":
             let values = (property["multi_select"] as? [[String: Any]])?
                 .compactMap { $0["name"] as? String } ?? []
-            guard option.name == tagProperty else { return values.first ?? "" }
-            return values.joined(separator: ", ")
+            guard option.name == tagProperty else { return values.joined(separator: ", ") }
+            return NotionTagValueCodec.encode(values)
         default:
             return ""
         }
@@ -1435,8 +1462,8 @@ struct NotionCalendarEventClient {
     private func legacyTagValue(from property: Any?) -> String {
         let values = (property as? [String: Any])?["multi_select"] as? [[String: Any]] ?? []
         let names = values.compactMap { $0["name"] as? String }
-        let configuredValue = tagValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return names.first(where: { $0 == configuredValue }) ?? names.first ?? ""
+        let configuredValues = Set(NotionTagValueCodec.decode(tagValue))
+        return NotionTagValueCodec.encode(names.filter { configuredValues.contains($0) })
     }
 
     private func sendRequest(
@@ -1553,22 +1580,22 @@ struct NotionCalendarEventClient {
     }
 
     private func hasConfiguredTag(in property: Any?) -> Bool {
-        let expected = tagValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !expected.isEmpty,
-              let property = property as? [String: Any] else {
+        let expected = Set(NotionTagValueCodec.decode(tagValue))
+        guard !expected.isEmpty, let property = property as? [String: Any] else {
             return false
         }
 
         if let values = property["multi_select"] as? [[String: Any]] {
-            return values.contains { ($0["name"] as? String) == expected }
+            let actual = values.compactMap { $0["name"] as? String }
+            return !expected.isDisjoint(with: actual)
         }
 
         if let value = property["select"] as? [String: Any] {
-            return (value["name"] as? String) == expected
+            return expected.contains((value["name"] as? String) ?? "")
         }
 
         if let values = property["rich_text"] as? [[String: Any]] {
-            return values.contains { textValue(from: $0) == expected }
+            return values.contains { expected.contains(textValue(from: $0)) }
         }
 
         return false
@@ -2657,6 +2684,8 @@ struct GoogleCalendarEventWriter {
         calendarID: String,
         restTitle: String,
         includeRest: Bool,
+        applyTextConversion: Bool = true,
+        conversionRules: [PDFTextConversionRule] = [],
         restSourceTitle: String = "休",
         metadata: CalendarEventMetadata = .empty
     ) async throws -> GoogleCalendarRegistrationResult {
@@ -2671,9 +2700,9 @@ struct GoogleCalendarEventWriter {
         let registeredRestTitle = restTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "休"
             : restTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let registeredRestSourceTitle = normalizedTitle(restSourceTitle).isEmpty
-            ? "休"
-            : normalizedTitle(restSourceTitle)
+        let activeConversionRules = conversionRules.isEmpty
+            ? [PDFTextConversionRule(source: restSourceTitle, googleDestination: registeredRestTitle)]
+            : conversionRules
         var skippedTitles: [String] = []
         var savedCount = 0
 
@@ -2685,9 +2714,12 @@ struct GoogleCalendarEventWriter {
             let title = normalizedTitle(cell.valueText)
             guard !title.isEmpty else { continue }
 
-            if title == registeredRestSourceTitle {
+            if let rule = activeConversionRules.first(where: {
+                normalizedTitle($0.source) == title || title == "休"
+            }) {
                 guard includeRest else { continue }
-                let definition = definitionByTitle[normalizedTitle(registeredRestTitle)] ?? definitionByTitle[title]
+                let convertedTitle = rule.googleDestination.isEmpty ? registeredRestTitle : rule.googleDestination
+                let definition = definitionByTitle[normalizedTitle(convertedTitle)] ?? definitionByTitle[title]
                 let startMinutes: Int?
                 let endMinutes: Int?
                 if let definition {
@@ -2699,7 +2731,7 @@ struct GoogleCalendarEventWriter {
                 }
                 try await client.createEvent(
                     calendarID: calendarID,
-                    title: registeredRestTitle,
+                    title: applyTextConversion ? convertedTitle : title,
                     yearMonth: yearMonth,
                     day: day,
                     startMinutes: startMinutes,
@@ -2889,6 +2921,8 @@ final class AppleCalendarEventWriter {
         calendarIdentifier: String,
         restTitle: String,
         includeRest: Bool,
+        applyTextConversion: Bool = true,
+        conversionRules: [PDFTextConversionRule] = [],
         restSourceTitle: String = "休",
         metadata: CalendarEventMetadata = .empty
     ) throws -> AppleCalendarRegistrationResult {
@@ -2917,9 +2951,9 @@ final class AppleCalendarEventWriter {
         let registeredRestTitle = restTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "休"
             : restTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let registeredRestSourceTitle = normalizedTitle(restSourceTitle).isEmpty
-            ? "休"
-            : normalizedTitle(restSourceTitle)
+        let activeConversionRules = conversionRules.isEmpty
+            ? [PDFTextConversionRule(source: restSourceTitle, appleDestination: registeredRestTitle)]
+            : conversionRules
         var skippedTitles: [String] = []
         var savedCount = 0
 
@@ -2927,12 +2961,15 @@ final class AppleCalendarEventWriter {
             let title = normalizedTitle(cell.valueText)
             guard !title.isEmpty else { continue }
 
-            if title == registeredRestSourceTitle {
+            if let rule = activeConversionRules.first(where: {
+                normalizedTitle($0.source) == title || title == "休"
+            }) {
                 guard includeRest else { continue }
-                let definition = definitionByTitle[normalizedTitle(registeredRestTitle)] ?? definitionByTitle[title]
+                let convertedTitle = rule.appleDestination.isEmpty ? registeredRestTitle : rule.appleDestination
+                let definition = definitionByTitle[normalizedTitle(convertedTitle)] ?? definitionByTitle[title]
                 if let definition, !definition.isAllDay {
                     try saveTimedEvent(
-                        title: registeredRestTitle,
+                        title: applyTextConversion ? convertedTitle : title,
                         yearMonth: yearMonth,
                         dayText: cell.dateText,
                         startMinutes: definition.startMinutes,
@@ -2942,7 +2979,7 @@ final class AppleCalendarEventWriter {
                     )
                 } else {
                     try saveAllDayEvent(
-                        title: registeredRestTitle,
+                        title: applyTextConversion ? convertedTitle : title,
                         yearMonth: yearMonth,
                         dayText: cell.dateText,
                         calendar: calendar,

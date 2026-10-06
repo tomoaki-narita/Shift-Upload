@@ -274,9 +274,10 @@ private enum CalHubWidgetFormat {
     }
 
     static func eventsForDisplay(_ events: [CalHubWidgetEvent], now: Date) -> [CalHubWidgetEvent] {
-        let timedEventCount = events.filter { !isAllDaySpan($0) }.count
-        guard timedEventCount >= 4 else { return events }
-        return events.filter { !isAllDaySpan($0) }
+        let currentEvents = events.filter { isAllDaySpan($0) || startsAfterNow($0, now: now) }
+        let timedEventCount = currentEvents.filter { !isAllDaySpan($0) }.count
+        guard timedEventCount >= 4 else { return currentEvents }
+        return currentEvents.filter { !isAllDaySpan($0) }
     }
 
     static func upcoming(snapshot: CalHubWidgetSnapshot?, now: Date, limit: Int) -> [CalHubWidgetEvent] {
@@ -460,13 +461,14 @@ private struct CalHubSmallWidgetView: View {
         let locale = CalHubWidgetFormat.locale(entry)
         let today = Calendar.current.startOfDay(for: entry.date)
         let events = CalHubWidgetFormat.events(on: today, snapshot: entry.snapshot)
-        let displayedEvent = events.first {
+        let displayableEvents = CalHubWidgetFormat.eventsForDisplay(events, now: entry.date)
+        let displayedEvent = displayableEvents.first {
             CalHubWidgetFormat.hasNotStarted($0, now: entry.date)
-        } ?? events.last {
+        } ?? displayableEvents.last {
             CalHubWidgetFormat.startsAfterNow($0, now: entry.date)
-        } ?? events.last
-        let allDayMarkerEvents = events.filter(CalHubWidgetFormat.isAllDaySpan)
-        let futureEventCount = events.filter {
+        } ?? displayableEvents.last
+        let allDayMarkerEvents = displayableEvents.filter(CalHubWidgetFormat.isAllDaySpan)
+        let futureEventCount = displayableEvents.filter {
             CalHubWidgetFormat.hasNotStarted($0, now: entry.date)
         }.count
         let displayedFutureEventCount = displayedEvent.map {
@@ -793,8 +795,8 @@ private struct CalHubLargeWidgetView: View {
                     }
                 }
                 Divider()
-                if events.isEmpty {
-                    Text(locale.identifier.hasPrefix("ja") ? "今日の予定なし" : "No events today")
+                if displayedEvents.isEmpty {
+                    Text(locale.identifier.hasPrefix("ja") ? "今日の予定なし" : "No events")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)

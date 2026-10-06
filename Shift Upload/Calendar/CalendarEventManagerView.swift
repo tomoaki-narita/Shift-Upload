@@ -904,6 +904,7 @@ struct CalendarEventManagerView: View {
     let googleCalendarName: String
     let notionDatabaseName: String
     let definitions: [ShiftDefinition]
+    let calendarTitleColorRulesJSON: String
     let onRegisterShift: (YearMonth, Int, String, RegistrationCompletion) -> Void
     let onRegisterDateTimeEvent: (CalendarEventDraft, DateTimeEventRegistrationCompletion) -> Void
     let onRegisterShifts: ([CalendarDaySelection], String, RegistrationCompletion) -> Void
@@ -931,6 +932,7 @@ struct CalendarEventManagerView: View {
     ) private var isSundayInRedEnabled = false
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: CalendarEventManagerModel
+    @State private var eventDisplayTime = Date.now
     @State private var selectedYear: Int
     @State private var selectedMonth: Int
     @State private var isYearScrollActive = false
@@ -1020,6 +1022,55 @@ struct CalendarEventManagerView: View {
     private static let calendarControlHeight: CGFloat = 34
 #endif
 
+    private var nextEventEndDate: Date? {
+        model.events
+            .compactMap(eventDisplayEndDate(for:))
+            .filter { $0 > eventDisplayTime }
+            .min()
+    }
+
+    private func eventDisplayEndDate(for event: CalendarEventRecord) -> Date? {
+        if let endDate = event.endDate {
+            guard event.isAllDay else { return endDate }
+            return Calendar.current.date(
+                byAdding: .day,
+                value: 1,
+                to: Calendar.current.startOfDay(for: endDate)
+            )
+        }
+
+        guard event.isAllDay, let startDate = event.startDate else { return nil }
+        return Calendar.current.date(
+            byAdding: .day,
+            value: 1,
+            to: Calendar.current.startOfDay(for: startDate)
+        )
+    }
+
+    private func hasEventEnded(_ event: CalendarEventRecord) -> Bool {
+        guard let endDate = eventDisplayEndDate(for: event) else { return false }
+        return endDate <= eventDisplayTime
+    }
+
+    private func eventTitleColor(for event: CalendarEventRecord) -> Color {
+        hasEventEnded(event) ? .secondary : .primary
+    }
+
+    private var calendarTitleColorRules: [CalendarTitleColorRule] {
+        guard let data = calendarTitleColorRulesJSON.data(using: .utf8),
+              let rules = try? JSONDecoder().decode([CalendarTitleColorRule].self, from: data) else {
+            return []
+        }
+        return rules
+    }
+
+    private func eventBandColor(for event: CalendarEventRecord) -> Color {
+        if let rule = calendarTitleColorRules.first(where: { $0.title == event.title }) {
+            return rule.color.color
+        }
+        return event.calendarColor?.color ?? Color.accentColor
+    }
+
     private var calendarDayActionsSheetBinding: Binding<CalendarDayActionsSheet?> {
         Binding(
             get: {
@@ -1059,6 +1110,7 @@ struct CalendarEventManagerView: View {
         notionMetadataProperties: [NotionPropertyOption],
         metadataFieldLabels: CalendarEventMetadataFieldLabels,
         definitions: [ShiftDefinition],
+        calendarTitleColorRulesJSON: String,
         onRegisterShift: @escaping (YearMonth, Int, String, RegistrationCompletion) -> Void,
         onRegisterDateTimeEvent: @escaping (CalendarEventDraft, DateTimeEventRegistrationCompletion) -> Void,
         onRegisterShifts: @escaping ([CalendarDaySelection], String, RegistrationCompletion) -> Void,
@@ -1102,6 +1154,7 @@ struct CalendarEventManagerView: View {
         self.googleCalendarName = googleCalendarName
         self.notionDatabaseName = notionDatabaseName
         self.definitions = definitions
+        self.calendarTitleColorRulesJSON = calendarTitleColorRulesJSON
         self.onRegisterShift = onRegisterShift
         self.onRegisterDateTimeEvent = onRegisterDateTimeEvent
         self.onRegisterShifts = onRegisterShifts
@@ -1902,6 +1955,23 @@ struct CalendarEventManagerView: View {
         .task(id: monthWeekCacheTaskID) {
             await monitorVisibleMonthWeekCaches()
         }
+        .task(id: nextEventEndDate) {
+            guard let endDate = nextEventEndDate else { return }
+            while !Task.isCancelled {
+                let remaining = endDate.timeIntervalSinceNow
+                guard remaining > 0 else {
+                    eventDisplayTime = .now
+                    return
+                }
+
+                let delay = UInt64(max(1, remaining * 1_000_000_000))
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+            }
+        }
         .onChange(of: model.calendarColor) { _, color in
             onCalendarColorChange(color)
         }
@@ -1931,9 +2001,12 @@ struct CalendarEventManagerView: View {
             switch phase {
             case .inactive, .background:
                 didEnterBackground = true
-            case .active where didEnterBackground:
-                didEnterBackground = false
-                calendarCacheRevalidationID += 1
+            case .active:
+                eventDisplayTime = .now
+                if didEnterBackground {
+                    didEnterBackground = false
+                    calendarCacheRevalidationID += 1
+                }
             default:
                 break
             }
@@ -2852,7 +2925,7 @@ struct CalendarEventManagerView: View {
     }
 
     private func yearMarkerColor(for event: CalendarEventRecord) -> Color {
-        event.isRestEvent ? .red : event.calendarColor?.color ?? .accentColor
+        eventBandColor(for: event)
     }
 
     private func selectYearMonth(_ yearMonth: YearMonth) {
@@ -3276,9 +3349,7 @@ struct CalendarEventManagerView: View {
                                     - CGFloat(max(0, layout.laneCount - 1)) * laneSpacing)
                                     / CGFloat(max(1, layout.laneCount))
                             )
-                            let eventColor = segment.event.isRestEvent
-                                ? Color.red
-                                : segment.event.calendarColor?.color ?? Color.accentColor
+                            let eventColor = eventBandColor(for: segment.event)
 
                             Button {
 #if os(macOS)
@@ -3608,9 +3679,7 @@ struct CalendarEventManagerView: View {
                         + leadingExtension
                         + trailingExtension
                 )
-                let eventColor = layout.event.isRestEvent
-                    ? Color.red
-                    : layout.event.calendarColor?.color ?? Color.accentColor
+                let eventColor = eventBandColor(for: layout.event)
                 let bandStartDate = dates.first { $0.slot == layout.startDay }
                 let bandTitleOpacity = 1.0
 
@@ -3625,7 +3694,9 @@ struct CalendarEventManagerView: View {
                             .font(.system(size: bandTitleFontSize, weight: .medium))
                             .lineLimit(1)
 #endif
-                            .foregroundStyle(.primary.opacity(bandTitleOpacity))
+                            .foregroundStyle(
+                                eventTitleColor(for: layout.event).opacity(bandTitleOpacity)
+                            )
                             .padding(.horizontal, 6)
 
                         Spacer(minLength: 0)
@@ -5554,9 +5625,7 @@ struct CalendarEventManagerView: View {
                             - bandInset * 2
                             + leadingExtension
                             + trailingExtension)
-                        let eventColor = layout.event.isRestEvent
-                            ? Color.red
-                            : layout.event.calendarColor?.color ?? Color.accentColor
+                        let eventColor = eventBandColor(for: layout.event)
                         let bandStartDate = gridDates.first {
                             $0.slot == layout.startDay
                         }
@@ -5575,7 +5644,9 @@ struct CalendarEventManagerView: View {
                                     .font(.system(size: bandTitleFontSize, weight: .medium))
                                     .lineLimit(1)
 #endif
-                                    .foregroundStyle(.primary.opacity(bandTitleOpacity))
+                                    .foregroundStyle(
+                                        eventTitleColor(for: layout.event).opacity(bandTitleOpacity)
+                                    )
                                     .padding(.horizontal, 6)
 
                                 Spacer(minLength: 0)
@@ -5913,9 +5984,7 @@ struct CalendarEventManagerView: View {
                         .frame(height: dateHeaderHeight)
 
                     ForEach(displayEvents) { event in
-                        let eventColor = event.isRestEvent
-                            ? Color.red
-                            : event.calendarColor?.color ?? Color.accentColor
+                        let eventColor = eventBandColor(for: event)
                         HStack(alignment: .top, spacing: bandMetrics.gap) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(event.title)
@@ -5927,6 +5996,7 @@ struct CalendarEventManagerView: View {
                                     .font(.caption.weight(.medium))
                                     .lineLimit(1)
 #endif
+                                    .foregroundStyle(eventTitleColor(for: event))
 
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -6476,14 +6546,11 @@ struct CalendarEventManagerView: View {
 
         if metadataFieldLabels.tagIsAvailable {
             let tagProperty = notionMetadataProperties.first { $0.name == notionTagProperty }
-            let optionValues = metadata.tagValue
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+            let optionValues = NotionTagValueCodec.decode(metadata.tagValue)
             append(
                 "tag",
                 label: metadataFieldLabels.tag,
-                value: metadata.tagValue,
+                value: optionValues.joined(separator: ", "),
                 optionValues: optionValues,
                 optionColors: tagProperty?.optionColors ?? [:]
             )
@@ -6501,15 +6568,15 @@ struct CalendarEventManagerView: View {
             let value = metadata.propertyValues[property.name] ?? ""
             let isOptionProperty = ["multi_select", "select"].contains(property.type)
             let optionValues = isOptionProperty
-                ? value
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
+                ? (property.type == "multi_select" ? NotionTagValueCodec.decode(value) : value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
                 : []
+            let displayValue = property.type == "multi_select"
+                ? optionValues.joined(separator: ", ")
+                : value
             append(
                 property.name,
                 label: property.displayName(for: locale),
-                value: value,
+                value: displayValue,
                 optionValues: optionValues,
                 optionColors: isOptionProperty ? property.optionColors : [:]
             )

@@ -88,15 +88,22 @@ enum CalHubRemoteSnapshotLoader {
                 "before": dayString(range.end)
             ]
         ]
+        let configuredTagValues = notionTagValues(from: configuration.notionTagValue)
         let filter: [String: Any]
-        if !configuration.notionTagProperty.isEmpty, !configuration.notionTagValue.isEmpty {
+        if !configuration.notionTagProperty.isEmpty, !configuredTagValues.isEmpty {
+            let tagFilters = configuredTagValues.map { value in
+                [
+                    "property": configuration.notionTagProperty,
+                    "multi_select": ["contains": value]
+                ]
+            }
+            let tagFilter: [String: Any] = tagFilters.count == 1
+                ? tagFilters[0]
+                : ["or": tagFilters]
             filter = [
                 "and": [
                     dateFilter,
-                    [
-                        "property": configuration.notionTagProperty,
-                        "multi_select": ["contains": configuration.notionTagValue]
-                    ]
+                    tagFilter
                 ]
             ]
         } else {
@@ -138,6 +145,20 @@ enum CalHubRemoteSnapshotLoader {
                 : nil
         } while cursor != nil
         return deduplicated(events)
+    }
+
+    private static func notionTagValues(from encodedValue: String) -> [String] {
+        guard let data = encodedValue.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data) else {
+            return encodedValue
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+
+        return values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private static func googleEvent(

@@ -117,6 +117,8 @@ struct CalHubDateActionSheetContainer<Content: View>: View {
 
 extension Notification.Name {
     static let shiftHubSettingsDidChange = Notification.Name("ShiftHubSettingsDidChange")
+    static let shiftHubCloudKitSettingsDidChange = Notification.Name("ShiftHubCloudKitSettingsDidChange")
+    static let shiftHubCloudKitSchedulesDidChange = Notification.Name("ShiftHubCloudKitSchedulesDidChange")
     static let shiftHubScanStoredSchedule = Notification.Name("ShiftHubScanStoredSchedule")
 }
 
@@ -138,6 +140,7 @@ struct ContentView: View {
         Locale(identifier: appLanguage)
     }
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.japanese.rawValue
     @AppStorage("workerName") private var workerName = ""
     @AppStorage("shiftDefinitionsJSON") private var shiftDefinitionsJSON = ""
@@ -146,6 +149,7 @@ struct ContentView: View {
     @AppStorage("appleCalendarName") private var appleCalendarName = ""
     @AppStorage("restEventSourceTitle") private var restEventSourceTitle = ""
     @AppStorage("appleRestEventTitle") private var appleRestEventTitle = ""
+    @AppStorage("calendarTitleColorRulesJSON") private var calendarTitleColorRulesJSON = "[]"
     @AppStorage("appleNotesEnabled") private var appleNotesEnabled = true
     @AppStorage("appleLocationEnabled") private var appleLocationEnabled = true
     @AppStorage("appleURLEnabled") private var appleURLEnabled = true
@@ -176,9 +180,15 @@ struct ContentView: View {
     @State private var isImporterPresented = false
     @State private var isSavedScheduleListPresented = false
     @State private var isPDFListPresented = false
+    @State private var externalCloudSettingsRevision = 0
+    @State private var isApplyingCloudSettings = false
+    @State private var lastAppliedCloudSettings: ShiftHubCloudSettings?
+    @State private var lastLocalSettingsChangeAt: Date?
+    @State private var hasLocalSettingsChangesWhileSettingsOpen = false
     @State private var isRegistrationDestinationMenuPresented = false
     @State private var isSettingsPresented = false
     @State private var isShiftUploadPresented = false
+    @State private var pendingCloudKitSync = false
     @State private var isMissingShiftSelectionPresented = false
     @State private var registrationPreview: RegistrationPreview?
     @State private var isRegisteringEvents = false
@@ -229,6 +239,9 @@ struct ContentView: View {
         }
         .task {
             CalHubWidgetSharedData.reloadTimelines()
+        }
+        .onChange(of: isSettingsPresented) {
+            hasLocalSettingsChangesWhileSettingsOpen = false
         }
         .onOpenURL { url in
             guard let date = CalHubWidgetSharedData.date(from: url) else { return }
@@ -310,6 +323,12 @@ struct ContentView: View {
         }
         .onChange(of: shiftDefinitions) {
             shiftDefinitionsJSON = Self.shiftDefinitionsJSON(from: shiftDefinitions)
+            guard !isApplyingCloudSettings else { return }
+            NotificationCenter.default.post(
+                name: .shiftHubSettingsDidChange,
+                object: nil,
+                userInfo: ["changedScopes": [ShiftHubSettingsChangeScope.eventDefinitions.rawValue]]
+            )
         }
         .onChange(of: savedSchedules) {
             storedSchedulesJSON = Self.storedSchedulesJSON(from: savedSchedules)
@@ -317,29 +336,92 @@ struct ContentView: View {
                 ShiftHubCloudSync.saveSchedules(savedSchedules)
             }
         }
-        .onChange(of: cloudSettingsSnapshot) {
-            if isCloudKitStateLoaded && isCloudSyncEnabled {
-                syncCloudSettings()
-            }
-        }
         .onChange(of: isCloudSyncEnabled) {
             if isCloudSyncEnabled {
                 Task { @MainActor in
+                    await ShiftHubCloudSync.ensureSettingsSubscription()
                     await synchronizeWithCloudKit()
                 }
             } else {
                 isCloudKitStateLoaded = false
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
-            guard isCloudSyncEnabled else { return }
+        .onChange(of: scenePhase) {
+            guard scenePhase == .active,
+                  isCloudSyncEnabled,
+                  isCloudKitStateLoaded else { return }
             Task { @MainActor in
                 await synchronizeWithCloudKit()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .shiftHubSettingsDidChange)) { _ in
-            if isCloudKitStateLoaded && isCloudSyncEnabled {
-                syncCloudSettings()
+        .onReceive(NotificationCenter.default.publisher(for: .shiftHubCloudKitSettingsDidChange)) { _ in
+            guard isCloudSyncEnabled else { return }
+            NSLog("Shift Hub: scheduling CloudKit settings notification sync")
+            // CloudKit notifications can be coalesced. Fetch the latest
+            // settings record after every matching notification.
+            Task { @MainActor in
+                await synchronizeWithCloudKit()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shiftHubCloudKitSchedulesDidChange)) { _ in
+            guard isCloudSyncEnabled else { return }
+            NSLog("Shift Hub: scheduling CloudKit schedules notification sync")
+            Task { @MainActor in
+                await synchronizeWithCloudKit(loadSettings: false)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { notification in
+            guard isCloudSyncEnabled else { return }
+            let changedKeys = notification.userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String]
+            NSLog("Shift Hub: KVS external change changedKeys=%@ settingsKeyPresent=%@", String(describing: changedKeys), String(describing: changedKeys?.contains(ShiftHubCloudSync.settingsKey) == true))
+            let settingsChanged = changedKeys?.contains(ShiftHubCloudSync.settingsKey) == true
+                || changedKeys?.contains("\(ShiftHubCloudSync.settingsKey).changedScopes") == true
+            let schedulesChanged = changedKeys?.contains(ShiftHubCloudSync.schedulesKey) == true
+            if settingsChanged && hasLocalSettingsChangesWhileSettingsOpen {
+                NSLog("Shift Hub: deferred KVS settings apply because local settings editing is in progress")
+                return
+            }
+            if settingsChanged {
+                externalCloudSettingsRevision += 1
+                if let cachedSettings = ShiftHubCloudSync.loadSettings() {
+                    let scopes = ShiftHubCloudSync.loadSettingsChangeScopes()
+                    NSLog("Shift Hub: applying KVS settings after external change scopes=%@", String(describing: scopes))
+                    applyCloudSettings(cachedSettings, scopes: scopes)
+                } else {
+                    NSLog("Shift Hub: KVS external change had no decodable settings payload")
+                }
+            }
+            Task { @MainActor in
+                await synchronizeWithCloudKit(loadSettings: !settingsChanged && !schedulesChanged)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shiftHubSettingsDidChange)) { notification in
+            guard !isApplyingCloudSettings else {
+                NSLog("Shift Hub: ignored settings change notification generated by cloud settings apply")
+                return
+            }
+            guard isCloudSyncEnabled else { return }
+
+            let savedColorRulesJSON = notification.object as? String
+            let changedScopes = Set(
+                (notification.userInfo?["changedScopes"] as? [String] ?? [])
+                    .compactMap(ShiftHubSettingsChangeScope.init(rawValue:))
+            )
+            if savedColorRulesJSON == nil,
+               let lastAppliedCloudSettings,
+               cloudSettingsSnapshot == lastAppliedCloudSettings {
+                NSLog("Shift Hub: ignored settings notification because it matches the last cloud settings apply")
+                return
+            }
+
+            if isSettingsPresented {
+                hasLocalSettingsChangesWhileSettingsOpen = true
+            }
+            lastLocalSettingsChangeAt = .now
+
+            Task { @MainActor in
+                await Task.yield()
+                syncCloudSettings(colorRulesJSON: savedColorRulesJSON, changedScopes: changedScopes)
             }
         }
         .task(id: notionMetadataDiscoveryTaskID) {
@@ -614,6 +696,7 @@ struct ContentView: View {
                 notionMetadataProperties: notionRegistrationProperties,
                 metadataFieldLabels: metadataFieldLabels,
                 definitions: shiftDefinitions,
+                calendarTitleColorRulesJSON: calendarTitleColorRulesJSON,
                 onRegisterShift: { yearMonth, day, title, completion in
                     registerSingleShift(
                         yearMonth: yearMonth,
@@ -665,6 +748,7 @@ struct ContentView: View {
                 },
                 isTitlebarLogoVisible: !isShiftUploadPresented && !isSettingsPresented
             )
+            .id(calendarTitleColorRulesJSON)
         }
     }
 
@@ -2380,27 +2464,46 @@ struct ContentView: View {
     }
 
     private func registrationRestTitle(for destination: CalendarDestination) -> String {
-        let configuredTitle: String
-        switch destination {
-        case .apple:
-            configuredTitle = appleRestEventTitle
-        case .google:
-            configuredTitle = googleRestEventTitle
-        case .notion:
-            configuredTitle = notionRestEventTitle
+        let rules = pdfTextConversionRules(for: destination)
+        return rules.first?.destination(for: destination).trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private func pdfTextConversionRules(for destination: CalendarDestination) -> [PDFTextConversionRule] {
+        if let data = restEventSourceTitle.data(using: .utf8),
+           let rules = try? JSONDecoder().decode([PDFTextConversionRule].self, from: data),
+           !rules.isEmpty {
+            return rules.filter {
+                !$0.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && !$0.destination(for: destination).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
         }
 
-        let trimmedTitle = configuredTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sourceTitle = restEventSourceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedTitle.isEmpty
-            ? (sourceTitle.isEmpty ? "休" : sourceTitle)
-            : trimmedTitle
+        let destinationTitle: String
+        switch destination {
+        case .apple:
+            destinationTitle = appleRestEventTitle
+        case .google:
+            destinationTitle = googleRestEventTitle
+        case .notion:
+            destinationTitle = notionRestEventTitle
+        }
+        guard !restEventSourceTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !destinationTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        return [PDFTextConversionRule(
+            source: restEventSourceTitle,
+            appleDestination: destination == .apple ? destinationTitle : "",
+            googleDestination: destination == .google ? destinationTitle : "",
+            notionDestination: destination == .notion ? destinationTitle : ""
+        )]
     }
 
     private func registerAppleCalendarEvents(
         cells: [ExtractedShiftCell]? = nil,
         yearMonth: YearMonth? = nil,
         includeRest: Bool,
+        applyTextConversion: Bool = true,
         metadata: CalendarEventMetadata = .empty,
         onComplete: (() -> Void)? = nil
     ) {
@@ -2421,6 +2524,8 @@ struct ContentView: View {
                 calendarIdentifier: appleCalendarIdentifier,
                 restTitle: registrationRestTitle(for: .apple),
                 includeRest: includeRest,
+                applyTextConversion: applyTextConversion,
+                conversionRules: pdfTextConversionRules(for: .apple),
                 restSourceTitle: restEventSourceTitle,
                 metadata: metadata
             )
@@ -2447,6 +2552,7 @@ struct ContentView: View {
         cells: [ExtractedShiftCell]? = nil,
         yearMonth: YearMonth? = nil,
         includeRest: Bool,
+        applyTextConversion: Bool = true,
         metadata: CalendarEventMetadata = .empty,
         onComplete: (() -> Void)? = nil
     ) {
@@ -2493,6 +2599,8 @@ struct ContentView: View {
                     tagValue: tagValue,
                     restTitle: restTitle,
                     includeRest: includeRest,
+                    applyTextConversion: applyTextConversion,
+                    conversionRules: pdfTextConversionRules(for: .notion),
                     restSourceTitle: restEventSourceTitle,
                     notesProperty: notesProperty,
                     locationProperty: locationProperty,
@@ -2524,6 +2632,7 @@ struct ContentView: View {
         cells: [ExtractedShiftCell]? = nil,
         yearMonth: YearMonth? = nil,
         includeRest: Bool,
+        applyTextConversion: Bool = true,
         metadata: CalendarEventMetadata = .empty,
         onComplete: (() -> Void)? = nil
     ) {
@@ -2561,6 +2670,8 @@ struct ContentView: View {
                     calendarID: calendarID,
                     restTitle: restTitle,
                     includeRest: includeRest,
+                    applyTextConversion: applyTextConversion,
+                    conversionRules: pdfTextConversionRules(for: .google),
                     restSourceTitle: restEventSourceTitle,
                     metadata: metadata
                 )
@@ -2602,21 +2713,18 @@ struct ContentView: View {
             boundingBox: .zero
         )
         let includeRest = isRestShiftTitle(title) || normalizedShiftTitle(title) == "休"
-        let registrationTitle = normalizedShiftTitle(title) == "休"
-            ? restSourceTitleForRegistration()
-            : title
-
         switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
         case .apple:
             registerAppleCalendarEvents(
                 cells: [ExtractedShiftCell(
                     dateText: cell.dateText,
-                    valueText: registrationTitle,
+                    valueText: title,
                     pageIndex: cell.pageIndex,
                     boundingBox: cell.boundingBox
                 )],
                 yearMonth: yearMonth,
                 includeRest: includeRest,
+                applyTextConversion: false,
                 onComplete: onComplete
             )
         case .notion:
@@ -2624,6 +2732,7 @@ struct ContentView: View {
                 cells: [cell],
                 yearMonth: yearMonth,
                 includeRest: includeRest,
+                applyTextConversion: false,
                 metadata: CalendarEventMetadata(
                     tagValue: effectiveNotionTagValue,
                     propertyValues: notionDefaultPropertyValues
@@ -2635,6 +2744,7 @@ struct ContentView: View {
                 cells: [cell],
                 yearMonth: yearMonth,
                 includeRest: includeRest,
+                applyTextConversion: false,
                 onComplete: onComplete
             )
         }
@@ -2799,9 +2909,6 @@ struct ContentView: View {
                 )
             }
             let includeRest = isRestShiftTitle(title) || normalizedShiftTitle(title) == "休"
-            let registrationTitle = normalizedShiftTitle(title) == "休"
-                ? restSourceTitleForRegistration()
-                : title
             let next = RegistrationCompletion {
                 registerGroup(at: index + 1)
             }
@@ -2809,7 +2916,7 @@ struct ContentView: View {
             let registrationCells = cells.map { cell in
                 ExtractedShiftCell(
                     dateText: cell.dateText,
-                    valueText: registrationTitle,
+                    valueText: title,
                     pageIndex: cell.pageIndex,
                     boundingBox: cell.boundingBox
                 )
@@ -2821,6 +2928,7 @@ struct ContentView: View {
                     cells: registrationCells,
                     yearMonth: yearMonth,
                     includeRest: includeRest,
+                    applyTextConversion: false,
                     onComplete: next.call
                 )
             case .notion:
@@ -2828,6 +2936,7 @@ struct ContentView: View {
                     cells: registrationCells,
                     yearMonth: yearMonth,
                     includeRest: includeRest,
+                    applyTextConversion: false,
                     onComplete: next.call
                 )
             case .google:
@@ -2835,6 +2944,7 @@ struct ContentView: View {
                     cells: registrationCells,
                     yearMonth: yearMonth,
                     includeRest: includeRest,
+                    applyTextConversion: false,
                     onComplete: next.call
                 )
             }
@@ -2926,13 +3036,10 @@ struct ContentView: View {
     }
 
     private func isRestShiftTitle(_ value: String) -> Bool {
-        let sourceTitle = normalizedShiftTitle(restEventSourceTitle)
-        return !sourceTitle.isEmpty && normalizedShiftTitle(value) == sourceTitle
-    }
-
-    private func restSourceTitleForRegistration() -> String {
-        let sourceTitle = restEventSourceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        return sourceTitle.isEmpty ? "休" : sourceTitle
+        let normalizedValue = normalizedShiftTitle(value)
+        return CalendarDestination(rawValue: calendarDestination)
+            .map { pdfTextConversionRules(for: $0).contains { normalizedShiftTitle($0.source) == normalizedValue } }
+            ?? false
     }
 
     private func isSavedShiftTitle(_ title: String, in savedTitles: Set<String>) -> Bool {
@@ -2972,9 +3079,105 @@ struct ContentView: View {
         return definitions
     }
 
-    private func syncCloudSettings() {
+    private func syncCloudSettings(
+        colorRulesJSON: String? = nil,
+        changedScopes: Set<ShiftHubSettingsChangeScope> = Set(ShiftHubSettingsChangeScope.allCases)
+    ) {
         guard isCloudSyncEnabled else { return }
-        ShiftHubCloudSync.saveSettings(cloudSettingsSnapshot)
+        var localSettings = cloudSettingsSnapshot
+        if let colorRulesJSON {
+            localSettings.calendarTitleColorRulesJSON = colorRulesJSON
+        }
+        let baselineSettings = lastAppliedCloudSettings
+        Task { @MainActor in
+            let settingsToSave = await mergeLocalColorRuleChanges(
+                localSettings,
+                baseline: baselineSettings
+            )
+            lastAppliedCloudSettings = settingsToSave
+            ShiftHubCloudSync.saveSettings(settingsToSave, changedScopes: changedScopes)
+        }
+    }
+
+    private func mergeLocalColorRuleChanges(
+        _ localSettings: ShiftHubCloudSettings,
+        baseline: ShiftHubCloudSettings?
+    ) async -> ShiftHubCloudSettings {
+        guard let baseline else { return localSettings }
+
+        guard case .success(let remoteSettings) = await ShiftHubCloudSync.loadSettingsFromCloudKit(),
+              let remoteSettings else {
+            return localSettings
+        }
+
+        let baselineRules = Self.decodeTitleColorRules(baseline.calendarTitleColorRulesJSON)
+        let localRules = Self.decodeTitleColorRules(localSettings.calendarTitleColorRulesJSON)
+        let remoteRules = Self.decodeTitleColorRules(remoteSettings.calendarTitleColorRulesJSON)
+        let baselineByID = Dictionary(uniqueKeysWithValues: baselineRules.map { ($0.id, $0) })
+        let localByID = Dictionary(uniqueKeysWithValues: localRules.map { ($0.id, $0) })
+        var mergedRules = remoteRules
+
+        for baselineRule in baselineRules {
+            let localRule = localByID[baselineRule.id]
+            let localWasDeleted = localRule == nil
+            if localWasDeleted {
+                mergedRules.removeAll { $0.id == baselineRule.id }
+                continue
+            }
+
+            guard let localRule else { continue }
+            guard let remoteIndex = mergedRules.firstIndex(where: { $0.id == baselineRule.id }) else {
+                // A remote deletion is preserved unless the local rule was edited.
+                if localRule != baselineRule {
+                    mergedRules.append(localRule)
+                }
+                continue
+            }
+
+            var mergedRule = mergedRules[remoteIndex]
+            if localRule.title != baselineRule.title {
+                mergedRule.title = localRule.title
+            }
+            if localRule.color != baselineRule.color {
+                mergedRule.color = localRule.color
+            }
+            mergedRules[remoteIndex] = mergedRule
+        }
+
+        for localRule in localRules where baselineByID[localRule.id] == nil {
+            guard !mergedRules.contains(where: { $0.id == localRule.id }) else { continue }
+            mergedRules.append(localRule)
+        }
+
+        // Keep the local order for rules that already existed locally, while
+        // retaining remote rules added after the local baseline.
+        let localOrder = Dictionary(uniqueKeysWithValues: localRules.enumerated().map { ($0.element.id, $0.offset) })
+        mergedRules.sort { left, right in
+            switch (localOrder[left.id], localOrder[right.id]) {
+            case let (leftIndex?, rightIndex?): return leftIndex < rightIndex
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return false
+            }
+        }
+
+        var mergedSettings = localSettings
+        mergedSettings.calendarTitleColorRulesJSON = Self.encodeTitleColorRules(mergedRules)
+        NSLog("Shift Hub: merged local color changes with latest CloudKit settings localCount=%ld remoteCount=%ld mergedCount=%ld", localRules.count, remoteRules.count, mergedRules.count)
+        return mergedSettings
+    }
+
+    private static func decodeTitleColorRules(_ json: String) -> [CalendarTitleColorRule] {
+        guard let data = json.data(using: .utf8),
+              let rules = try? JSONDecoder().decode([CalendarTitleColorRule].self, from: data) else {
+            return []
+        }
+        return rules
+    }
+
+    private static func encodeTitleColorRules(_ rules: [CalendarTitleColorRule]) -> String {
+        guard let data = try? JSONEncoder().encode(rules) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private var cloudSettingsSnapshot: ShiftHubCloudSettings {
@@ -3009,22 +3212,40 @@ struct ContentView: View {
             appleURLEnabled: appleURLEnabled,
             googleNotesEnabled: googleNotesEnabled,
             googleLocationEnabled: googleLocationEnabled,
-            googleURLEnabled: googleURLEnabled
+            googleURLEnabled: googleURLEnabled,
+            calendarTitleColorRulesJSON: calendarTitleColorRulesJSON
         )
     }
 
-    private func applyCloudSettings(_ settings: ShiftHubCloudSettings) {
-        appLanguage = settings.appLanguage
-        workerName = settings.workerName.filter { !$0.isNumber }
-        workerNameDraft = workerName
-        shiftDefinitionsJSON = settings.shiftDefinitionsJSON
-        shiftDefinitions = Self.loadShiftDefinitions(from: settings.shiftDefinitionsJSON)
-        calendarDestination = settings.calendarDestination
+    private func applyCloudSettings(
+        _ settings: ShiftHubCloudSettings,
+        scopes: Set<ShiftHubSettingsChangeScope>? = nil
+    ) {
+        let appliesAll = scopes == nil || scopes?.isEmpty == true
+        let appliesEventDefinitions = appliesAll || scopes?.contains(.eventDefinitions) == true
+        let appliesColorRules = appliesAll || scopes?.contains(.colorRules) == true
+        let appliesGeneral = appliesAll || scopes?.contains(.general) == true
+        isApplyingCloudSettings = true
+        lastAppliedCloudSettings = settings
+        if appliesGeneral {
+            // Language and worker name are intentionally device-local.
+            calendarDestination = settings.calendarDestination
+        }
+        if appliesEventDefinitions {
+            shiftDefinitionsJSON = settings.shiftDefinitionsJSON
+            shiftDefinitions = Self.loadShiftDefinitions(from: settings.shiftDefinitionsJSON)
+        }
         // EventKit calendar identifiers are local to the device and must not be
         // restored from another Mac or iPhone through iCloud.
-        restEventSourceTitle = settings.restEventSourceTitle
-        appleRestEventTitle = settings.appleRestEventTitle
-        appleNotesEnabled = settings.appleNotesEnabled
+        if appliesGeneral {
+            restEventSourceTitle = settings.restEventSourceTitle
+            appleRestEventTitle = settings.appleRestEventTitle
+        }
+        if appliesColorRules {
+            calendarTitleColorRulesJSON = settings.calendarTitleColorRulesJSON
+        }
+        if appliesGeneral {
+            appleNotesEnabled = settings.appleNotesEnabled
         appleLocationEnabled = settings.appleLocationEnabled
         appleURLEnabled = settings.appleURLEnabled
         googleCalendarID = settings.googleCalendarID
@@ -3034,7 +3255,6 @@ struct ContentView: View {
         googleLocationEnabled = settings.googleLocationEnabled
         googleURLEnabled = settings.googleURLEnabled
         notionDataSourceID = settings.notionDataSourceID
-        notionDatabaseName = settings.notionDatabaseName
         notionTitleProperty = settings.notionTitleProperty
         notionDateProperty = settings.notionDateProperty
         notionTagProperty = settings.notionTagProperty
@@ -3042,28 +3262,53 @@ struct ContentView: View {
         notionNotesProperty = settings.notionNotesProperty
         notionLocationProperty = settings.notionLocationProperty
         notionURLProperty = settings.notionURLProperty
-        notionMetadataMappingVersion = settings.notionMetadataMappingVersion
-        notionFetchedPropertiesJSON = settings.notionFetchedPropertiesJSON
         notionEnabledPropertyNamesJSON = settings.notionEnabledPropertyNamesJSON
         notionDefaultPropertyValuesJSON = settings.notionDefaultPropertyValuesJSON
-        notionRestEventTitle = settings.notionRestEventTitle
+            notionRestEventTitle = settings.notionRestEventTitle
+        }
+
+        Task { @MainActor in
+            await Task.yield()
+            isApplyingCloudSettings = false
+        }
     }
 
-    private func synchronizeWithCloudKit() async {
-        guard isCloudSyncEnabled, !isSynchronizing else { return }
+    private func synchronizeWithCloudKit(loadSettings: Bool = true) async {
+        guard isCloudSyncEnabled else { return }
+        if isSynchronizing {
+            pendingCloudKitSync = true
+            NSLog("Shift Hub: CloudKit sync already in progress; queued latest notification")
+            return
+        }
         isSynchronizing = true
-        defer { isSynchronizing = false }
-
-        let settingsResult = await ShiftHubCloudSync.loadSettingsFromCloudKit()
-        switch settingsResult {
-        case .success(let settings):
-            if let settings {
-                applyCloudSettings(settings)
-            } else {
-                ShiftHubCloudSync.saveSettings(cloudSettingsSnapshot)
+        defer {
+            isSynchronizing = false
+            if pendingCloudKitSync {
+                pendingCloudKitSync = false
+                NSLog("Shift Hub: running queued CloudKit sync")
+                Task { @MainActor in
+                    await synchronizeWithCloudKit()
+                }
             }
-        case .failure:
-            break
+        }
+
+        if loadSettings {
+            await ShiftHubCloudSync.flushPendingSettingsSave()
+            let externalRevisionAtStart = externalCloudSettingsRevision
+            let settingsResult = await ShiftHubCloudSync.loadSettingsFromCloudKit()
+            if externalRevisionAtStart == externalCloudSettingsRevision {
+                switch settingsResult {
+                case .success(let settings):
+                    if let settings {
+                        applyCloudSettings(settings)
+                        ShiftHubCloudSync.cacheSettings(settings)
+                    } else {
+                        ShiftHubCloudSync.saveSettings(cloudSettingsSnapshot)
+                    }
+                case .failure(let error):
+                    NSLog("Shift Hub: failed to load iCloud settings: %@", String(describing: error))
+                }
+            }
         }
 
         let schedulesResult = await ShiftHubCloudSync.synchronizeSchedulesFromCloudKit(
@@ -3075,6 +3320,7 @@ struct ContentView: View {
 
         isCloudKitStateLoaded = true
     }
+
 
     private static func shiftDefinitionsJSON(from definitions: [ShiftDefinition]) -> String {
         guard let data = try? JSONEncoder().encode(definitions),

@@ -2,6 +2,51 @@ import Foundation
 import CoreGraphics
 import SwiftUI
 
+enum NotionTagValueCodec {
+    static func decode(_ value: String) -> [String] {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        if let data = trimmed.data(using: .utf8),
+           let values = try? JSONDecoder().decode([String].self, from: data) {
+            return unique(values)
+        }
+
+        return unique(
+            trimmed
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    static func encode(_ values: some Sequence<String>) -> String {
+        let normalized = unique(values)
+        guard let data = try? JSONEncoder().encode(normalized),
+              let value = String(data: data, encoding: .utf8) else {
+            return normalized.joined(separator: ", ")
+        }
+        return value
+    }
+
+    static func containsAny(configuredValue: String, actualValues: some Sequence<String>) -> Bool {
+        let expected = Set(decode(configuredValue))
+        guard !expected.isEmpty else { return false }
+        return !expected.isDisjoint(with: actualValues)
+    }
+
+    private static func unique(_ values: some Sequence<String>) -> [String] {
+        var result: [String] = []
+        var seen = Set<String>()
+        for value in values {
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty, seen.insert(normalized).inserted else { continue }
+            result.append(normalized)
+        }
+        return result
+    }
+}
+
 struct CalendarEventMetadata: Codable, Equatable, Hashable {
     var notes: String = ""
     var location: String = ""
@@ -65,6 +110,13 @@ struct CalendarDisplayColor: Codable, Hashable {
         Color(red: red, green: green, blue: blue, opacity: alpha)
     }
 
+    nonisolated init(red: Double, green: Double, blue: Double, alpha: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+    }
+
     nonisolated init?(hex: String) {
         let normalized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
@@ -91,6 +143,22 @@ struct CalendarDisplayColor: Codable, Hashable {
         green = Double(components[1])
         blue = Double(components[2])
         alpha = Double(converted.alpha)
+    }
+}
+
+struct CalendarTitleColorRule: Codable, Identifiable, Hashable {
+    let id: UUID
+    var title: String
+    var color: CalendarDisplayColor
+
+    init(
+        id: UUID = UUID(),
+        title: String = "",
+        color: CalendarDisplayColor = CalendarDisplayColor(red: 1, green: 0, blue: 0, alpha: 1)
+    ) {
+        self.id = id
+        self.title = title
+        self.color = color
     }
 }
 

@@ -3,6 +3,8 @@ import SwiftUI
 
 #if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
 #endif
 
 // Settings, About, missing-title selection, and shift-definition screens.
@@ -50,10 +52,11 @@ private struct CompactToggleStyle: ToggleStyle {
 }
 
 #if os(macOS)
-private enum ShiftHubMacSettingsPane: String, CaseIterable, Identifiable {
+private enum ShiftHubMacSettingsPane: String, CaseIterable, Identifiable, Equatable {
     case general
     case shifts
     case calendars
+    case colors
     case about
 
     var id: String { rawValue }
@@ -66,6 +69,8 @@ private enum ShiftHubMacSettingsPane: String, CaseIterable, Identifiable {
             return "イベント管理"
         case .calendars:
             return "カレンダー設定"
+        case .colors:
+            return "カラー設定"
         case .about:
             return "About"
         }
@@ -79,6 +84,8 @@ private enum ShiftHubMacSettingsPane: String, CaseIterable, Identifiable {
             return "イベントタイトルと開始・終了時刻を管理"
         case .calendars:
             return "カレンダー接続と登録先を設定"
+        case .colors:
+            return "イベントタイトルごとの表示色を設定"
         case .about:
             return "アプリ情報・プライバシー・著作権"
         }
@@ -92,6 +99,8 @@ private enum ShiftHubMacSettingsPane: String, CaseIterable, Identifiable {
             return "clock.badge.checkmark"
         case .calendars:
             return "calendar.badge.clock"
+        case .colors:
+            return "paintpalette"
         case .about:
             return "info.circle"
         }
@@ -105,9 +114,34 @@ private enum ShiftHubMacSettingsPane: String, CaseIterable, Identifiable {
             return ["Shifts", "Shift", "勤務", "タイトル", "時間"]
         case .calendars:
             return ["Calendar", "Apple", "Google", "Notion", "カレンダー"]
+        case .colors:
+            return ["Color", "Colors", "カラー", "色", "イベント色"]
         case .about:
             return ["About", "Privacy", "Copyright", "情報", "プライバシー", "著作権"]
         }
+    }
+}
+
+private struct ShiftHubMacSettingsHeroView: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ShiftHubMacSettingsHeroIcon(systemImage: systemImage)
+            Text(title)
+                .font(.title.bold())
+            Text(subtitle)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 18)
+        .background(ShiftHubMacSettingsCardBackground())
     }
 }
 
@@ -118,8 +152,6 @@ private struct ShiftHubMacSettingsView: View {
 
     @State private var selectedPane: ShiftHubMacSettingsPane = .general
     @State private var sidebarSearchText = ""
-    @State private var isShiftSettingsPresented = false
-    @State private var isCalendarSettingsPresented = false
 
     private var locale: Locale {
         Locale(identifier: appLanguage)
@@ -155,14 +187,6 @@ private struct ShiftHubMacSettingsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .sheet(isPresented: $isShiftSettingsPresented) {
-            ShiftDefinitionSettingsView(definitions: $definitions)
-                .environment(\.locale, Locale(identifier: appLanguage))
-        }
-        .sheet(isPresented: $isCalendarSettingsPresented) {
-            CalendarSettingsView()
-                .environment(\.locale, Locale(identifier: appLanguage))
-        }
     }
 
     private var settingsSidebar: some View {
@@ -194,34 +218,24 @@ private struct ShiftHubMacSettingsView: View {
     }
 
     private var settingsDetail: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 18) {
+            if selectedPane == .general {
                 settingsHero(for: selectedPane)
-                settingsContent(for: selectedPane)
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 24)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            settingsContent(for: selectedPane)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func settingsHero(for pane: ShiftHubMacSettingsPane) -> some View {
-        VStack(spacing: 8) {
-            ShiftHubMacSettingsHeroIcon(systemImage: pane.systemImage)
-
-            Text(localized(pane.title))
-                .font(.title2.weight(.semibold))
-
-            Text(localized(pane.subtitle))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 22)
-        .padding(.horizontal, 18)
-        .background(ShiftHubMacSettingsCardBackground())
+        ShiftHubMacSettingsHeroView(
+            title: localized(pane.title),
+            subtitle: localized(pane.subtitle),
+            systemImage: pane.systemImage
+        )
     }
 
     @ViewBuilder
@@ -230,23 +244,21 @@ private struct ShiftHubMacSettingsView: View {
         case .general:
             generalSettings
         case .shifts:
-            detailActionCard(
-                title: localized("イベント管理"),
-                subtitle: localized("イベントタイトルと開始・終了時刻を管理"),
-                systemImage: "clock.badge.checkmark"
-            ) {
-                isShiftSettingsPresented = true
-            }
+            ShiftDefinitionSettingsView(definitions: $definitions)
+                .environment(\.locale, locale)
         case .calendars:
-            detailActionCard(
-                title: localized("カレンダー設定"),
-                subtitle: localized("Apple・Google・Notionの接続先を管理"),
-                systemImage: "calendar.badge.clock"
-            ) {
-                isCalendarSettingsPresented = true
-            }
+            CalendarSettingsView()
+                .environment(\.locale, locale)
+        case .colors:
+            CalendarColorSettingsView()
+                .environment(\.locale, locale)
         case .about:
-            aboutSettings
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    settingsHero(for: .about)
+                    aboutSettings
+                }
+            }
         }
     }
 
@@ -645,8 +657,8 @@ struct AppSettingsView: View {
         )
 #else
         Form {
-            Section("一般") {
-                Picker("言語", selection: $appLanguage) {
+            Section(ShiftHubLocalization.string("一般", locale: Locale(identifier: appLanguage))) {
+                Picker(ShiftHubLocalization.string("言語", locale: Locale(identifier: appLanguage)), selection: $appLanguage) {
                     ForEach(AppLanguage.allCases) { language in
                         Text(language.title)
                             .tag(language.rawValue)
@@ -654,46 +666,57 @@ struct AppSettingsView: View {
                 }
 
                 Toggle(isOn: $isCloudSyncEnabled) {
-                    Label("iCloud同期", systemImage: "icloud")
+                    Label(ShiftHubLocalization.string("iCloud同期", locale: Locale(identifier: appLanguage)), systemImage: "icloud")
                 }
 
-                Text("設定とPDFをiCloudで同期します。")
+                Text(ShiftHubLocalization.string("設定とPDFをiCloudで同期します。", locale: Locale(identifier: appLanguage)))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            Section("イベント") {
+            Section(ShiftHubLocalization.string("イベント", locale: Locale(identifier: appLanguage))) {
                 NavigationLink {
                     ShiftDefinitionSettingsView(definitions: $definitions)
                 } label: {
-                    Label("イベント管理", systemImage: "clock.badge.checkmark")
+                    Label(ShiftHubLocalization.string("イベント管理", locale: Locale(identifier: appLanguage)), systemImage: "clock.badge.checkmark")
                 }
-                    Text("イベントタイトルと開始・終了時刻を管理")
+                    Text(ShiftHubLocalization.string("イベントタイトルと開始・終了時刻を管理", locale: Locale(identifier: appLanguage)))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            Section("カレンダー") {
+            Section(ShiftHubLocalization.string("カレンダー", locale: Locale(identifier: appLanguage))) {
                 NavigationLink {
                     CalendarSettingsView()
                 } label: {
-                    Label("カレンダー設定", systemImage: "calendar.badge.clock")
+                    Label(ShiftHubLocalization.string("カレンダー設定", locale: Locale(identifier: appLanguage)), systemImage: "calendar.badge.clock")
                 }
-                Text("Apple・Google・Notionの接続先を管理")
+                Text(ShiftHubLocalization.string("Apple・Google・Notionの接続先を管理", locale: Locale(identifier: appLanguage)))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            Section("About") {
+            Section(ShiftHubLocalization.string("カラー", locale: Locale(identifier: appLanguage))) {
+                NavigationLink {
+                    CalendarColorSettingsView()
+                } label: {
+                    Label(ShiftHubLocalization.string("カラー設定", locale: Locale(identifier: appLanguage)), systemImage: "paintpalette")
+                }
+                Text(ShiftHubLocalization.string("登録した文字列と完全一致するイベントに、選択した色を適用します。", locale: Locale(identifier: appLanguage)))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section(ShiftHubLocalization.string("About", locale: Locale(identifier: appLanguage))) {
                 NavigationLink {
                     ShiftHubAboutView()
                 } label: {
-                            Label("Cal Hubについて", systemImage: "info.circle")
+                            Label(ShiftHubLocalization.string("Cal Hubについて", locale: Locale(identifier: appLanguage)), systemImage: "info.circle")
                 }
             }
         }
         .environment(\.locale, Locale(identifier: appLanguage))
-        .navigationTitle("設定")
+        .navigationTitle(ShiftHubLocalization.string("設定", locale: Locale(identifier: appLanguage)))
         .navigationBarTitleDisplayMode(.inline)
 #endif
     }
@@ -766,8 +789,8 @@ private struct ShiftHubAboutView: View {
                     detail: "Notionのタイトル列・日時列を選択し、編集可能なプロパティを登録画面に追加できます。セレクト系のデフォルト値は設定画面で指定でき、複数日登録にも使用されます。"
                 )
                 ShiftHubAboutRow(
-                    title: "登録時の文字変換",
-                    detail: "任意の文字列を、登録時に別の文字列へ変換できます。PDF上の休み表示などに利用できます。"
+                    title: "PDFスキャン登録時の文字変換",
+                    detail: "PDFスキャンの結果を登録するときだけ、指定した文字列を別の文字列に変換します。手動登録には適用されません。"
                 )
                 ShiftHubAboutRow(
                     title: "イベント管理",
@@ -1198,7 +1221,7 @@ private struct ShiftDefinitionRegistrationView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(localized(isEditing ? "イベントを編集" : "イベントを登録"))
-                        .font(.title.bold())
+                        .font(.title2.bold())
                 }
 
                 Spacer()
@@ -1215,9 +1238,8 @@ private struct ShiftDefinitionRegistrationView: View {
                 .buttonStyle(.borderedProminent)
 #endif
             }
-            .padding(24)
-
-            Divider()
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
 
 #if os(macOS)
             VStack(alignment: .leading, spacing: 12) {
@@ -1267,7 +1289,7 @@ private struct ShiftDefinitionRegistrationView: View {
                     }
                 }
             }
-            .padding(24)
+            .padding(16)
 #else
             Form {
                 Section {
@@ -1365,7 +1387,9 @@ private struct ShiftDefinitionRegistrationView: View {
 #if os(iOS)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 #else
-        .frame(width: 520, height: 360)
+        .frame(minWidth: 520)
+        .padding(.vertical, 8)
+        .fixedSize(horizontal: false, vertical: true)
 #endif
 #if os(iOS)
         .background(
@@ -1412,54 +1436,47 @@ private struct ShiftDefinitionRegistrationView: View {
 
 struct ShiftDefinitionSettingsView: View {
     @Binding var definitions: [ShiftDefinition]
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
     @State private var isRegistrationPresented = false
     @State private var editingDefinition: ShiftDefinition?
-    @State private var isInvalidTimeAlertPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            List {
 #if os(macOS)
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("イベント管理")
-                        .font(.title.bold())
+                ShiftHubMacSettingsHeroView(
+                    title: ShiftHubLocalization.string("イベント管理", locale: locale),
+                    subtitle: ShiftHubLocalization.string("イベントタイトルと開始・終了時刻を管理", locale: locale),
+                    systemImage: "clock.badge.checkmark"
+                )
+                .textCase(nil)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
 
-//                    Text("勤務タイトルと時間を保存します。")
-//                        .font(.callout)
-//                        .foregroundStyle(.secondary)
-                }
+                Color.clear
+                    .frame(height: 24)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
 
-                Spacer()
+                HStack {
+                    Spacer()
 
-                Button {
-                    isRegistrationPresented = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(ShiftHubLocalization.string("追加", locale: locale))
-                .help(ShiftHubLocalization.string("追加", locale: locale))
-                .padding(.trailing)
-
-#if os(macOS)
-                Button("完了") {
-                    if definitions.contains(where: { !$0.isAllDay && $0.endMinutes < $0.startMinutes }) {
-                        isInvalidTimeAlertPresented = true
-                    } else {
-                        dismiss()
+                    Button {
+                        isRegistrationPresented = true
+                    } label: {
+                        Image(systemName: "plus")
                     }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(ShiftHubLocalization.string("追加", locale: locale))
+                    .help(ShiftHubLocalization.string("追加", locale: locale))
                 }
-                .keyboardShortcut(.defaultAction)
+                .padding(.trailing, 10)
+                .padding(.vertical, 10)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
 #endif
-            }
-            .padding(24)
-
-            Divider()
-#endif
-
-            VStack(alignment: .leading, spacing: 12) {
                 if definitions.isEmpty {
                     ContentUnavailableView(
                         "イベント設定がありません",
@@ -1467,8 +1484,25 @@ struct ShiftDefinitionSettingsView: View {
                         description: Text("追加ボタンからイベントタイトルと時間を登録してください。")
                     )
                     .frame(maxWidth: .infinity, minHeight: 180)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 } else {
-                    List {
+#if os(macOS)
+                        ForEach($definitions) { $definition in
+                            ShiftDefinitionRowView(
+                                definition: $definition,
+                                editAction: {
+                                    editingDefinition = definition
+                                },
+                                deleteAction: {
+                                    definitions.removeAll { $0.id == definition.id }
+                                }
+                            )
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .listRowSeparator(.hidden)
+                        }
+                        .onMove(perform: moveDefinitions)
+#else
                         ForEach($definitions) { $definition in
                             ShiftDefinitionRowView(
                                 definition: $definition,
@@ -1510,14 +1544,13 @@ struct ShiftDefinitionSettingsView: View {
 #endif
                         }
                         .onMove(perform: moveDefinitions)
-                    }
-                    .listStyle(.plain)
+#endif
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
 #if os(iOS)
             .padding(.horizontal, 0)
-#else
-            .padding(24)
 #endif
 
         }
@@ -1525,8 +1558,6 @@ struct ShiftDefinitionSettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("イベント管理")
         .navigationBarTitleDisplayMode(.inline)
-#else
-        .frame(minWidth: 680, minHeight: 460)
 #endif
 #if os(iOS)
         .toolbar {
@@ -1566,11 +1597,6 @@ struct ShiftDefinitionSettingsView: View {
                 definitions[index].endMinutes = endMinutes
                 definitions[index].isAllDay = isAllDay
             }
-        }
-        .alert("保存できません", isPresented: $isInvalidTimeAlertPresented) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("終了時刻は開始時刻以降にしてください。")
         }
     }
 
@@ -1723,8 +1749,375 @@ private struct NotionTagValueSelectionView: View {
     }
 }
 
-struct CalendarSettingsView: View {
+private struct CalendarColorSettingsView: View {
+    @Environment(\.locale) private var locale
+    @AppStorage("calendarTitleColorRulesJSON") private var calendarTitleColorRulesJSON = "[]"
+    @State private var draftRules: [CalendarTitleColorRule] = []
+    @State private var editingRule: CalendarTitleColorRule?
+
+    var body: some View {
+        List {
+#if os(macOS)
+            ShiftHubMacSettingsHeroView(
+                    title: ShiftHubLocalization.string("カラー設定", locale: locale),
+                    subtitle: ShiftHubLocalization.string("イベントタイトルごとの表示色を設定", locale: locale),
+                    systemImage: "paintpalette"
+                )
+                .textCase(nil)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+#endif
+
+#if os(macOS)
+                Color.clear
+                    .frame(height: 24)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+
+            HStack {
+                Spacer()
+
+                Button {
+                    editingRule = CalendarTitleColorRule()
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(ShiftHubLocalization.string("追加", locale: locale))
+                .help(ShiftHubLocalization.string("追加", locale: locale))
+            }
+            .padding(.trailing, 10)
+            .padding(.vertical, 10)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+#endif
+
+                ForEach(draftRules) { rule in
+                    CalendarColorRuleRowView(
+                        rule: rule,
+                        editAction: {
+                            editingRule = rule
+                        },
+                        deleteAction: {
+                            deleteRule(rule.id)
+                        }
+                    )
+#if os(iOS)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        Button {
+                            editingRule = rule
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .tint(.blue)
+                        .accessibilityLabel(ShiftHubLocalization.string("編集", locale: locale))
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteRule(rule.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .accessibilityLabel(ShiftHubLocalization.string("削除", locale: locale))
+                    }
+#else
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                    .listRowSeparator(.hidden)
+#endif
+                }
+                .onMove(perform: moveRules)
+
+                if draftRules.isEmpty {
+                    ContentUnavailableView(
+                        ShiftHubLocalization.string("カラー設定がありません", locale: locale),
+                        systemImage: "paintpalette",
+                        description: Text(ShiftHubLocalization.string("追加ボタンからカラー設定を登録してください。", locale: locale))
+                    )
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+#if os(iOS)
+        .navigationTitle(ShiftHubLocalization.string("カラー設定", locale: locale))
+#endif
+#if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    editingRule = CalendarTitleColorRule()
+                } label: {
+                    Label(ShiftHubLocalization.string("追加", locale: locale), systemImage: "plus")
+                }
+
+            }
+        }
+#endif
+        .onAppear {
+            draftRules = decodedRules
+        }
+        .onChange(of: calendarTitleColorRulesJSON) {
+            draftRules = decodedRules
+        }
+        .sheet(item: $editingRule) { rule in
+            CalendarColorRuleEditorView(rule: rule) { updatedRule in
+                var updatedRules = draftRules
+                if let index = updatedRules.firstIndex(where: { $0.id == updatedRule.id }) {
+                    updatedRules[index] = updatedRule
+                } else {
+                    updatedRules.append(updatedRule)
+                }
+                draftRules = updatedRules
+                commitRules(updatedRules)
+            }
+            .environment(\.locale, locale)
+        }
+    }
+
+    private func deleteRule(_ id: UUID) {
+        var updatedRules = draftRules
+        updatedRules.removeAll { $0.id == id }
+        draftRules = updatedRules
+        commitRules(updatedRules)
+    }
+
+    private func moveRules(from offsets: IndexSet, to destination: Int) {
+        var updatedRules = draftRules
+        updatedRules.move(fromOffsets: offsets, toOffset: destination)
+        draftRules = updatedRules
+        commitRules(updatedRules)
+    }
+
+    private var decodedRules: [CalendarTitleColorRule] {
+        guard let data = calendarTitleColorRulesJSON.data(using: .utf8),
+              let rules = try? JSONDecoder().decode([CalendarTitleColorRule].self, from: data) else {
+            return []
+        }
+        return rules
+    }
+
+    private func commitRules(_ rules: [CalendarTitleColorRule]) {
+        guard let data = try? JSONEncoder().encode(rules),
+              let json = String(data: data, encoding: .utf8) else {
+            return
+        }
+
+        calendarTitleColorRulesJSON = json
+        NSLog("Shift Hub: color settings save committed ruleCount=%ld", rules.count)
+        Task { @MainActor in
+            await Task.yield()
+            await Task.yield()
+            NotificationCenter.default.post(
+                name: .shiftHubSettingsDidChange,
+                object: json,
+                userInfo: ["changedScopes": [ShiftHubSettingsChangeScope.colorRules.rawValue]]
+            )
+        }
+    }
+}
+
+private struct CalendarColorRuleRowView: View {
+    let rule: CalendarTitleColorRule
+    let editAction: () -> Void
+    let deleteAction: () -> Void
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+#if os(iOS)
+        HStack(spacing: 10) {
+            Text(ShiftHubLocalization.string(rule.title.isEmpty ? "タイトル未設定" : rule.title, locale: locale))
+                .font(.callout)
+                .foregroundStyle(rule.title.isEmpty ? .secondary : .primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Capsule()
+                .fill(Color(
+                    red: rule.color.red,
+                    green: rule.color.green,
+                    blue: rule.color.blue,
+                    opacity: rule.color.alpha * 0.25
+                ))
+                .frame(width: 44, height: 24)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            Color.secondary.opacity(0.12),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+#else
+        HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(.tertiary)
+                .frame(width: 18)
+
+            Text(ShiftHubLocalization.string(rule.title.isEmpty ? "タイトル未設定" : rule.title, locale: locale))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Capsule()
+                .fill(Color(
+                    red: rule.color.red,
+                    green: rule.color.green,
+                    blue: rule.color.blue,
+                    opacity: rule.color.alpha * 0.25
+                ))
+                .frame(width: 44, height: 24)
+
+            Button(action: editAction) {
+                Image(systemName: "pencil")
+            }
+            .buttonStyle(.borderless)
+            .frame(width: 24)
+            .accessibilityLabel(ShiftHubLocalization.string("編集", locale: locale))
+            .help(ShiftHubLocalization.string("編集", locale: locale))
+
+            Button(role: .destructive, action: deleteAction) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .frame(width: 24)
+            .accessibilityLabel(ShiftHubLocalization.string("削除", locale: locale))
+            .help(ShiftHubLocalization.string("削除", locale: locale))
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
+#endif
+    }
+}
+
+private struct CalendarColorRuleEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    let rule: CalendarTitleColorRule
+    let onSave: (CalendarTitleColorRule) -> Void
+    @Environment(\.locale) private var locale
+    @State private var title: String
+    @State private var color: Color
+
+    init(rule: CalendarTitleColorRule, onSave: @escaping (CalendarTitleColorRule) -> Void) {
+        self.rule = rule
+        self.onSave = onSave
+        _title = State(initialValue: rule.title)
+        _color = State(initialValue: rule.color.color)
+    }
+
+    var body: some View {
+#if os(macOS)
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(ShiftHubLocalization.string(rule.title.isEmpty ? "カラー設定を追加" : "カラー設定を編集", locale: locale))
+                        .font(.title2.bold())
+                }
+
+                Spacer()
+
+                Button(ShiftHubLocalization.string("キャンセル", locale: locale)) {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+
+                Button(ShiftHubLocalization.string("保存", locale: locale)) {
+                    save()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    TextField("", text: $title)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            Color(nsColor: .controlBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                        }
+
+                    ColorPicker("", selection: $color, supportsOpacity: false)
+                        .labelsHidden()
+                }
+            }
+            .padding(16)
+        }
+        .frame(minWidth: 320)
+        .padding(.vertical, 8)
+        .fixedSize(horizontal: false, vertical: true)
+#else
+        NavigationStack {
+            Group {
+            Form {
+                Section(ShiftHubLocalization.string("カラー設定", locale: locale)) {
+                    TextField(ShiftHubLocalization.string("タイトル", locale: locale), text: $title)
+                    ColorPicker(ShiftHubLocalization.string("色", locale: locale), selection: $color, supportsOpacity: false)
+                }
+            }
+            }
+            .navigationTitle(ShiftHubLocalization.string(rule.title.isEmpty ? "カラー設定を追加" : "カラー設定を編集", locale: locale))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(ShiftHubLocalization.string("キャンセル", locale: locale)) {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(ShiftHubLocalization.string("保存", locale: locale)) {
+                        guard let displayColor = Self.displayColor(from: color) else { return }
+                        onSave(
+                            CalendarTitleColorRule(
+                                id: rule.id,
+                                title: title,
+                                color: displayColor
+                            )
+                        )
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 320, minHeight: 180)
+#endif
+    }
+
+    private func save() {
+        guard let displayColor = Self.displayColor(from: color) else { return }
+        onSave(
+            CalendarTitleColorRule(
+                id: rule.id,
+                title: title,
+                color: displayColor
+            )
+        )
+        dismiss()
+    }
+
+    private static func displayColor(from color: Color) -> CalendarDisplayColor? {
+#if os(macOS)
+        guard let cgColor = NSColor(color).usingColorSpace(.deviceRGB)?.cgColor else { return nil }
+#else
+        let cgColor = UIColor(color).cgColor
+#endif
+        return CalendarDisplayColor(cgColor: cgColor)
+    }
+}
+
+struct CalendarSettingsView: View {
     @Environment(\.locale) private var locale
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("calendarDestination") private var calendarDestination = CalendarDestination.apple.rawValue
@@ -1732,6 +2125,7 @@ struct CalendarSettingsView: View {
     @AppStorage("appleCalendarName") private var appleCalendarName = ""
     @AppStorage("restEventSourceTitle") private var restEventSourceTitle = ""
     @AppStorage("appleRestEventTitle") private var appleRestEventTitle = ""
+    @AppStorage("calendarTitleColorRulesJSON") private var calendarTitleColorRulesJSON = "[]"
     @AppStorage("appleNotesEnabled") private var appleNotesEnabled = true
     @AppStorage("appleLocationEnabled") private var appleLocationEnabled = true
     @AppStorage("appleURLEnabled") private var appleURLEnabled = true
@@ -1768,68 +2162,63 @@ struct CalendarSettingsView: View {
     @State private var isLoadingNotionProperties = false
     @FocusState private var isTextFieldFocused: Bool
 
+    private var calendarDestinationHelpText: String {
+        ShiftHubLocalization.string("ここで選択したカレンダーを、イベントの登録先として使用します。", locale: locale)
+    }
+
+    private func currentDestinationText(_ name: String) -> String {
+        "\(ShiftHubLocalization.string("現在の登録先", locale: locale)): \(name)"
+    }
+
+    @ViewBuilder
+    private var destinationCalendarSection: some View {
+        calendarSection(ShiftHubLocalization.string("登録先カレンダー", locale: locale), systemImage: "paperplane") {
+            Picker(ShiftHubLocalization.string("登録先", locale: locale), selection: $calendarDestination) {
+                ForEach(CalendarDestination.allCases) { destination in
+                    Text(destination.title)
+                        .tag(destination.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(calendarDestinationHelpText)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-#if os(macOS)
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("カレンダー設定")
-                        .font(.title.bold())
-
-                    Text("イベント情報の登録先を設定します。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-#if os(macOS)
-                Button("完了") {
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-#endif
-            }
-            .padding(24)
-
-            Divider()
-#endif
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    calendarSection("登録先カレンダー", systemImage: "paperplane") {
-                        Picker("登録先", selection: $calendarDestination) {
-                            ForEach(CalendarDestination.allCases) { destination in
-                                Text(destination.title)
-                                    .tag(destination.rawValue)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        Text("ここで選択したカレンダーを、イベントの登録先として使用します。")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
+#if os(macOS)
+                    ShiftHubMacSettingsHeroView(
+                        title: ShiftHubLocalization.string("カレンダー設定", locale: locale),
+                        subtitle: ShiftHubLocalization.string("イベント情報の登録先を設定します。", locale: locale),
+                        systemImage: "calendar.badge.clock"
+                    )
+#endif
+                    destinationCalendarSection
 
                     switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
                     case .apple:
-                        calendarSection("Appleカレンダー", systemImage: "apple.logo") {
+                        calendarSection(ShiftHubLocalization.string("Appleカレンダー", locale: locale), systemImage: "apple.logo") {
                             Button {
                                 appleCalendarProvider.loadCalendars()
                             } label: {
-                                Label("カレンダー一覧を取得", systemImage: "arrow.clockwise")
+                                Label(ShiftHubLocalization.string("カレンダー一覧を取得", locale: locale), systemImage: "arrow.clockwise")
                             }
                             .buttonStyle(.bordered)
                             .disabled(appleCalendarProvider.isLoading)
 
                             if appleCalendarProvider.isLoading {
-                                ProgressView("取得中です...")
+                                ProgressView(ShiftHubLocalization.string("取得中です...", locale: locale))
                                     .controlSize(.small)
                             }
 
                             if !appleCalendarProvider.calendars.isEmpty {
-                                Picker("登録先カレンダー", selection: $appleCalendarIdentifier) {
-                                    Text("デフォルトカレンダー")
+                                Picker(ShiftHubLocalization.string("登録先カレンダー", locale: locale), selection: $appleCalendarIdentifier) {
+                                    Text(ShiftHubLocalization.string("デフォルトカレンダー", locale: locale))
                                         .tag("")
 
                                     ForEach(appleCalendarProvider.calendars) { calendar in
@@ -1841,15 +2230,15 @@ struct CalendarSettingsView: View {
                             }
 
                             if appleCalendarIdentifier.isEmpty {
-                                Text("現在の登録先: デフォルトカレンダー")
+                                Text(ShiftHubLocalization.string("現在の登録先: デフォルトカレンダー", locale: locale))
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             } else if let selectedCalendar = appleCalendarProvider.calendars.first(where: { $0.id == appleCalendarIdentifier }) {
-                                Text("現在の登録先: \(selectedCalendar.displayName(for: locale))")
+                                Text(currentDestinationText(selectedCalendar.displayName(for: locale)))
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             } else {
-                                Text("保存されている登録先カレンダーを確認できません。もう一度一覧を取得してください。")
+                                Text(ShiftHubLocalization.string("保存されている登録先カレンダーを確認できません。もう一度一覧を取得してください。", locale: locale))
                                     .font(.callout)
                                     .foregroundStyle(.orange)
                             }
@@ -1868,13 +2257,13 @@ struct CalendarSettingsView: View {
                         }
 
                     case .google:
-                        calendarSection("Googleカレンダー", systemImage: "g.circle") {
+                        calendarSection(ShiftHubLocalization.string("Googleカレンダー", locale: locale), systemImage: "g.circle") {
                             HStack(spacing: 10) {
                                 Button {
                                     googleCalendarProvider.signIn()
                                 } label: {
                                     Label(
-                                        googleCalendarProvider.isAuthorized ? "Googleに再ログイン" : "Googleにログイン",
+                                        ShiftHubLocalization.string(googleCalendarProvider.isAuthorized ? "Googleに再ログイン" : "Googleにログイン", locale: locale),
                                         systemImage: "person.crop.circle.badge.checkmark"
                                     )
                                 }
@@ -1882,13 +2271,13 @@ struct CalendarSettingsView: View {
                                 .disabled(googleCalendarProvider.isAuthorizing)
 
                                 if googleCalendarProvider.isAuthorized {
-                                    Label("接続済み", systemImage: "checkmark.circle.fill")
+                                    Label(ShiftHubLocalization.string("接続済み", locale: locale), systemImage: "checkmark.circle.fill")
                                         .foregroundStyle(.green)
                                 }
                             }
 
                             if googleCalendarProvider.isAuthorizing {
-                                ProgressView("ブラウザでGoogleログインを待っています...")
+                                ProgressView(ShiftHubLocalization.string("ブラウザでGoogleログインを待っています...", locale: locale))
                                     .controlSize(.small)
                             }
 
@@ -1896,19 +2285,19 @@ struct CalendarSettingsView: View {
                                 Button {
                                     googleCalendarProvider.loadCalendars()
                                 } label: {
-                                    Label("カレンダー一覧を取得", systemImage: "arrow.clockwise")
+                                    Label(ShiftHubLocalization.string("カレンダー一覧を取得", locale: locale), systemImage: "arrow.clockwise")
                                 }
                                 .buttonStyle(.bordered)
                                 .disabled(googleCalendarProvider.isLoading)
                             }
 
                             if googleCalendarProvider.isLoading {
-                                ProgressView("取得中です...")
+                                ProgressView(ShiftHubLocalization.string("取得中です...", locale: locale))
                                     .controlSize(.small)
                             }
 
                             if !googleCalendarProvider.calendars.isEmpty {
-                                Picker("登録先カレンダー", selection: $googleCalendarID) {
+                                Picker(ShiftHubLocalization.string("登録先カレンダー", locale: locale), selection: $googleCalendarID) {
                                     ForEach(googleCalendarProvider.calendars) { calendar in
                                         Text(calendar.displayName(for: locale))
                                             .tag(calendar.id)
@@ -1919,19 +2308,19 @@ struct CalendarSettingsView: View {
                             if let selectedCalendar = googleCalendarProvider.calendars.first(where: {
                                 $0.id == googleCalendarID
                             }) {
-                                Text("現在の登録先: \(selectedCalendar.displayName(for: locale))")
+                                Text(currentDestinationText(selectedCalendar.displayName(for: locale)))
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             } else if googleCalendarProvider.isAuthorized {
-                                Text("カレンダー一覧を取得して登録先を選択してください。")
+                                Text(ShiftHubLocalization.string("カレンダー一覧を取得して登録先を選択してください。", locale: locale))
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             }
 
                             if googleCalendarProvider.japaneseHolidayCalendarID != nil {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Toggle("日本の祝日を表示", isOn: $googleShowJapaneseHolidays)
-                                    Text("Googleカレンダーの「日本の祝日」を、登録先と一緒に表示します。")
+                                    Toggle(ShiftHubLocalization.string("日本の祝日を表示", locale: locale), isOn: $googleShowJapaneseHolidays)
+                                    Text(ShiftHubLocalization.string("Googleカレンダーの「日本の祝日」を、登録先と一緒に表示します。", locale: locale))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -1943,7 +2332,7 @@ struct CalendarSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
 
-                            Text("Googleにログインしてカレンダーへのアクセスを許可し、登録先を選択します。")
+                            Text(ShiftHubLocalization.string("Googleにログインしてカレンダーへのアクセスを許可し、登録先を選択します。", locale: locale))
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
 
@@ -1955,27 +2344,27 @@ struct CalendarSettingsView: View {
                         }
 
                     case .notion:
-                        calendarSection("Notion DB", systemImage: "n.square") {
+                        calendarSection(ShiftHubLocalization.string("Notion DB", locale: locale), systemImage: "n.square") {
                             HStack(spacing: 8) {
                                 Text("Bearer")
                                     .foregroundStyle(.secondary)
 
-                                SecureField("ntn_から始まるトークン", text: $notionToken)
+                                SecureField(ShiftHubLocalization.string("ntn_から始まるトークン", locale: locale), text: $notionToken)
                                     .textFieldStyle(.roundedBorder)
                                     .focused($isTextFieldFocused)
                             }
 
-                            TextField("データベースID", text: $notionDataSourceID)
+                            TextField(ShiftHubLocalization.string("データベースID", locale: locale), text: $notionDataSourceID)
                                 .textFieldStyle(.roundedBorder)
                                 .focused($isTextFieldFocused)
 
                             if !notionDatabaseName.isEmpty {
-                                Label("接続先: \(notionDatabaseName)", systemImage: "checkmark.circle.fill")
+                                Label("\(ShiftHubLocalization.string("接続先", locale: locale)): \(notionDatabaseName)", systemImage: "checkmark.circle.fill")
                                     .foregroundStyle(.green)
                             }
 
                             if isLoadingNotionProperties {
-                                ProgressView("Notionの列を取得中です...")
+                                ProgressView(ShiftHubLocalization.string("Notionの列を取得中です...", locale: locale))
                                     .controlSize(.small)
                             }
 
@@ -1987,29 +2376,11 @@ struct CalendarSettingsView: View {
                         }
                     }
 
-                    calendarSection("カレンダー表示", systemImage: "calendar") {
-                        Toggle("日曜日を赤で表示", isOn: $isSundayInRedEnabled)
+                    calendarSection(ShiftHubLocalization.string("カレンダー表示", locale: locale), systemImage: "calendar") {
+                        Toggle(ShiftHubLocalization.string("日曜日を赤で表示", locale: locale), isOn: $isSundayInRedEnabled)
                     }
 
-                    calendarSection("登録時の文字変換", systemImage: "textformat") {
-                        switch CalendarDestination(rawValue: calendarDestination) ?? .apple {
-                        case .apple:
-                            restEventTitleField(
-                                source: $restEventSourceTitle,
-                                destination: $appleRestEventTitle
-                            )
-                        case .google:
-                            restEventTitleField(
-                                source: $restEventSourceTitle,
-                                destination: $googleRestEventTitle
-                            )
-                        case .notion:
-                            restEventTitleField(
-                                source: $restEventSourceTitle,
-                                destination: $notionRestEventTitle
-                            )
-                        }
-                    }
+                    pdfTextConversionSettingsSection
 
                 }
                 .padding(24)
@@ -2019,8 +2390,6 @@ struct CalendarSettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("カレンダー設定")
         .navigationBarTitleDisplayMode(.inline)
-#else
-        .frame(minWidth: 680, minHeight: 620)
 #endif
         .calHubKeyboardDismissal()
         .onTapGesture {
@@ -2077,37 +2446,165 @@ struct CalendarSettingsView: View {
             KeychainStore.set(notionToken, for: "notion-access-token")
         }
         .onChange(of: calendarSettingsSyncKey) {
-            NotificationCenter.default.post(name: .shiftHubSettingsDidChange, object: nil)
+            NotificationCenter.default.post(
+                name: .shiftHubSettingsDidChange,
+                object: nil,
+                userInfo: ["changedScopes": [ShiftHubSettingsChangeScope.general.rawValue]]
+            )
         }
         .task(id: notionDiscoveryKey) {
             await discoverNotionProperties()
         }
-        .onDisappear {
-            NotificationCenter.default.post(name: .shiftHubSettingsDidChange, object: nil)
+    }
+
+    private var editablePDFTextConversionRules: [PDFTextConversionRule] {
+        if let data = restEventSourceTitle.data(using: .utf8),
+           let rules = try? JSONDecoder().decode([PDFTextConversionRule].self, from: data) {
+            return rules
+        }
+
+        return [PDFTextConversionRule(
+            id: PDFTextConversionRule.legacyID,
+            source: restEventSourceTitle,
+            appleDestination: appleRestEventTitle,
+            googleDestination: googleRestEventTitle,
+            notionDestination: notionRestEventTitle
+        )]
+    }
+
+    private var pdfTextConversionSettingsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label(
+                    ShiftHubLocalization.string("PDFスキャン登録時の文字変換", locale: locale),
+                    systemImage: "textformat"
+                )
+                .font(.headline)
+
+                Spacer()
+
+                Button {
+                    addPDFTextConversionRule()
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.primary)
+                .accessibilityLabel(ShiftHubLocalization.string("追加", locale: locale))
+                .padding(.trailing, 10)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(editablePDFTextConversionRules) { rule in
+                    HStack(spacing: 8) {
+                        TextField(
+                            ShiftHubLocalization.string("変換元", locale: locale),
+                            text: pdfTextConversionRuleSourceBinding(rule.id),
+                            axis: .vertical
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isTextFieldFocused)
+
+                        Text("→")
+                            .foregroundStyle(.secondary)
+
+                        TextField(
+                            ShiftHubLocalization.string("変換先", locale: locale),
+                            text: pdfTextConversionRuleDestinationBinding(rule.id),
+                            axis: .vertical
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isTextFieldFocused)
+
+                        Button {
+                            removePDFTextConversionRule(rule.id)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(ShiftHubLocalization.string("削除", locale: locale))
+                    }
+                }
+
+                Text(ShiftHubLocalization.string("PDFスキャンで認識した文字列だけを、登録時に別の文字列へ変換します。手動登録には適用されません。", locale: locale))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.background.secondary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var currentPDFTextConversionDestination: CalendarDestination {
+        CalendarDestination(rawValue: calendarDestination) ?? .apple
+    }
+
+    private func addPDFTextConversionRule() {
+        var rules = editablePDFTextConversionRules
+        rules.append(PDFTextConversionRule())
+        savePDFTextConversionRules(rules)
+    }
+
+    private func removePDFTextConversionRule(_ id: UUID) {
+        var rules = editablePDFTextConversionRules
+        rules.removeAll { $0.id == id }
+        savePDFTextConversionRules(rules)
+    }
+
+    private func pdfTextConversionRuleSourceBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { editablePDFTextConversionRules.first(where: { $0.id == id })?.source ?? "" },
+            set: { value in
+                var rules = editablePDFTextConversionRules
+                guard let index = rules.firstIndex(where: { $0.id == id }) else { return }
+                rules[index].source = value
+                savePDFTextConversionRules(rules)
+            }
+        )
+    }
+
+    private func pdfTextConversionRuleDestinationBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                guard let rule = editablePDFTextConversionRules.first(where: { $0.id == id }) else { return "" }
+                return pdfTextConversionDestination(for: rule)
+            },
+            set: { value in
+                var rules = editablePDFTextConversionRules
+                guard let index = rules.firstIndex(where: { $0.id == id }) else { return }
+                switch currentPDFTextConversionDestination {
+                case .apple:
+                    rules[index].appleDestination = value
+                case .google:
+                    rules[index].googleDestination = value
+                case .notion:
+                    rules[index].notionDestination = value
+                }
+                savePDFTextConversionRules(rules)
+            }
+        )
+    }
+
+    private func pdfTextConversionDestination(for rule: PDFTextConversionRule) -> String {
+        switch currentPDFTextConversionDestination {
+        case .apple:
+            return rule.appleDestination
+        case .google:
+            return rule.googleDestination
+        case .notion:
+            return rule.notionDestination
         }
     }
 
-    private func restEventTitleField(
-        source: Binding<String>,
-        destination: Binding<String>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                TextField("休", text: source, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($isTextFieldFocused)
-                Text("→")
-                    .foregroundStyle(.secondary)
-                TextField("off", text: destination, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($isTextFieldFocused)
-            }
-
-            Text("任意の文字列を、登録時に別の文字列へ変換できます。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .help("左の文字列を、右の文字列に変換して登録します。")
+    private func savePDFTextConversionRules(_ rules: [PDFTextConversionRule]) {
+        guard let data = try? JSONEncoder().encode(rules) else { return }
+        restEventSourceTitle = String(decoding: data, as: UTF8.self)
+        appleRestEventTitle = rules.first?.appleDestination ?? ""
+        googleRestEventTitle = rules.first?.googleDestination ?? ""
+        notionRestEventTitle = rules.first?.notionDestination ?? ""
     }
 
     private func calendarMetadataSettings(
@@ -2119,24 +2616,24 @@ struct CalendarSettingsView: View {
             Divider()
                 .padding(.vertical, 4)
 
-            Text("登録時に入力するプロパティ")
+            Text(ShiftHubLocalization.string("登録時に入力するプロパティ", locale: locale))
                 .font(.callout.weight(.semibold))
 
-            Toggle("メモ・説明", isOn: notes)
+            Toggle(ShiftHubLocalization.string("メモ・説明", locale: locale), isOn: notes)
                 .tint(.accentColor)
                 .toggleStyle(CompactToggleStyle())
             Divider()
                 .padding(.vertical, 5)
-            Toggle("場所", isOn: location)
+            Toggle(ShiftHubLocalization.string("場所", locale: locale), isOn: location)
                 .tint(.accentColor)
                 .toggleStyle(CompactToggleStyle())
             Divider()
                 .padding(.vertical, 5)
-            Toggle("URL", isOn: url)
+            Toggle(ShiftHubLocalization.string("URL", locale: locale), isOn: url)
                 .tint(.accentColor)
                 .toggleStyle(CompactToggleStyle())
 
-            Text("ONにした項目を登録・編集画面で入力できます。")
+            Text(ShiftHubLocalization.string("ONにした項目を登録・編集画面で入力できます。", locale: locale))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -2145,7 +2642,7 @@ struct CalendarSettingsView: View {
     private var notionPropertySelectionList: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 0) {
-                Text("取得したプロパティ設定")
+                Text(ShiftHubLocalization.string("取得したプロパティ設定", locale: locale))
                     .font(.callout.weight(.semibold))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
@@ -2258,7 +2755,7 @@ struct CalendarSettingsView: View {
         .padding(.vertical, 10)
 #else
         Picker(selection: $notionTagProperty) {
-            Text("使用しない")
+            Text(ShiftHubLocalization.string("使用しない", locale: locale))
                 .tag("")
             ForEach(notionProperties.filter { $0.type == "multi_select" }) { property in
                 Text(property.displayName(for: locale))
@@ -2314,19 +2811,46 @@ struct CalendarSettingsView: View {
     @ViewBuilder
     private func notionDefaultValuePicker(for property: NotionPropertyOption) -> some View {
         if property.options.isEmpty {
-            Text("選択肢がありません")
+            Text(ShiftHubLocalization.string("選択肢がありません", locale: locale))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 6)
+        } else if property.type == "multi_select" {
+            CalHubMultiSelectSegmentedControl(
+                options: [""] + property.options,
+                selection: notionDefaultMultiSelectBinding(for: property)
+            )
+            .accessibilityLabel(ShiftHubLocalization.string("デフォルト値", locale: locale))
+            .padding(.top, 8)
         } else {
             CalHubSegmentedControl(
                 options: [""] + property.options,
                 selection: notionDefaultPropertyValueBinding(for: property),
                 animationDuration: 0.16
             )
-            .accessibilityLabel("デフォルト値")
+            .accessibilityLabel(ShiftHubLocalization.string("デフォルト値", locale: locale))
             .padding(.top, 8)
         }
+    }
+
+    private func notionDefaultMultiSelectBinding(
+        for property: NotionPropertyOption
+    ) -> Binding<Set<String>> {
+        Binding(
+            get: {
+                Set(NotionTagValueCodec.decode(notionDefaultPropertyValues[property.name] ?? ""))
+            },
+            set: { selected in
+                let ordered = property.options.filter { selected.contains($0) }
+                let encoded = NotionTagValueCodec.encode(ordered)
+                var values = notionDefaultPropertyValues
+                values[property.name] = encoded
+                notionDefaultPropertyValuesJSON = encodePropertyValues(values)
+                if property.name == notionTagProperty {
+                    notionTagValue = encoded
+                }
+            }
+        )
     }
 
     private func notionDefaultPropertyValueBinding(for property: NotionPropertyOption) -> Binding<String> {
@@ -2403,7 +2927,7 @@ struct CalendarSettingsView: View {
 #else
         Picker(selection: notionPropertySelectionBinding(for: role)) {
             if role.allowsUnused {
-                Text("使用しない")
+                Text(ShiftHubLocalization.string("使用しない", locale: locale))
                     .tag("")
             }
             ForEach(properties) { property in
@@ -2597,14 +3121,14 @@ struct CalendarSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text("データベースIDを入力するとプロパティを取得します。Notionで対象データベースにインテグレーションを追加してください。")
+            Text(ShiftHubLocalization.string("データベースIDを入力するとプロパティを取得します。Notionで対象データベースにインテグレーションを追加してください。", locale: locale))
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
 
     private func calendarSection<Content: View>(
-        _ title: LocalizedStringKey,
+        _ title: String,
         systemImage: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -2701,6 +3225,7 @@ struct CalendarSettingsView: View {
             appleURLEnabled.description,
             googleCalendarID,
             googleRestEventTitle,
+            googleShowJapaneseHolidays.description,
             googleNotesEnabled.description,
             googleLocationEnabled.description,
             googleURLEnabled.description,

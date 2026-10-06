@@ -122,6 +122,15 @@ private struct CalHubSegmentLayout: Layout {
     }
 }
 
+private extension Array {
+    func calHubChunks(ofCount count: Int) -> [[Element]] {
+        guard count > 0, !isEmpty else { return [self] }
+        return stride(from: 0, to: self.count, by: count).map { start in
+            Array(self[start..<Swift.min(start + count, self.count)])
+        }
+    }
+}
+
 struct CalHubSegmentedControl: View {
     let options: [String]
     let systemImages: [String]?
@@ -141,49 +150,125 @@ struct CalHubSegmentedControl: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            let itemHorizontalPadding: CGFloat = systemImages == nil ? 8 : 4
+        let rows = options.calHubChunks(ofCount: 5)
 
-            CalHubSegmentLayout(selectedIndex: options.firstIndex(of: selection)) {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.55))
-                    .allowsHitTesting(false)
+        VStack(spacing: 4) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, rowOptions in
+                GeometryReader { proxy in
+                    let itemHorizontalPadding: CGFloat = systemImages == nil ? 8 : 4
 
-                ForEach(Array(options.enumerated()), id: \.offset) { index, option in
-                    Button {
-                        withAnimation(.easeOut(duration: animationDuration)) {
-                            selection = option
-                        }
-                    } label: {
-                        Group {
-                            if let systemImage = systemImages,
-                               systemImage.indices.contains(index) {
-                                Image(systemName: systemImage[index])
+                    CalHubSegmentLayout(selectedIndex: rowOptions.firstIndex(of: selection)) {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.55))
+                            .allowsHitTesting(false)
+
+                        ForEach(Array(rowOptions.enumerated()), id: \.offset) { index, option in
+                            Button {
+                                withAnimation(.easeOut(duration: animationDuration)) {
+                                    selection = option
+                                }
+                            } label: {
+                                Group {
+                                    if let systemImage = systemImages,
+                                       systemImage.indices.contains(rowIndex * 5 + index) {
+                                        Image(systemName: systemImage[rowIndex * 5 + index])
 #if os(macOS)
-                                    .font(.system(size: 16, weight: .medium))
+                                            .font(.system(size: 16, weight: .medium))
 #endif
-                                    .accessibilityLabel(option.isEmpty ? "未選択" : option)
-                            } else {
-                                Text(option.isEmpty ? "未選択" : option)
-                                    .font(.system(size: 11))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.65)
+                                            .accessibilityLabel(option.isEmpty ? "未選択" : option)
+                                    } else {
+                                        Text(option.isEmpty ? "未選択" : option)
+                                            .font(.system(size: 11))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.65)
+                                    }
+                                }
+                                .padding(.horizontal, itemHorizontalPadding)
+                                .frame(maxWidth: .infinity, minHeight: 24)
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.primary)
                         }
-                        .padding(.horizontal, itemHorizontalPadding)
-                        .frame(maxWidth: .infinity, minHeight: 24)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.primary)
+                    .frame(width: max(proxy.size.width - 6, 0), height: 24, alignment: .leading)
+                    .animation(.easeOut(duration: animationDuration), value: selection)
+                    .padding(3)
                 }
+                .frame(height: 30)
+                .background(Color.secondary.opacity(0.22), in: Capsule())
             }
-            .frame(width: max(proxy.size.width - 6, 0), height: 24, alignment: .leading)
-            .animation(.easeOut(duration: animationDuration), value: selection)
-            .padding(3)
         }
-        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
-        .background(Color.secondary.opacity(0.22), in: Capsule())
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct CalHubMultiSelectSegmentedControl: View {
+    let options: [String]
+    let animationDuration: Double
+    @Binding var selection: Set<String>
+
+    init(
+        options: [String],
+        selection: Binding<Set<String>>,
+        animationDuration: Double = 0.16
+    ) {
+        self.options = options
+        self.animationDuration = animationDuration
+        _selection = selection
+    }
+
+    var body: some View {
+        let rows = options.calHubChunks(ofCount: 5)
+
+        VStack(spacing: 4) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, rowOptions in
+                HStack(spacing: 8) {
+                    ForEach(rowOptions, id: \.self) { option in
+                        let isEmptyOption = option.isEmpty
+                        let isSelected = isEmptyOption
+                            ? selection.isEmpty
+                            : selection.contains(option)
+
+                        Button {
+                            withAnimation(.easeOut(duration: animationDuration)) {
+                                if isEmptyOption {
+                                    selection.removeAll()
+                                } else if selection.contains(option) {
+                                    selection.remove(option)
+                                } else {
+                                    selection.insert(option)
+                                }
+                            }
+                        } label: {
+                            Text(isEmptyOption ? "未選択" : option)
+                                .font(.system(size: 11))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
+                                .padding(.horizontal, 8)
+                                .frame(maxWidth: .infinity, minHeight: 24)
+                                .contentShape(Rectangle())
+                                .background(Color.clear, in: Capsule())
+                                .overlay {
+                                    Capsule()
+                                        .stroke(
+                                            isSelected ? Color.accentColor : Color.clear,
+                                            lineWidth: 1.0
+                                        )
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 3)
+                .padding(.vertical, 3)
+                .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30)
+                .background(Color.secondary.opacity(0.22), in: Capsule())
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -787,7 +872,18 @@ struct DateTimeEventRegistrationView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                if ["multi_select", "select"].contains(property.type) {
+                if property.type == "multi_select" {
+                    if property.options.isEmpty {
+                        Text("選択肢がありません")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        CalHubMultiSelectSegmentedControl(
+                            options: [""] + property.options,
+                            selection: metadataMultiSelectBinding(for: property)
+                        )
+                    }
+                } else if property.type == "select" {
                     if property.options.isEmpty {
                         Text("選択肢がありません")
                             .font(.callout)
@@ -816,6 +912,16 @@ struct DateTimeEventRegistrationView: View {
         Binding(
             get: { propertyValues[property.name] ?? "" },
             set: { propertyValues[property.name] = $0 }
+        )
+    }
+
+    private func metadataMultiSelectBinding(for property: NotionPropertyOption) -> Binding<Set<String>> {
+        Binding(
+            get: { Set(NotionTagValueCodec.decode(propertyValues[property.name] ?? "")) },
+            set: { selected in
+                let ordered = property.options.filter { selected.contains($0) }
+                propertyValues[property.name] = NotionTagValueCodec.encode(ordered)
+            }
         )
     }
 
@@ -1184,7 +1290,18 @@ struct RegistrationPreviewView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                if ["multi_select", "select"].contains(property.type) {
+                if property.type == "multi_select" {
+                    if property.options.isEmpty {
+                        Text("選択肢がありません")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        CalHubMultiSelectSegmentedControl(
+                            options: [""] + property.options,
+                            selection: metadataMultiSelectBinding(for: property)
+                        )
+                    }
+                } else if property.type == "select" {
                     if property.options.isEmpty {
                         Text("選択肢がありません")
                             .font(.callout)
@@ -1213,6 +1330,16 @@ struct RegistrationPreviewView: View {
         Binding(
             get: { propertyValues[property.name] ?? "" },
             set: { propertyValues[property.name] = $0 }
+        )
+    }
+
+    private func metadataMultiSelectBinding(for property: NotionPropertyOption) -> Binding<Set<String>> {
+        Binding(
+            get: { Set(NotionTagValueCodec.decode(propertyValues[property.name] ?? "")) },
+            set: { selected in
+                let ordered = property.options.filter { selected.contains($0) }
+                propertyValues[property.name] = NotionTagValueCodec.encode(ordered)
+            }
         )
     }
 

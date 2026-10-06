@@ -39,6 +39,11 @@
 	<string>勤務イベントを取得・登録・削除するために使用します。</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>background-fetch</string>
+		<string>remote-notification</string>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

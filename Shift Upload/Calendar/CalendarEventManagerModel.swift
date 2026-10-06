@@ -1627,6 +1627,9 @@ final class CalendarEventManagerModel: ObservableObject {
                             (nextMonth, cachedEvents(for: nextMonth))]
             .flatMap { item in item.1.map { (item.0, $0) } }
         var seenEventIDs = Set<String>()
+#if os(macOS)
+        let snapshotDate = Date.now
+#endif
         let events = sourceEvents
             .filter { seenEventIDs.insert($0.1.id).inserted }
             .compactMap { item -> CalHubWidgetEvent? in
@@ -1639,6 +1642,10 @@ final class CalendarEventManagerModel: ObservableObject {
                 guard let eventDate,
                       (event.endDate ?? eventDate) >= today,
                       eventDate < endOfNextMonth else { return nil }
+#if os(macOS)
+                let hasEnded = !event.isAllDay && event.endDate.map { $0 <= snapshotDate } == true
+                guard !hasEnded else { return nil }
+#endif
                 return CalHubWidgetEvent(
                     id: event.id,
                     title: event.title,

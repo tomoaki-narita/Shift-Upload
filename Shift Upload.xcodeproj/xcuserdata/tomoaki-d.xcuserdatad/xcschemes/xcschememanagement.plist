@@ -4,6 +4,31 @@
 <dict>
 	<key>SchemeUserState</key>
 	<dict>
+		<key>Cal Hub Watch.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>5</integer>
+		</dict>
+		<key>CalHubWatch Watch App.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>2</integer>
+		</dict>
+		<key>CalHubWatchWidgetExtension.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>3</integer>
+		</dict>
+		<key>CalHubWidgetExtension-iOS.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>4</integer>
+		</dict>
+		<key>CalHubWidgetExtension-macOS.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>6</integer>
+		</dict>
 		<key>Shift Hub iOS.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
@@ -23,6 +48,21 @@
 			<true/>
 		</dict>
 		<key>08264854304FBF7600BEFF29</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>082E469D306F664200EED5C3</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>082E46B0306F667100EED5C3</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>A10000000000000000000044</key>
 		<dict>
 			<key>primary</key>
 			<true/>
