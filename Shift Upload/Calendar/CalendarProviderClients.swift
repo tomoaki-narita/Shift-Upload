@@ -1337,11 +1337,14 @@ struct NotionCalendarEventClient {
             ],
             dateProperty: ["date": dateValue]
         ]
-        if !metadataProperties.contains(where: { $0.name == tagProperty }) {
-            let effectiveTagValue = effectiveTagValue(metadata: metadata)
-            let effectiveTagValues = NotionTagValueCodec.decode(effectiveTagValue)
-            if !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               !effectiveTagValues.isEmpty {
+        let effectiveTagValue = effectiveTagValue(metadata: metadata)
+        let effectiveTagValues = NotionTagValueCodec.decode(effectiveTagValue)
+        if !tagProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let tagOption = metadataProperties.first(where: { $0.name == tagProperty }),
+               tagOption.type == "select" {
+                properties[tagProperty] = effectiveTagValues.first.map { ["select": ["name": $0]] }
+                    ?? ["select": NSNull()]
+            } else {
                 properties[tagProperty] = [
                     "multi_select": effectiveTagValues.map { ["name": $0] }
                 ]

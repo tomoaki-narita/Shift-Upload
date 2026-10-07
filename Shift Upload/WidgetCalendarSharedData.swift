@@ -19,6 +19,10 @@ struct CalHubWidgetSnapshot: Codable, Equatable {
     let sourceKind: String?
     let appleCalendarIdentifier: String?
     let remoteConfiguration: CalHubWidgetRemoteConfiguration?
+    let sourceRed: Double?
+    let sourceGreen: Double?
+    let sourceBlue: Double?
+    let metadataOptionColors: [String: [String: String]]?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.configurationKey == rhs.configurationKey
@@ -27,6 +31,10 @@ struct CalHubWidgetSnapshot: Codable, Equatable {
             && lhs.sourceKind == rhs.sourceKind
             && lhs.appleCalendarIdentifier == rhs.appleCalendarIdentifier
             && lhs.remoteConfiguration == rhs.remoteConfiguration
+            && lhs.sourceRed == rhs.sourceRed
+            && lhs.sourceGreen == rhs.sourceGreen
+            && lhs.sourceBlue == rhs.sourceBlue
+            && lhs.metadataOptionColors == rhs.metadataOptionColors
     }
 }
 
@@ -60,13 +68,41 @@ struct CalHubWidgetEvent: Codable, Equatable, Identifiable {
     let endDate: Date?
     let isAllDay: Bool
     let isRestEvent: Bool
+    var metadata: [String: String] = [:]
     let red: Double?
     let green: Double?
     let blue: Double?
 
+    init(
+        id: String,
+        title: String,
+        detail: String,
+        date: Date,
+        startDate: Date?,
+        endDate: Date?,
+        isAllDay: Bool,
+        isRestEvent: Bool,
+        metadata: [String: String] = [:],
+        red: Double?,
+        green: Double?,
+        blue: Double?
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.date = date
+        self.startDate = startDate
+        self.endDate = endDate
+        self.isAllDay = isAllDay
+        self.isRestEvent = isRestEvent
+        self.metadata = metadata
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
     var accentComponents: (red: Double, green: Double, blue: Double) {
         if let red, let green, let blue { return (red, green, blue) }
-        if isRestEvent { return (0.96, 0.23, 0.28) }
         return (0.25, 0.58, 0.95)
     }
 }
@@ -74,6 +110,16 @@ struct CalHubWidgetEvent: Codable, Equatable, Identifiable {
 enum CalHubWidgetSharedData {
     static let appGroupIdentifier = "group.net.unwraps.Shift-Hub"
     static let sundayInRedPreferenceKey = "calendarSundayInRedEnabled"
+    static let inlineTimeRangePreferenceKey = "calendarInlineTimeRangeEnabled"
+    static let inlineTimeEnabledPreferenceKey = "calendarInlineTimeEnabled"
+    static let inlineStartTimeEnabledPreferenceKey = "calendarInlineStartTimeEnabled"
+    static let inlineEndTimeEnabledPreferenceKey = "calendarInlineEndTimeEnabled"
+    static let cornerTimeEnabledPreferenceKey = "calendarCornerTimeEnabled"
+    static let cornerStartTimeEnabledPreferenceKey = "calendarCornerStartTimeEnabled"
+    static let cornerEndTimeEnabledPreferenceKey = "calendarCornerEndTimeEnabled"
+    static let rectangularTimeEnabledPreferenceKey = "calendarRectangularTimeEnabled"
+    static let rectangularStartTimeEnabledPreferenceKey = "calendarRectangularStartTimeEnabled"
+    static let rectangularEndTimeEnabledPreferenceKey = "calendarRectangularEndTimeEnabled"
     static let widgetKind = "CalHubCalendarWidget"
     static let weeklyWidgetKind = "CalHubWeeklyCalendarWidget"
     private static let snapshotFileName = "calendar-widget-snapshot.json"

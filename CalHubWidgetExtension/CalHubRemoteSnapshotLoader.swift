@@ -24,7 +24,11 @@ enum CalHubRemoteSnapshotLoader {
                 events: events,
                 sourceKind: snapshot.sourceKind,
                 appleCalendarIdentifier: snapshot.appleCalendarIdentifier,
-                remoteConfiguration: configuration
+                remoteConfiguration: configuration,
+                sourceRed: snapshot.sourceRed,
+                sourceGreen: snapshot.sourceGreen,
+                sourceBlue: snapshot.sourceBlue,
+                metadataOptionColors: snapshot.metadataOptionColors
             )
         } catch {
             return nil

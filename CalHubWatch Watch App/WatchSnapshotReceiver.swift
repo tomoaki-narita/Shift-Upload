@@ -8,12 +8,28 @@ struct WatchSnapshot: Codable {
     let version: Int
     let localeIdentifier: String
     let updatedAt: Date
+    let inlineTimeEnabled: Bool?
+    let inlineStartTimeEnabled: Bool?
+    let inlineEndTimeEnabled: Bool?
+    let cornerTimeEnabled: Bool?
+    let cornerStartTimeEnabled: Bool?
+    let cornerEndTimeEnabled: Bool?
+    let rectangularTimeEnabled: Bool?
+    let rectangularStartTimeEnabled: Bool?
+    let rectangularEndTimeEnabled: Bool?
+    let sundayInRedEnabled: Bool?
+    let sourceRed: Double?
+    let sourceGreen: Double?
+    let sourceBlue: Double?
     let events: [WatchSnapshotEvent]
 }
 
-struct WatchSnapshotEvent: Codable, Equatable, Identifiable {
+struct WatchSnapshotEvent: Codable, Equatable, Hashable, Identifiable {
     let id: String
     let title: String
+    let detail: String?
+    let metadata: [String: String]?
+    let optionColors: [String: [String: String]]?
     let date: Date
     let startDate: Date?
     let endDate: Date?
@@ -57,6 +73,7 @@ final class WatchSnapshotReceiver: NSObject, ObservableObject, WCSessionDelegate
             forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
         ),
         let snapshot = try? JSONDecoder().decode(WatchSnapshot.self, from: data) else { return }
+        guard snapshot.updatedAt >= (self.snapshot?.updatedAt ?? .distantPast) else { return }
 
         do {
             try data.write(
@@ -104,14 +121,28 @@ final class WatchSnapshotReceiver: NSObject, ObservableObject, WCSessionDelegate
         _ session: WCSession,
         didReceiveApplicationContext applicationContext: [String: Any]
     ) {
-        guard let data = applicationContext["snapshot"] as? Data else {
+        receiveContext(applicationContext, source: "application context")
+    }
+
+    nonisolated func session(
+        _ session: WCSession,
+        didReceiveUserInfo userInfo: [String: Any]
+    ) {
+        receiveContext(userInfo, source: "user info")
+    }
+
+    private nonisolated func receiveContext(
+        _ context: [String: Any],
+        source: String
+    ) {
+        guard let data = context["snapshot"] as? Data else {
             #if DEBUG
-            print("Watch sync received context without snapshot")
+            print("Watch sync received \(source) without snapshot")
             #endif
             return
         }
         #if DEBUG
-        print("Watch sync application context received bytes=\(data.count)")
+        print("Watch sync \(source) received bytes=\(data.count)")
         #endif
         Task { @MainActor in
             WatchSnapshotReceiver.shared.receive(data)

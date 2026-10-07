@@ -261,6 +261,13 @@ enum ShiftHubCloudSync {
     private static let schedulePayloadField = "scheduleJSON"
     private static let schedulePDFField = "pdf"
     private static let scheduleSubscriptionID = "ShiftHubSchedule.v1"
+    private static let calendarEventChangeRecordType = "ShiftHubCalendarEventChange"
+    private static let calendarEventChangeSubscriptionID = "ShiftHubCalendarEventChange.v1"
+    private static let calendarEventDestinationField = "destination"
+    private static let calendarEventMonthField = "yearMonth"
+    private static let calendarEventAdditionalMonthField = "additionalYearMonth"
+    private static let calendarEventOperationField = "operation"
+    private static let calendarEventChangedAtField = "changedAt"
 
     private enum CloudSyncError: Error {
         case invalidRecord
@@ -290,6 +297,11 @@ enum ShiftHubCloudSync {
             await ensureSubscription(
                 id: scheduleSubscriptionID,
                 recordType: scheduleRecordType,
+                existingSubscriptions: existing
+            )
+            await ensureSubscription(
+                id: calendarEventChangeSubscriptionID,
+                recordType: calendarEventChangeRecordType,
                 existingSubscriptions: existing
             )
         } catch {
@@ -340,8 +352,49 @@ enum ShiftHubCloudSync {
             NSLog("Shift Hub: CloudKit schedules remote notification received subscription=%@", subscriptionID)
             NotificationCenter.default.post(name: .shiftHubCloudKitSchedulesDidChange, object: nil)
             return true
+        case calendarEventChangeSubscriptionID:
+            NSLog("Shift Hub: CloudKit calendar event change remote notification received subscription=%@", subscriptionID)
+            NotificationCenter.default.post(name: .shiftHubCloudKitCalendarEventsDidChange, object: nil)
+            return true
         default:
             return false
+        }
+    }
+
+    static func publishCalendarEventChange(
+        destination: String,
+        affectedYearMonths: [String],
+        operation: String
+    ) async {
+        guard isEnabled else { return }
+
+        let months = Array(
+            Set(affectedYearMonths.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        ).sorted()
+        guard let firstMonth = months.first else { return }
+
+        let record = CKRecord(
+            recordType: calendarEventChangeRecordType,
+            recordID: CKRecord.ID(recordName: UUID().uuidString)
+        )
+        record[calendarEventDestinationField] = destination as CKRecordValue
+        record[calendarEventMonthField] = firstMonth as CKRecordValue
+        if let secondMonth = months.dropFirst().first {
+            record[calendarEventAdditionalMonthField] = secondMonth as CKRecordValue
+        }
+        record[calendarEventOperationField] = operation as CKRecordValue
+        record[calendarEventChangedAtField] = Date() as CKRecordValue
+
+        do {
+            _ = try await privateDatabase.save(record)
+            NSLog(
+                "Shift Hub: published calendar event change destination=%@ operation=%@ months=%@",
+                destination,
+                operation,
+                months.joined(separator: ",")
+            )
+        } catch {
+            NSLog("Shift Hub: failed to publish calendar event change: %@", String(describing: error))
         }
     }
 

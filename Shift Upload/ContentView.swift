@@ -119,6 +119,7 @@ extension Notification.Name {
     static let shiftHubSettingsDidChange = Notification.Name("ShiftHubSettingsDidChange")
     static let shiftHubCloudKitSettingsDidChange = Notification.Name("ShiftHubCloudKitSettingsDidChange")
     static let shiftHubCloudKitSchedulesDidChange = Notification.Name("ShiftHubCloudKitSchedulesDidChange")
+    static let shiftHubCloudKitCalendarEventsDidChange = Notification.Name("ShiftHubCloudKitCalendarEventsDidChange")
     static let shiftHubScanStoredSchedule = Notification.Name("ShiftHubScanStoredSchedule")
 }
 
@@ -481,6 +482,29 @@ struct ContentView: View {
         ShiftHubLocalization.format(key, locale: locale, arguments: arguments)
     }
 
+    private func yearMonth(for date: Date) -> YearMonth {
+        let components = Calendar.current.dateComponents([.year, .month], from: date)
+        return YearMonth(
+            year: components.year ?? Calendar.current.component(.year, from: Date()),
+            month: components.month ?? Calendar.current.component(.month, from: Date())
+        )
+    }
+
+    private func publishCalendarEventChange(
+        destination: CalendarDestination,
+        yearMonths: [YearMonth],
+        operation: String
+    ) {
+        let monthIdentifiers = yearMonths.map { String(format: "%04d-%02d", $0.year, $0.month) }
+        Task {
+            await ShiftHubCloudSync.publishCalendarEventChange(
+                destination: destination.rawValue,
+                affectedYearMonths: monthIdentifiers,
+                operation: operation
+            )
+        }
+    }
+
     private var metadataFieldLabels: CalendarEventMetadataFieldLabels {
         let fallback = CalendarEventMetadataFieldLabels(
             notes: localizedMessage("メモ・説明"),
@@ -704,20 +728,41 @@ struct ContentView: View {
                         yearMonth: yearMonth,
                         day: day,
                         title: title,
-                        onComplete: completion.call
+                        onComplete: {
+                            publishCalendarEventChange(
+                                destination: destination,
+                                yearMonths: [yearMonth],
+                                operation: "create"
+                            )
+                            completion.call()
+                        }
                     )
                 },
                 onRegisterDateTimeEvent: { draft, completion in
                     registerDateTimeEvent(
                         draft: draft,
-                        onComplete: completion.call
+                        onComplete: { eventID in
+                            publishCalendarEventChange(
+                                destination: destination,
+                                yearMonths: [yearMonth(for: draft.startDate)],
+                                operation: "create"
+                            )
+                            completion.call(eventID: eventID)
+                        }
                     )
                 },
                 onRegisterShifts: { selections, title, completion in
                     registerMultipleShifts(
                         selections: selections,
                         title: title,
-                        onComplete: completion.call
+                        onComplete: {
+                            publishCalendarEventChange(
+                                destination: destination,
+                                yearMonths: selections.map { YearMonth(year: $0.year, month: $0.month) },
+                                operation: "create"
+                            )
+                            completion.call()
+                        }
                     )
                 },
                 onCalendarDestinationChange: { destination in

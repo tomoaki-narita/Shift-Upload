@@ -721,6 +721,25 @@ struct AppSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section(ShiftHubLocalization.string("Apple Watch", locale: Locale(identifier: appLanguage))) {
+                NavigationLink {
+                    AppleWatchComplicationSettingsView()
+                } label: {
+                    Label(
+                        ShiftHubLocalization.string("Apple Watchコンプリケーション", locale: Locale(identifier: appLanguage)),
+                        systemImage: "applewatch"
+                    )
+                }
+                Text(
+                    ShiftHubLocalization.string(
+                        "Apple WatchのInlineコンプリケーション表示を設定します。",
+                        locale: Locale(identifier: appLanguage)
+                    )
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            }
+
             Section(ShiftHubLocalization.string("カラー", locale: Locale(identifier: appLanguage))) {
                 NavigationLink {
                     CalendarColorSettingsView()
@@ -746,6 +765,146 @@ struct AppSettingsView: View {
 #endif
     }
 
+}
+
+private struct AppleWatchComplicationSettingsView: View {
+    @Environment(\.locale) private var locale
+    @AppStorage(
+        CalHubWidgetSharedData.inlineTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isInlineTimeEnabled = true
+    @AppStorage(
+        CalHubWidgetSharedData.inlineStartTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isInlineStartTimeEnabled = true
+    @AppStorage(
+        CalHubWidgetSharedData.inlineEndTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isInlineEndTimeEnabled = false
+    @AppStorage(
+        CalHubWidgetSharedData.cornerTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isCornerTimeEnabled = true
+    @AppStorage(
+        CalHubWidgetSharedData.cornerStartTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isCornerStartTimeEnabled = true
+    @AppStorage(
+        CalHubWidgetSharedData.cornerEndTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isCornerEndTimeEnabled = false
+    @AppStorage(
+        CalHubWidgetSharedData.rectangularTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isRectangularTimeEnabled = true
+    @AppStorage(
+        CalHubWidgetSharedData.rectangularStartTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isRectangularStartTimeEnabled = true
+    @AppStorage(
+        CalHubWidgetSharedData.rectangularEndTimeEnabledPreferenceKey,
+        store: UserDefaults(suiteName: CalHubWidgetSharedData.appGroupIdentifier)
+    ) private var isRectangularEndTimeEnabled = false
+
+    var body: some View {
+        Form {
+            timeSettingsSection(
+                title: "Inline",
+                enabled: $isInlineTimeEnabled,
+                startEnabled: $isInlineStartTimeEnabled,
+                endEnabled: $isInlineEndTimeEnabled
+            )
+
+            Section(ShiftHubLocalization.string("Circular", locale: locale)) {
+                Toggle(
+                    ShiftHubLocalization.string("イベントタイトル", locale: locale),
+                    isOn: .constant(true)
+                )
+                .disabled(true)
+            }
+
+            timeSettingsSection(
+                title: "Corner",
+                enabled: $isCornerTimeEnabled,
+                startEnabled: $isCornerStartTimeEnabled,
+                endEnabled: $isCornerEndTimeEnabled
+            )
+
+            timeSettingsSection(
+                title: "Rectangular",
+                enabled: $isRectangularTimeEnabled,
+                startEnabled: $isRectangularStartTimeEnabled,
+                endEnabled: $isRectangularEndTimeEnabled
+            )
+        }
+        .navigationTitle(
+            ShiftHubLocalization.string("Apple Watchコンプリケーション", locale: locale)
+        )
+        .onChange(of: isInlineTimeEnabled) {
+            reloadWatchComplications()
+        }
+        .onChange(of: isInlineStartTimeEnabled) {
+            reloadWatchComplications()
+        }
+        .onChange(of: isInlineEndTimeEnabled) {
+            reloadWatchComplications()
+        }
+        .onChange(of: isCornerTimeEnabled) {
+            reloadWatchComplications()
+        }
+        .onChange(of: isCornerStartTimeEnabled) {
+            reloadWatchComplications()
+        }
+        .onChange(of: isCornerEndTimeEnabled) {
+            reloadWatchComplications()
+        }
+        .onChange(of: isRectangularTimeEnabled) {
+            reloadWatchComplications()
+        }
+        .onChange(of: isRectangularStartTimeEnabled) {
+            reloadWatchComplications()
+        }
+        .onChange(of: isRectangularEndTimeEnabled) {
+            reloadWatchComplications()
+        }
+    }
+
+    private func reloadWatchComplications() {
+        CalHubWidgetSharedData.reloadTimelines()
+#if os(iOS)
+        CalHubWatchSyncManager.shared.publishLatestSnapshot()
+#endif
+    }
+
+    @ViewBuilder
+    private func timeSettingsSection(
+        title: String,
+        enabled: Binding<Bool>,
+        startEnabled: Binding<Bool>,
+        endEnabled: Binding<Bool>
+    ) -> some View {
+        Section(ShiftHubLocalization.string(title, locale: locale)) {
+            Toggle(
+                ShiftHubLocalization.string("時刻表示", locale: locale),
+                isOn: enabled
+            )
+
+            if enabled.wrappedValue {
+                VStack(alignment: .leading, spacing: 25) {
+                    Toggle(
+                        ShiftHubLocalization.string("開始時間", locale: locale),
+                        isOn: startEnabled
+                    )
+                    Toggle(
+                        ShiftHubLocalization.string("終了時間", locale: locale),
+                        isOn: endEnabled
+                    )
+                }
+                .padding(.leading, 18)
+                .padding(.top, 4)
+            }
+        }
+    }
 }
 
 private struct ShiftHubAboutView: View {
@@ -1951,6 +2110,10 @@ private struct CalendarColorSettingsView: View {
         Task { @MainActor in
             await Task.yield()
             await Task.yield()
+            CalHubWidgetSharedData.reloadTimelines()
+#if os(iOS)
+            CalHubWatchSyncManager.shared.publishLatestSnapshot()
+#endif
             NotificationCenter.default.post(
                 name: .shiftHubSettingsDidChange,
                 object: json,
@@ -2555,6 +2718,9 @@ struct CalendarSettingsView: View {
         }
         .onChange(of: isSundayInRedEnabled) {
             CalHubWidgetSharedData.reloadTimelines()
+#if os(iOS)
+            CalHubWatchSyncManager.shared.publishLatestSnapshot()
+#endif
         }
         .onChange(of: japaneseHolidayColor) {
             guard let displayColor = Self.displayColor(from: japaneseHolidayColor),

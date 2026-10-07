@@ -462,6 +462,17 @@ final class CalendarEventManagerModel: ObservableObject {
     }
 
     @MainActor
+    func refreshDisplayedMonths(for yearMonths: Set<YearMonth>) async {
+        _ = await refreshCachedMonths(for: yearMonths)
+        guard yearMonths.contains(yearMonth),
+              let refreshedMonth = monthCache[yearMonth] else {
+            return
+        }
+        shouldAnimateEventBandReveal = false
+        display(refreshedMonth)
+    }
+
+    @MainActor
     func revalidateCachedMonths(for yearMonths: Set<YearMonth>) {
         var loadedPersistentCache = false
         for yearMonth in yearMonths {
@@ -684,23 +695,26 @@ final class CalendarEventManagerModel: ObservableObject {
                     )
                 }
 
-                if self.destination == .notion {
-                    self.events.removeAll { $0.id == target.id }
-                    self.loadedDays = Set(self.events.map(\.day))
-                    self.clearPersistentCacheForCurrentConfiguration()
-                    self.invalidateMonthCache()
-                    self.load(forceRefresh: true)
-                } else {
-                    self.clearPersistentCacheForCurrentConfiguration()
-                    self.applyUpdatedDateTimeEvent(
-                        id: target.id,
-                        title: trimmedTitle,
-                        startDate: normalizedStartDate,
-                        endDate: normalizedEndDate,
-                        isAllDay: draft.isAllDay,
-                        metadata: draft.metadata
-                    )
+                var affectedYearMonths = Set<String>()
+                if let originalStartDate = target.startDate {
+                    affectedYearMonths.insert(yearMonthIdentifier(for: originalStartDate))
                 }
+                affectedYearMonths.insert(yearMonthIdentifier(for: normalizedStartDate))
+                await ShiftHubCloudSync.publishCalendarEventChange(
+                    destination: destination.rawValue,
+                    affectedYearMonths: Array(affectedYearMonths),
+                    operation: "update"
+                )
+
+                self.clearPersistentCacheForCurrentConfiguration()
+                self.applyUpdatedDateTimeEvent(
+                    id: target.id,
+                    title: trimmedTitle,
+                    startDate: normalizedStartDate,
+                    endDate: normalizedEndDate,
+                    isAllDay: draft.isAllDay,
+                    metadata: draft.metadata
+                )
                 self.message = ShiftHubLocalization.string(
                     "イベントを更新しました。",
                     locale: Locale(identifier: self.localeIdentifier)
@@ -715,6 +729,13 @@ final class CalendarEventManagerModel: ObservableObject {
 
             self.isUpdating = false
         }
+    }
+
+    private func yearMonthIdentifier(for date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = calendar.dateComponents([.year, .month], from: date)
+        return String(format: "%04d-%02d", components.year ?? yearMonth.year, components.month ?? yearMonth.month)
     }
 
     private func applyUpdatedDateTimeEvent(
@@ -1639,21 +1660,28 @@ final class CalendarEventManagerModel: ObservableObject {
     }
 
     private func publishWidgetSnapshotIfRelevant(_ storedMonth: YearMonth) {
+        let previousMonth = YearMonth.current.addingMonths(-1)
         let currentMonth = YearMonth.current
         let nextMonth = currentMonth.addingMonths(1)
-        guard storedMonth == currentMonth || storedMonth == nextMonth,
-              monthCache[currentMonth] != nil || displayFallbackMonthCache[currentMonth] != nil else {
+        guard storedMonth == previousMonth
+                || storedMonth == currentMonth
+                || storedMonth == nextMonth,
+              monthCache[currentMonth] != nil
+                || displayFallbackMonthCache[currentMonth] != nil else {
             return
         }
 
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
-        guard let today = calendar.dateInterval(of: .day, for: .now)?.start,
+        guard let startOfPreviousMonth = calendar.date(
+                  from: DateComponents(year: previousMonth.year, month: previousMonth.month, day: 1)
+              ),
               let endOfNextMonth = calendar.date(
-                from: DateComponents(year: nextMonth.year, month: nextMonth.month, day: 1)
+                  from: DateComponents(year: nextMonth.year, month: nextMonth.month, day: 1)
               ) else { return }
 
-        let sourceEvents = [(currentMonth, cachedEvents(for: currentMonth)),
+        let sourceEvents = [(previousMonth, cachedEvents(for: previousMonth)),
+                            (currentMonth, cachedEvents(for: currentMonth)),
                             (nextMonth, cachedEvents(for: nextMonth))]
             .flatMap { item in item.1.map { (item.0, $0) } }
         var seenEventIDs = Set<String>()
@@ -1670,12 +1698,18 @@ final class CalendarEventManagerModel: ObservableObject {
                     day: event.day
                 ))
                 guard let eventDate,
-                      (event.endDate ?? eventDate) >= today,
+                      (event.endDate ?? eventDate) >= startOfPreviousMonth,
                       eventDate < endOfNextMonth else { return nil }
 #if os(macOS)
                 let hasEnded = !event.isAllDay && event.endDate.map { $0 <= snapshotDate } == true
                 guard !hasEnded else { return nil }
 #endif
+                var metadata = event.metadata.propertyValues
+                if !event.metadata.notes.isEmpty { metadata["notes"] = event.metadata.notes }
+                if !event.metadata.location.isEmpty { metadata["location"] = event.metadata.location }
+                if !event.metadata.url.isEmpty { metadata["url"] = event.metadata.url }
+                if !event.metadata.tagValue.isEmpty { metadata["tag"] = event.metadata.tagValue }
+
                 return CalHubWidgetEvent(
                     id: event.id,
                     title: event.title,
@@ -1685,6 +1719,7 @@ final class CalendarEventManagerModel: ObservableObject {
                     endDate: event.endDate,
                     isAllDay: event.isAllDay,
                     isRestEvent: event.isRestEvent,
+                    metadata: metadata,
                     red: event.calendarColor?.red,
                     green: event.calendarColor?.green,
                     blue: event.calendarColor?.blue
@@ -1699,6 +1734,13 @@ final class CalendarEventManagerModel: ObservableObject {
                 return titleOrder == .orderedSame ? lhs.offset < rhs.offset : titleOrder == .orderedAscending
             }
             .map(\.element)
+
+        var metadataOptionColors = notionMetadataProperties.reduce(into: [String: [String: String]]()) { result, property in
+            result[property.name] = property.optionColors
+        }
+        if let tagProperty = notionMetadataProperties.first(where: { $0.name == notionTagProperty }) {
+            metadataOptionColors["tag"] = tagProperty.optionColors
+        }
 
         let snapshot = CalHubWidgetSnapshot(
             configurationKey: persistentCacheNamespace,
@@ -1715,7 +1757,11 @@ final class CalendarEventManagerModel: ObservableObject {
                 notionTitleProperty: notionTitleProperty,
                 notionTagProperty: notionTagProperty,
                 notionTagValue: notionTagValue
-            )
+            ),
+            sourceRed: calendarColor?.red ?? 0.25,
+            sourceGreen: calendarColor?.green ?? 0.58,
+            sourceBlue: calendarColor?.blue ?? 0.95,
+            metadataOptionColors: metadataOptionColors
         )
         CalHubWidgetSharedData.save(snapshot)
 #if os(iOS)
@@ -1775,6 +1821,12 @@ final class CalendarEventManagerModel: ObservableObject {
             do {
                 try await deleteRemoteEvent(target)
 
+                await ShiftHubCloudSync.publishCalendarEventChange(
+                    destination: destination.rawValue,
+                    affectedYearMonths: [target.startDate.map(yearMonthIdentifier(for:)) ?? String(format: "%04d-%02d", yearMonth.year, yearMonth.month)],
+                    operation: "delete"
+                )
+
                 shouldAnimateEventBandReveal = false
                 events.removeAll { $0.id == target.id }
                 loadedDays = Set(events.map(\.day))
@@ -1821,6 +1873,7 @@ final class CalendarEventManagerModel: ObservableObject {
             guard let self else { return }
 
             var deletedIDs = Set<String>()
+            var deletedYearMonths = Set<String>()
             var failedEvents: [CalendarEventRecord] = []
             var firstError: Error?
 
@@ -1828,6 +1881,11 @@ final class CalendarEventManagerModel: ObservableObject {
                 do {
                     try await deleteRemoteEvent(event)
                     deletedIDs.insert(event.id)
+                    if let startDate = event.startDate {
+                        deletedYearMonths.insert(yearMonthIdentifier(for: startDate))
+                    } else {
+                        deletedYearMonths.insert(String(format: "%04d-%02d", yearMonth.year, yearMonth.month))
+                    }
                 } catch {
                     failedEvents.append(event)
                     firstError = firstError ?? error
@@ -1835,6 +1893,11 @@ final class CalendarEventManagerModel: ObservableObject {
             }
 
             if !deletedIDs.isEmpty {
+                await ShiftHubCloudSync.publishCalendarEventChange(
+                    destination: destination.rawValue,
+                    affectedYearMonths: Array(deletedYearMonths),
+                    operation: "delete"
+                )
                 shouldAnimateEventBandReveal = false
                 events.removeAll { deletedIDs.contains($0.id) }
                 loadedDays = Set(events.map(\.day))

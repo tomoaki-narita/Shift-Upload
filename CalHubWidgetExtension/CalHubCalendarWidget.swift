@@ -126,7 +126,11 @@ private struct CalHubWidgetProvider: TimelineProvider {
             events: events,
             sourceKind: cachedSnapshot.sourceKind,
             appleCalendarIdentifier: calendarIdentifier,
-            remoteConfiguration: cachedSnapshot.remoteConfiguration
+            remoteConfiguration: cachedSnapshot.remoteConfiguration,
+            sourceRed: cachedSnapshot.sourceRed,
+            sourceGreen: cachedSnapshot.sourceGreen,
+            sourceBlue: cachedSnapshot.sourceBlue,
+            metadataOptionColors: cachedSnapshot.metadataOptionColors
         )
     }
 

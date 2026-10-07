@@ -51,6 +51,15 @@ private struct WatchWidgetSnapshot: Codable {
     let version: Int
     let localeIdentifier: String
     let updatedAt: Date
+    let inlineTimeEnabled: Bool?
+    let inlineStartTimeEnabled: Bool?
+    let inlineEndTimeEnabled: Bool?
+    let cornerTimeEnabled: Bool?
+    let cornerStartTimeEnabled: Bool?
+    let cornerEndTimeEnabled: Bool?
+    let rectangularTimeEnabled: Bool?
+    let rectangularStartTimeEnabled: Bool?
+    let rectangularEndTimeEnabled: Bool?
     let events: [WatchWidgetEvent]
 }
 
@@ -65,6 +74,14 @@ private struct WatchWidgetEvent: Codable, Equatable, Identifiable {
     let red: Double?
     let green: Double?
     let blue: Double?
+    let alpha: Double?
+
+    var accentComponents: (red: Double, green: Double, blue: Double) {
+        if let red, let green, let blue {
+            return (red, green, blue)
+        }
+        return (0.25, 0.58, 0.95)
+    }
 }
 
 private struct SelectedWatchEvent {
@@ -75,6 +92,7 @@ private struct SelectedWatchEvent {
 private enum WatchWidgetData {
     private static let appGroupIdentifier = "group.net.unwraps.Shift-Hub"
     private static let snapshotFileName = "watch-calendar-snapshot.json"
+    private static let inlineTimeRangePreferenceKey = "calendarInlineTimeRangeEnabled"
     private static let circularLocale = Locale(identifier: "en_US_POSIX")
 
     static func load() -> WatchWidgetSnapshot? {
@@ -106,10 +124,12 @@ private enum WatchWidgetData {
     }
 
     static func color(_ event: WatchWidgetEvent) -> Color {
-        Color(
-            red: event.red ?? (event.isRestEvent ? 0.96 : 0.25),
-            green: event.green ?? (event.isRestEvent ? 0.23 : 0.58),
-            blue: event.blue ?? (event.isRestEvent ? 0.28 : 0.95)
+        let components = event.accentComponents
+        return Color(
+            red: components.red,
+            green: components.green,
+            blue: components.blue,
+            opacity: event.alpha ?? 1
         )
     }
 
@@ -188,9 +208,13 @@ private enum WatchWidgetData {
         (event.startDate ?? event.date) > now
     }
 
-    static func displayableEvents(_ events: [WatchWidgetEvent]) -> [WatchWidgetEvent] {
-        let timedCount = events.filter { !isAllDaySpan($0) }.count
-        return timedCount >= 4 ? events.filter { !isAllDaySpan($0) } : events
+    static func displayableEvents(_ events: [WatchWidgetEvent], now: Date) -> [WatchWidgetEvent] {
+        let currentEvents = events.filter {
+            isAllDaySpan($0) || startsAfterNow($0, now: now)
+        }
+        let timedCount = currentEvents.filter { !isAllDaySpan($0) }.count
+        guard timedCount >= 4 else { return currentEvents }
+        return currentEvents.filter { !isAllDaySpan($0) }
     }
 
     static func prioritizedEvents(
@@ -237,6 +261,59 @@ private enum WatchWidgetData {
         return "\(startText)–\(formatter.string(from: end))"
     }
 
+    static func startTimeText(_ event: WatchWidgetEvent, locale: Locale) -> String {
+        if isAllDaySpan(event) { return locale.identifier.hasPrefix("ja") ? "終日" : "All day" }
+        guard let start = event.startDate else { return "" }
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = .current
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter.string(from: start)
+    }
+
+    static func inlineTimeText(
+        _ event: WatchWidgetEvent,
+        locale: Locale,
+        snapshot: WatchWidgetSnapshot?
+    ) -> String {
+        return configuredTimeText(
+            event,
+            locale: locale,
+            enabled: snapshot?.inlineTimeEnabled ?? true,
+            showsStart: snapshot?.inlineStartTimeEnabled ?? true,
+            showsEnd: snapshot?.inlineEndTimeEnabled ?? false
+        )
+    }
+
+    static func configuredTimeText(
+        _ event: WatchWidgetEvent,
+        locale: Locale,
+        enabled: Bool,
+        showsStart: Bool,
+        showsEnd: Bool
+    ) -> String {
+        guard !isAllDaySpan(event) else {
+            return locale.identifier.hasPrefix("ja") ? "終日" : "All day"
+        }
+        guard enabled else { return "" }
+
+        let startText = startTimeText(event, locale: locale)
+        guard showsStart || showsEnd else { return "" }
+
+        guard showsEnd, let end = event.endDate else {
+            return showsStart ? startText : ""
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = .current
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        let endText = formatter.string(from: end)
+        return showsStart ? "\(startText)-\(endText)" : endText
+    }
+
     static func abbreviatedTitle(_ title: String, limit: Int = 6) -> String {
         guard title.count > limit else { return title }
         return String(title.prefix(limit - 1)) + "…"
@@ -254,43 +331,39 @@ private struct CalHubInlineComplication: View {
         let locale = WatchWidgetData.locale(entry.snapshot)
         let allDay = WatchWidgetData.allDayEvents(on: entry.date, snapshot: entry.snapshot)
         let selected = WatchWidgetData.selectedTimedEvent(snapshot: entry.snapshot, now: entry.date)
+        let event = selected?.event ?? allDay.last
 
         return HStack(spacing: 4) {
-            HStack(spacing: 1) {
-                ForEach(allDay) { event in
-                    Image(systemName: "rectangle.portrait.fill")
-                        .foregroundStyle(WatchWidgetData.color(event))
-                }
-                if let selected {
-                    Image(systemName: "rectangle.portrait.fill")
-                        .foregroundStyle(WatchWidgetData.color(selected.event))
-                }
-            }
-            .font(.system(size: 10))
-            .fixedSize()
+            if let event {
+                let start = event.startDate ?? event.date
+                let isTomorrow = selected != nil && Calendar.current.isDateInTomorrow(start)
 
-            if let selected {
-                Text(selected.event.title)
-                    .foregroundStyle(selected.isPrimary ? .primary : .secondary)
+                let eventTitle = WatchWidgetData.abbreviatedTitle(
+                    event.title,
+                    limit: isTomorrow ? 10 : 14
+                )
+                let startText = selected == nil
+                    ? ""
+                    : " \(WatchWidgetData.inlineTimeText(event, locale: locale, snapshot: entry.snapshot))"
+
+                let inlineText: Text = isTomorrow
+                    ? Text("TMR ")
+                        .foregroundStyle(.primary)
+                    + Text(eventTitle)
+                        .foregroundStyle(.primary)
+                    + Text(startText)
+                        .foregroundStyle(.primary)
+                    : Text(eventTitle)
+                        .foregroundStyle(.primary)
+                    + Text(startText)
+                        .foregroundStyle(.primary)
+
+                inlineText
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .layoutPriority(0)
-                Text(WatchWidgetData.timeText(selected.event, locale: locale))
-                    .foregroundStyle(selected.isPrimary ? .primary : .secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .minimumScaleFactor(0.5)
                     .layoutPriority(1)
-            } else if let last = allDay.last {
-                Text(last.title)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                let more = max(allDay.count - 1, 0)
-                if more > 0 {
-                    Text(WatchWidgetData.moreText(more, locale: locale))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
+                    .widgetAccentable()
             } else {
                 Text(locale.identifier.hasPrefix("ja") ? "予定なし" : "No events")
                     .foregroundStyle(.secondary)
@@ -325,7 +398,7 @@ private struct CalHubCircularComplication: View {
                     title: title,
                     detail: "",
                     originalTitleLength: title.count,
-                    titlePrefixLength: title.count,
+                    titlePrefixLength: isTomorrow ? 3 : 0,
                     titlePrefixColor: WatchWidgetData.color(selected.event),
                     titleIsPrimary: selected.isPrimary,
                     dropsDetailWhenConstrained: true
@@ -579,21 +652,6 @@ private struct CurvedWatchLabel: View {
                 let detailGlyphCount = measuredGlyphs.filter {
                     !$0.cell.isTitle && !$0.cell.isSpacer
                 }.count
-                // The later layout gives every glyph in a run the widest measured
-                // cell. Use that same cell model for fitting; the previous 1.1
-                // safety multiplier made the fit decision disagree with the cells
-                // that were actually drawn and caused abrupt threshold changes.
-                let baseTitleTracking = measuredGlyphs
-                    .first { $0.cell.isTitle && $0.cell.isSpacer }?.cellWidth
-                    ?? baseTitleMaximumWidth * trackingScale
-                let baseDetailTracking = measuredGlyphs
-                    .first { !$0.cell.isTitle && $0.cell.isSpacer }?.cellWidth
-                    ?? baseDetailMaximumWidth * trackingScale
-                let uniformBaseTextWidth = CGFloat(titleGlyphCount)
-                    * (baseTitleMaximumWidth + baseTitleTracking)
-                    + CGFloat(detailGlyphCount)
-                    * (baseDetailMaximumWidth + baseDetailTracking)
-                    + (detailGlyphCount > 0 ? baseDetailTracking : 0)
                 let fixedCellTextWidth = CGFloat(titleGlyphCount)
                     * baseTitleMaximumWidth * 1.1
                     + CGFloat(detailGlyphCount) * baseDetailMaximumWidth * 1.1
@@ -890,7 +948,7 @@ private struct CurvedWatchLabel: View {
             let characters = Array(text)
             for (index, character) in characters.enumerated() {
                 let value = String(character)
-                let color = index < prefixLength ? prefixColor : nil
+                let color = index >= prefixLength ? prefixColor : nil
                 if character.isWhitespace {
                     cells.append(GlyphCell(
                         text: " ",
@@ -1217,7 +1275,9 @@ private struct CalHubCornerComplication: View {
         let locale = WatchWidgetData.locale(entry.snapshot)
         let allDay = WatchWidgetData.allDayEvents(on: entry.date, snapshot: entry.snapshot)
         let selected = WatchWidgetData.selectedTimedEvent(snapshot: entry.snapshot, now: entry.date)
-        let markers = Array(allDay.suffix(2)) + (selected.map { [$0.event] } ?? [])
+        let event = selected?.event ?? allDay.last
+
+        let markers = selected.map { [$0.event] } ?? Array(allDay.suffix(1))
 
         HStack(spacing: 2) {
             ForEach(markers) { event in
@@ -1228,11 +1288,41 @@ private struct CalHubCornerComplication: View {
         }
         .widgetCurvesContent()
         .widgetLabel {
-            if let selected {
-                Text("\(WatchWidgetData.abbreviatedTitle(selected.event.title, limit: 14))  \(WatchWidgetData.timeText(selected.event, locale: locale))")
-            } else if let last = allDay.last {
-                let more = max(allDay.count - 2, 0)
-                Text(last.title + (more > 0 ? " \(WatchWidgetData.moreText(more, locale: locale))" : ""))
+            if let event {
+                let start = event.startDate ?? event.date
+                let isTomorrow = selected != nil && Calendar.current.isDateInTomorrow(start)
+                let eventTitle = WatchWidgetData.abbreviatedTitle(
+                    event.title,
+                    limit: isTomorrow ? 10 : 14
+                )
+                let cornerTime = selected.map {
+                    WatchWidgetData.configuredTimeText(
+                        $0.event,
+                        locale: locale,
+                        enabled: entry.snapshot?.cornerTimeEnabled ?? true,
+                        showsStart: entry.snapshot?.cornerStartTimeEnabled ?? true,
+                        showsEnd: entry.snapshot?.cornerEndTimeEnabled ?? false
+                    )
+                } ?? ""
+                let startTime = cornerTime.isEmpty ? "" : " \(cornerTime)"
+
+                if isTomorrow {
+                    (
+                        Text("TMR ")
+                            .foregroundStyle(.primary)
+                        + Text(eventTitle)
+                            .foregroundStyle(WatchWidgetData.color(event))
+                        + Text(startTime)
+                            .foregroundStyle(WatchWidgetData.color(event))
+                    )
+                } else {
+                    (
+                        Text(eventTitle)
+                            .foregroundStyle(WatchWidgetData.color(event))
+                        + Text(startTime)
+                            .foregroundStyle(WatchWidgetData.color(event))
+                    )
+                }
             } else {
                 Text(locale.identifier.hasPrefix("ja") ? "予定なし" : "No events")
             }
@@ -1240,19 +1330,58 @@ private struct CalHubCornerComplication: View {
     }
 }
 
+private struct RectangularTimedLineBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat = 18
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct CalHubRectangularComplication: View {
     let entry: CalHubWatchEntry
+    @State private var timedLineBottom: CGFloat = 18
 
     var body: some View {
         let locale = WatchWidgetData.locale(entry.snapshot)
         let today = Calendar.current.startOfDay(for: entry.date)
         let events = WatchWidgetData.events(on: today, snapshot: entry.snapshot)
-        let displayable = WatchWidgetData.displayableEvents(events)
-        let displayed = WatchWidgetData.prioritizedEvents(displayable, now: entry.date, limit: 2)
-        let futureCount = events.filter { WatchWidgetData.hasNotStarted($0, now: entry.date) }.count
-        let displayedFutureCount = displayed.filter { WatchWidgetData.hasNotStarted($0, now: entry.date) }.count
-        let remaining = max(futureCount - displayedFutureCount, 0)
         let allDay = events.filter(WatchWidgetData.isAllDaySpan)
+        let unfinishedTimedEvents = events.filter {
+            !WatchWidgetData.isAllDaySpan($0)
+                && WatchWidgetData.startsAfterNow($0, now: entry.date)
+        }
+        let prioritizedTimedEvents = WatchWidgetData.prioritizedEvents(
+            unfinishedTimedEvents,
+            now: entry.date,
+            limit: 2
+        )
+        let allDayTitleSlots = max(2 - prioritizedTimedEvents.count, 0)
+        let prioritizedAllDayEvents = WatchWidgetData.prioritizedEvents(
+            allDay,
+            now: entry.date,
+            limit: allDayTitleSlots
+        )
+        let displayedEvents = (prioritizedTimedEvents + prioritizedAllDayEvents)
+            .sorted {
+                let leftDate = $0.startDate ?? $0.date
+                let rightDate = $1.startDate ?? $1.date
+                if leftDate != rightDate { return leftDate < rightDate }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+        let hasDisplayedTimedEvent = displayedEvents.contains {
+            !WatchWidgetData.isAllDaySpan($0)
+        }
+        let titleCandidates = unfinishedTimedEvents + allDay
+        let futureCount = titleCandidates.filter { WatchWidgetData.hasNotStarted($0, now: entry.date) }.count
+        let displayedFutureCount = displayedEvents.filter {
+            WatchWidgetData.hasNotStarted($0, now: entry.date)
+        }.count
+        let remaining = max(futureCount - displayedFutureCount, 0)
+        let markerLeadingPadding = allDay.isEmpty
+            ? 0
+            : 2 + CGFloat(allDay.count) * (2 + 4)
+        let eventRowSpacing: CGFloat = 3
         let dateFormat = locale.identifier.hasPrefix("ja") ? "M - d EEE" : "EEE MMM d"
 
         VStack(alignment: .leading, spacing: 3) {
@@ -1262,60 +1391,112 @@ private struct CalHubRectangularComplication: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
-            if displayed.isEmpty {
+            if displayedEvents.isEmpty && allDay.isEmpty {
                 Text(locale.identifier.hasPrefix("ja") ? "イベントはありません" : "No events")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             } else {
                 GeometryReader { geometry in
-                    HStack(alignment: .top, spacing: 4) {
-                        if !allDay.isEmpty {
-                            HStack(spacing: 2) {
-                                ForEach(allDay) { event in
-                                    Capsule()
-                                        .fill(WatchWidgetData.color(event))
-                                        .frame(width: 2, height: geometry.size.height)
-                                }
-                            }
-                        }
+                    let rowCount = max(displayedEvents.count, 1)
+                    let availableRowHeight = max(
+                        (geometry.size.height - CGFloat(max(rowCount - 1, 0)) * eventRowSpacing)
+                            / CGFloat(rowCount),
+                        1
+                    )
+                    let rowScale = min(max((availableRowHeight - 1) / 20, 0.6), 1)
+                    let titleSize = 10 * rowScale
+                    let timeSize = 8 * rowScale
 
-                        VStack(alignment: .leading, spacing: 1) {
-                            ForEach(Array(displayed.enumerated()), id: \.element.id) { index, event in
-                                HStack(alignment: .center, spacing: WatchWidgetData.isAllDaySpan(event) ? 0 : 4) {
-                                    if !WatchWidgetData.isAllDaySpan(event) {
-                                        Capsule()
-                                            .fill(WatchWidgetData.color(event))
-                                            .frame(width: 2, height: 18)
-                                    }
-                                    VStack(alignment: .leading, spacing: 0) {
-                                        HStack(spacing: 3) {
-                                            Text(event.title)
-                                                .foregroundStyle(WatchWidgetData.startsAfterNow(event, now: entry.date)
-                                                    ? .primary : .secondary)
-                                                .lineLimit(1)
-                                                .minimumScaleFactor(0.65)
-                                            if index == displayed.count - 1 && remaining > 0 {
-                                                Text(WatchWidgetData.moreText(remaining, locale: locale))
-                                                    .font(.system(size: 7))
-                                                    .foregroundStyle(.secondary)
-                                                    .lineLimit(1)
-                                                    .fixedSize(horizontal: true, vertical: false)
-                                            }
-                                        }
-                                        Text(WatchWidgetData.timeText(event, locale: locale))
-                                            .font(.system(size: 8))
-                                            .foregroundStyle(.secondary)
+                    VStack(spacing: 0) {
+                        VStack(alignment: .leading, spacing: eventRowSpacing) {
+                            ForEach(Array(displayedEvents.enumerated()), id: \.element.id) { index, event in
+                                let isAllDay = WatchWidgetData.isAllDaySpan(event)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    HStack(spacing: 3) {
+                                        Text(event.title)
+                                            .font(.system(size: titleSize, weight: .semibold))
                                             .lineLimit(1)
-                                            .minimumScaleFactor(0.7)
+                                        if index == displayedEvents.count - 1 && remaining > 0 {
+                                            Text(WatchWidgetData.moreText(remaining, locale: locale))
+                                                .font(.system(size: 7 * rowScale))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                                .fixedSize(horizontal: true, vertical: false)
+                                        }
+                                    }
+                                    Text(
+                                        WatchWidgetData.configuredTimeText(
+                                            event,
+                                            locale: locale,
+                                            enabled: entry.snapshot?.rectangularTimeEnabled ?? true,
+                                            showsStart: entry.snapshot?.rectangularStartTimeEnabled ?? true,
+                                            showsEnd: entry.snapshot?.rectangularEndTimeEnabled ?? false
+                                        )
+                                    )
+                                        .font(.system(size: timeSize))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.7)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .layoutPriority(1)
+                                }
+                                .foregroundStyle(
+                                    WatchWidgetData.startsAfterNow(event, now: entry.date)
+                                        ? .primary : .secondary
+                                )
+                                .padding(.leading, isAllDay ? 0 : 6)
+                                .frame(height: availableRowHeight, alignment: .topLeading)
+                                .background(alignment: .leading) {
+                                    GeometryReader { row in
+                                        Capsule()
+                                            .fill(isAllDay ? .clear : WatchWidgetData.color(event))
+                                            .frame(width: 2, height: row.size.height)
+                                            .background {
+                                                if !isAllDay {
+                                                    GeometryReader { geometry in
+                                                        Color.clear
+                                                            .preference(
+                                                                key: RectangularTimedLineBottomKey.self,
+                                                                value: geometry.frame(in: .named("rectangularEventList")).maxY
+                                                            )
+                                                    }
+                                                }
+                                            }
                                     }
                                 }
-                                .font(.system(size: 10, weight: .semibold))
-                                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
                             }
                         }
+                        .padding(.leading, markerLeadingPadding)
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: displayedEvents.isEmpty ? geometry.size.height : 0,
+                            alignment: .topLeading
+                        )
+                        .background(alignment: .leading) {
+                            if !allDay.isEmpty {
+                                GeometryReader { eventBlock in
+                                    let markerHeight = !hasDisplayedTimedEvent
+                                        ? eventBlock.size.height
+                                        : min(timedLineBottom, eventBlock.size.height)
+                                    HStack(spacing: 4) {
+                                        ForEach(allDay) { event in
+                                            Capsule()
+                                                .fill(WatchWidgetData.color(event))
+                                                .frame(width: 2, height: markerHeight)
+                                        }
+                                    }
+                                    .padding(.leading, 2)
+                                }
+                            }
+                        }
+                        .coordinateSpace(name: "rectangularEventList")
+                        .onPreferenceChange(RectangularTimedLineBottomKey.self) { bottom in
+                            timedLineBottom = bottom
+                        }
+                        Spacer(minLength: 0)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

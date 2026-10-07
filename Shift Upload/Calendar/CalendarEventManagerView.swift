@@ -2042,6 +2042,9 @@ struct CalendarEventManagerView: View {
             ].joined(separator: "|")
             refreshDisplayedCalendar()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .shiftHubCloudKitCalendarEventsDidChange)) { _ in
+            refreshDisplayedCalendar()
+        }
         .onChange(of: model.cachedMonthRevision) { _, _ in
             guard calendarDisplayMode == .year else {
                 return
@@ -3108,7 +3111,7 @@ struct CalendarEventManagerView: View {
         let months = cacheMonthsForCurrentDisplay
         isRefreshingVisibleMonths = true
         Task { @MainActor in
-            _ = await model.refreshCachedMonths(for: months)
+            await model.refreshDisplayedMonths(for: months)
             isRefreshingVisibleMonths = false
         }
     }
