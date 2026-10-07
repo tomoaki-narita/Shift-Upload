@@ -380,6 +380,16 @@ private struct ShiftHubMacSettingsView: View {
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
+                    title: localized("Notionプロパティ設定"),
+                    detail: localized("Notionのタイトル列・日時列を選択し、編集可能なプロパティを登録画面に追加できます。セレクト系のデフォルト値は設定画面で指定でき、複数日登録にも使用されます。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("PDFスキャン登録時の文字変換"),
+                    detail: localized("PDFスキャンの結果を登録するときだけ、指定した文字列を別の文字列に変換します。手動登録には適用されません。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
                     title: localized("イベント管理"),
                     detail: localized("月を移動し、日付ごとの通常イベントを確認、変更、削除できます。空の日付への新規登録、既存イベントの置き換えにも対応します。")
                 )
@@ -391,12 +401,27 @@ private struct ShiftHubMacSettingsView: View {
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("祝日表示"),
-                    detail: localized("Googleカレンダーの「日本の祝日」を登録先と一緒に表示できます。祝日は表示専用で、イベント件数には含まれません。")
+                    detail: localized("内閣府の公式「国民の祝日」CSVを取得し、日本の祝日・振替休日・国民の休日を判定して共通の祝日として表示できます。取得データは端末にキャッシュし、30日ごとに更新します。Googleカレンダー側の祝日・行事は別の表示設定で残すことができ、共通の祝日とGoogle側の祝日はイベント件数に含まれません。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("カレンダー表示設定"),
+                    detail: localized("共通の祝日とGoogleカレンダー側の祝日・行事を個別に表示・非表示にできます。共通の祝日の表示色、日曜日の表示色、カレンダー名ごとのイベント色を設定できます。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
                     title: localized("イベント設定"),
                     detail: localized("イベントタイトルと開始・終了時刻を保存、編集、並べ替え、削除できます。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("接続解除"),
+                    detail: localized("Appleカレンダーは「アクセスを解除」、GoogleカレンダーとNotionは「接続を解除」から、アプリに保存した接続設定や認証情報を削除できます。各サービス側の既存イベントやNotionデータは削除しません。Appleカレンダーのシステム権限は端末の設定アプリで管理します。")
+                )
+                Divider()
+                ShiftHubMacAboutFeatureRow(
+                    title: localized("ウィジェットとApple Watch"),
+                    detail: localized("カレンダーの表示内容をウィジェットへ共有し、iPhoneとペアリングしたApple Watchにも今日から明日までのイベントを同期できます。ウィジェットやWatchの表示はアプリ内の最新スナップショットを使用します。")
                 )
                 Divider()
                 ShiftHubMacAboutFeatureRow(
@@ -802,11 +827,23 @@ private struct ShiftHubAboutView: View {
                 )
                 ShiftHubAboutRow(
                     title: "祝日表示",
-                    detail: "Googleカレンダーの「日本の祝日」を登録先と一緒に表示できます。祝日は表示専用で、イベント件数には含まれません。"
+                    detail: "内閣府の公式「国民の祝日」CSVを取得し、日本の祝日・振替休日・国民の休日を判定して共通の祝日として表示できます。取得データは端末にキャッシュし、30日ごとに更新します。Googleカレンダー側の祝日・行事は別の表示設定で残すことができ、共通の祝日とGoogle側の祝日はイベント件数に含まれません。"
+                )
+                ShiftHubAboutRow(
+                    title: "カレンダー表示設定",
+                    detail: "共通の祝日とGoogleカレンダー側の祝日・行事を個別に表示・非表示にできます。共通の祝日の表示色、日曜日の表示色、カレンダー名ごとのイベント色を設定できます。"
                 )
                 ShiftHubAboutRow(
                     title: "イベント設定",
                     detail: "イベントタイトルと開始・終了時刻を保存、編集、並べ替え、削除できます。"
+                )
+                ShiftHubAboutRow(
+                    title: "接続解除",
+                    detail: "Appleカレンダーは「アクセスを解除」、GoogleカレンダーとNotionは「接続を解除」から、アプリに保存した接続設定や認証情報を削除できます。各サービス側の既存イベントやNotionデータは削除しません。Appleカレンダーのシステム権限は端末の設定アプリで管理します。"
+                )
+                ShiftHubAboutRow(
+                    title: "ウィジェットとApple Watch",
+                    detail: "カレンダーの表示内容をウィジェットへ共有し、iPhoneとペアリングしたApple Watchにも今日から明日までのイベントを同期できます。ウィジェットやWatchの表示はアプリ内の最新スナップショットを使用します。"
                 )
                 ShiftHubAboutRow(
                     title: "iCloud同期",
@@ -2126,12 +2163,14 @@ struct CalendarSettingsView: View {
     @AppStorage("restEventSourceTitle") private var restEventSourceTitle = ""
     @AppStorage("appleRestEventTitle") private var appleRestEventTitle = ""
     @AppStorage("calendarTitleColorRulesJSON") private var calendarTitleColorRulesJSON = "[]"
+    @AppStorage("japaneseHolidayColorJSON") private var japaneseHolidayColorJSON = "{\"red\":0.827451,\"green\":0.184314,\"blue\":0.184314,\"alpha\":1}"
     @AppStorage("appleNotesEnabled") private var appleNotesEnabled = true
     @AppStorage("appleLocationEnabled") private var appleLocationEnabled = true
     @AppStorage("appleURLEnabled") private var appleURLEnabled = true
     @AppStorage("googleCalendarID") private var googleCalendarID = "primary"
     @AppStorage("googleCalendarName") private var googleCalendarName = ""
     @AppStorage("googleRestEventTitle") private var googleRestEventTitle = ""
+    @AppStorage("showJapaneseHolidays") private var showJapaneseHolidays = false
     @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
     @AppStorage(
         CalHubWidgetSharedData.sundayInRedPreferenceKey,
@@ -2160,6 +2199,10 @@ struct CalendarSettingsView: View {
     @State private var notionProperties: [NotionPropertyOption] = []
     @State private var notionPropertyMessage = ""
     @State private var isLoadingNotionProperties = false
+    @State private var isGoogleDisconnectConfirmationPresented = false
+    @State private var isNotionDisconnectConfirmationPresented = false
+    @State private var japaneseHolidayColor = Color(red: 0.827451, green: 0.184314, blue: 0.184314)
+    @State private var isAppleSettingsConfirmationPresented = false
     @FocusState private var isTextFieldFocused: Bool
 
     private var calendarDestinationHelpText: String {
@@ -2168,6 +2211,26 @@ struct CalendarSettingsView: View {
 
     private func currentDestinationText(_ name: String) -> String {
         "\(ShiftHubLocalization.string("現在の登録先", locale: locale)): \(name)"
+    }
+
+    private var selectedGoogleCalendar: GoogleCalendarOption? {
+        guard googleCalendarProvider.isAuthorized else { return nil }
+
+        return googleCalendarProvider.calendars.first {
+            $0.id == googleCalendarID
+        }
+    }
+
+    private var selectedAppleCalendar: AppleCalendarOption? {
+        guard !appleCalendarProvider.calendars.isEmpty else { return nil }
+
+        if appleCalendarIdentifier.isEmpty {
+            return appleCalendarProvider.calendars.first
+        }
+
+        return appleCalendarProvider.calendars.first {
+            $0.id == appleCalendarIdentifier
+        }
     }
 
     @ViewBuilder
@@ -2211,6 +2274,16 @@ struct CalendarSettingsView: View {
                             .buttonStyle(.bordered)
                             .disabled(appleCalendarProvider.isLoading)
 
+                            Button {
+                                isAppleSettingsConfirmationPresented = true
+                            } label: {
+                                Label(
+                                    ShiftHubLocalization.string("アクセスを解除", locale: locale),
+                                    systemImage: "gear"
+                                )
+                            }
+                            .buttonStyle(.bordered)
+
                             if appleCalendarProvider.isLoading {
                                 ProgressView(ShiftHubLocalization.string("取得中です...", locale: locale))
                                     .controlSize(.small)
@@ -2229,31 +2302,29 @@ struct CalendarSettingsView: View {
 
                             }
 
-                            if appleCalendarIdentifier.isEmpty {
-                                Text(ShiftHubLocalization.string("現在の登録先: デフォルトカレンダー", locale: locale))
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            } else if let selectedCalendar = appleCalendarProvider.calendars.first(where: { $0.id == appleCalendarIdentifier }) {
-                                Text(currentDestinationText(selectedCalendar.displayName(for: locale)))
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text(ShiftHubLocalization.string("保存されている登録先カレンダーを確認できません。もう一度一覧を取得してください。", locale: locale))
+                            if let selectedCalendar = selectedAppleCalendar {
+                                if appleCalendarIdentifier.isEmpty {
+                                    Text(ShiftHubLocalization.string("現在の登録先: デフォルトカレンダー", locale: locale))
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text(currentDestinationText(selectedCalendar.displayName(for: locale)))
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                calendarMetadataSettings(
+                                    notes: $appleNotesEnabled,
+                                    location: $appleLocationEnabled,
+                                    url: $appleURLEnabled
+                                )
+                            } else if !appleCalendarProvider.isLoading {
+                                Text(appleCalendarProvider.message.isEmpty
+                                     ? ShiftHubLocalization.string("カレンダー一覧を取得して登録先を選択してください。", locale: locale)
+                                     : appleCalendarProvider.message)
                                     .font(.callout)
                                     .foregroundStyle(.orange)
                             }
-
-                            if !appleCalendarProvider.message.isEmpty {
-                                Text(appleCalendarProvider.message)
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            calendarMetadataSettings(
-                                notes: $appleNotesEnabled,
-                                location: $appleLocationEnabled,
-                                url: $appleURLEnabled
-                            )
                         }
 
                     case .google:
@@ -2274,6 +2345,19 @@ struct CalendarSettingsView: View {
                                     Label(ShiftHubLocalization.string("接続済み", locale: locale), systemImage: "checkmark.circle.fill")
                                         .foregroundStyle(.green)
                                 }
+                            }
+
+                            if googleCalendarProvider.isAuthorized {
+                                Button {
+                                    isGoogleDisconnectConfirmationPresented = true
+                                } label: {
+                                    Label(
+                                        ShiftHubLocalization.string("接続を解除", locale: locale),
+                                        systemImage: "person.crop.circle.badge.xmark"
+                                    )
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(googleCalendarProvider.isDisconnecting)
                             }
 
                             if googleCalendarProvider.isAuthorizing {
@@ -2305,42 +2389,52 @@ struct CalendarSettingsView: View {
                                 }
                             }
 
-                            if let selectedCalendar = googleCalendarProvider.calendars.first(where: {
-                                $0.id == googleCalendarID
-                            }) {
+                            if let selectedCalendar = selectedGoogleCalendar {
                                 Text(currentDestinationText(selectedCalendar.displayName(for: locale)))
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
-                            } else if googleCalendarProvider.isAuthorized {
-                                Text(ShiftHubLocalization.string("カレンダー一覧を取得して登録先を選択してください。", locale: locale))
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
 
-                            if googleCalendarProvider.japaneseHolidayCalendarID != nil {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Toggle(ShiftHubLocalization.string("日本の祝日を表示", locale: locale), isOn: $googleShowJapaneseHolidays)
-                                    Text(ShiftHubLocalization.string("Googleカレンダーの「日本の祝日」を、登録先と一緒に表示します。", locale: locale))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                if googleCalendarProvider.japaneseHolidayCalendarID != nil {
+                                    let googleHolidayToggleTitle = ShiftHubLocalization.string(
+                                        "Googleカレンダーの祝日・行事を表示",
+                                        locale: locale
+                                    )
+                                    let googleHolidayDescription = ShiftHubLocalization.string(
+                                        "Googleカレンダー側の祝日・行事を登録先と一緒に表示します。",
+                                        locale: locale
+                                    )
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Toggle(googleHolidayToggleTitle, isOn: $googleShowJapaneseHolidays)
+                                        Text(googleHolidayDescription)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+
+                                calendarMetadataSettings(
+                                    notes: $googleNotesEnabled,
+                                    location: $googleLocationEnabled,
+                                    url: $googleURLEnabled
+                                )
+                            } else if !googleCalendarProvider.isLoading {
+                                if googleCalendarProvider.hasCalendarLoadError
+                                    || !googleCalendarProvider.isAuthorized {
+                                    Text(googleCalendarProvider.message.isEmpty
+                                         ? ShiftHubLocalization.string("Googleにログインしてカレンダーへのアクセスを許可し、登録先を選択します。", locale: locale)
+                                         : googleCalendarProvider.message)
+                                        .font(.callout)
+                                        .foregroundStyle(.orange)
+                                } else if googleCalendarProvider.calendars.isEmpty,
+                                          !googleCalendarProvider.message.isEmpty {
+                                    Text(googleCalendarProvider.message)
+                                        .font(.callout)
+                                        .foregroundStyle(.orange)
+                                } else {
+                                    Text(ShiftHubLocalization.string("カレンダー一覧を取得して登録先を選択してください。", locale: locale))
+                                        .font(.callout)
+                                        .foregroundStyle(.orange)
                                 }
                             }
-
-                            if !googleCalendarProvider.message.isEmpty {
-                                Text(googleCalendarProvider.message)
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Text(ShiftHubLocalization.string("Googleにログインしてカレンダーへのアクセスを許可し、登録先を選択します。", locale: locale))
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-
-                            calendarMetadataSettings(
-                                notes: $googleNotesEnabled,
-                                location: $googleLocationEnabled,
-                                url: $googleURLEnabled
-                            )
                         }
 
                     case .notion:
@@ -2358,6 +2452,19 @@ struct CalendarSettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .focused($isTextFieldFocused)
 
+                            if !notionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                || !notionDatabaseName.isEmpty {
+                                Button {
+                                    isNotionDisconnectConfirmationPresented = true
+                                } label: {
+                                    Label(
+                                        ShiftHubLocalization.string("接続を解除", locale: locale),
+                                        systemImage: "link"
+                                    )
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
                             if !notionDatabaseName.isEmpty {
                                 Label("\(ShiftHubLocalization.string("接続先", locale: locale)): \(notionDatabaseName)", systemImage: "checkmark.circle.fill")
                                     .foregroundStyle(.green)
@@ -2370,7 +2477,7 @@ struct CalendarSettingsView: View {
 
                             if !notionProperties.isEmpty {
                                 notionPropertySelectionList
-                            } else {
+                            } else if !isLoadingNotionProperties {
                                 notionPropertyHelpText
                             }
                         }
@@ -2378,6 +2485,12 @@ struct CalendarSettingsView: View {
 
                     calendarSection(ShiftHubLocalization.string("カレンダー表示", locale: locale), systemImage: "calendar") {
                         Toggle(ShiftHubLocalization.string("日曜日を赤で表示", locale: locale), isOn: $isSundayInRedEnabled)
+                        Toggle(ShiftHubLocalization.string("日本の祝日を表示", locale: locale), isOn: $showJapaneseHolidays)
+                        ColorPicker(
+                            ShiftHubLocalization.string("祝日の色", locale: locale),
+                            selection: $japaneseHolidayColor,
+                            supportsOpacity: false
+                        )
                     }
 
                     pdfTextConversionSettingsSection
@@ -2413,6 +2526,7 @@ struct CalendarSettingsView: View {
             if notionDateProperty == "Date" {
                 notionDateProperty = "due date"
             }
+            japaneseHolidayColor = Self.color(from: japaneseHolidayColorJSON)
         }
         .onChange(of: calendarDestination) {
             if calendarDestination == CalendarDestination.apple.rawValue {
@@ -2442,6 +2556,11 @@ struct CalendarSettingsView: View {
         .onChange(of: isSundayInRedEnabled) {
             CalHubWidgetSharedData.reloadTimelines()
         }
+        .onChange(of: japaneseHolidayColor) {
+            guard let displayColor = Self.displayColor(from: japaneseHolidayColor),
+                  let data = try? JSONEncoder().encode(displayColor) else { return }
+            japaneseHolidayColorJSON = String(decoding: data, as: UTF8.self)
+        }
         .onChange(of: notionToken) {
             KeychainStore.set(notionToken, for: "notion-access-token")
         }
@@ -2455,6 +2574,70 @@ struct CalendarSettingsView: View {
         .task(id: notionDiscoveryKey) {
             await discoverNotionProperties()
         }
+        .alert(
+            Text(ShiftHubLocalization.string("Googleとの接続を解除しますか？", locale: locale)),
+            isPresented: $isGoogleDisconnectConfirmationPresented
+        ) {
+            Button(ShiftHubLocalization.string("接続を解除", locale: locale), role: .destructive) {
+                googleCalendarProvider.disconnect()
+                googleCalendarID = "primary"
+                googleCalendarName = ""
+            }
+            Button(ShiftHubLocalization.string("キャンセル", locale: locale), role: .cancel) {}
+        } message: {
+            Text(ShiftHubLocalization.string("GoogleのOAuth権限と、この端末に保存された認証情報を削除します。既存のカレンダーイベントは削除されません。", locale: locale))
+        }
+        .alert(
+            Text(ShiftHubLocalization.string("Notionとの接続を解除しますか？", locale: locale)),
+            isPresented: $isNotionDisconnectConfirmationPresented
+        ) {
+            Button(ShiftHubLocalization.string("接続を解除", locale: locale), role: .destructive) {
+                disconnectNotion()
+            }
+            Button(ShiftHubLocalization.string("キャンセル", locale: locale), role: .cancel) {}
+        } message: {
+            Text(ShiftHubLocalization.string("この端末に保存されたNotionのトークンと接続設定を削除します。Notion上のページやデータベースは削除されません。", locale: locale))
+        }
+        .alert(
+            Text(ShiftHubLocalization.string("カレンダーへのアクセスを解除しますか？", locale: locale)),
+            isPresented: $isAppleSettingsConfirmationPresented
+        ) {
+            Button(ShiftHubLocalization.string("システム設定を開く", locale: locale)) {
+                openAppleCalendarSettings()
+            }
+            Button(ShiftHubLocalization.string("キャンセル", locale: locale), role: .cancel) {}
+        } message: {
+            Text(ShiftHubLocalization.string("登録先の設定を初期化し、カレンダーへのアクセス設定を開きます。既存のカレンダーイベントは削除されません。", locale: locale))
+        }
+    }
+
+    private func disconnectNotion() {
+        notionToken = ""
+        notionDataSourceID = ""
+        notionDatabaseName = ""
+        notionProperties = []
+        notionPropertyMessage = ""
+        notionFetchedPropertiesJSON = ""
+        notionEnabledPropertyNamesJSON = ""
+        notionDefaultPropertyValuesJSON = ""
+        notionMetadataMappingVersion = 0
+        notionNotesProperty = ""
+        notionLocationProperty = ""
+        notionURLProperty = ""
+    }
+
+    private func openAppleCalendarSettings() {
+        appleCalendarIdentifier = ""
+        appleCalendarName = ""
+        appleCalendarProvider.clearCachedState()
+
+#if os(iOS)
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+#elseif os(macOS)
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") else { return }
+        NSWorkspace.shared.open(url)
+#endif
     }
 
     private var editablePDFTextConversionRules: [PDFTextConversionRule] {
@@ -3225,7 +3408,9 @@ struct CalendarSettingsView: View {
             appleURLEnabled.description,
             googleCalendarID,
             googleRestEventTitle,
+            showJapaneseHolidays.description,
             googleShowJapaneseHolidays.description,
+            japaneseHolidayColorJSON,
             googleNotesEnabled.description,
             googleLocationEnabled.description,
             googleURLEnabled.description,
@@ -3241,6 +3426,23 @@ struct CalendarSettingsView: View {
             notionDefaultPropertyValuesJSON,
             notionRestEventTitle
         ]
+    }
+
+    private static func displayColor(from color: Color) -> CalendarDisplayColor? {
+#if os(macOS)
+        guard let cgColor = NSColor(color).usingColorSpace(.deviceRGB)?.cgColor else { return nil }
+#else
+        let cgColor = UIColor(color).cgColor
+#endif
+        return CalendarDisplayColor(cgColor: cgColor)
+    }
+
+    private static func color(from json: String) -> Color {
+        guard let data = json.data(using: .utf8),
+              let displayColor = try? JSONDecoder().decode(CalendarDisplayColor.self, from: data) else {
+            return Color(red: 0.827451, green: 0.184314, blue: 0.184314)
+        }
+        return displayColor.color
     }
 
     private func discoverNotionProperties() async {

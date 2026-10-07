@@ -45,6 +45,7 @@ struct ShiftHubCloudSettings: Codable, Equatable {
     var restEventSourceTitle: String
     var appleRestEventTitle: String
     var calendarTitleColorRulesJSON: String
+    var japaneseHolidayColorJSON: String
     var appleNotesEnabled: Bool
     var appleLocationEnabled: Bool
     var appleURLEnabled: Bool
@@ -52,6 +53,7 @@ struct ShiftHubCloudSettings: Codable, Equatable {
     var googleCalendarID: String
     var googleRestEventTitle: String
     var googleShowJapaneseHolidays: Bool
+    var showJapaneseHolidays: Bool
     var googleNotesEnabled: Bool
     var googleLocationEnabled: Bool
     var googleURLEnabled: Bool
@@ -81,6 +83,7 @@ struct ShiftHubCloudSettings: Codable, Equatable {
         googleCalendarID: String,
         googleRestEventTitle: String,
         googleShowJapaneseHolidays: Bool = false,
+        showJapaneseHolidays: Bool = false,
         notionDataSourceID: String,
         notionDatabaseName: String = "",
         notionTitleProperty: String,
@@ -102,7 +105,8 @@ struct ShiftHubCloudSettings: Codable, Equatable {
         googleNotesEnabled: Bool = true,
         googleLocationEnabled: Bool = true,
         googleURLEnabled: Bool = true,
-        calendarTitleColorRulesJSON: String = "[]"
+        calendarTitleColorRulesJSON: String = "[]",
+        japaneseHolidayColorJSON: String = "{\"red\":0.827451,\"green\":0.184314,\"blue\":0.184314,\"alpha\":1}"
     ) {
         self.appLanguage = appLanguage
         self.workerName = workerName
@@ -112,6 +116,7 @@ struct ShiftHubCloudSettings: Codable, Equatable {
         self.restEventSourceTitle = restEventSourceTitle
         self.appleRestEventTitle = appleRestEventTitle
         self.calendarTitleColorRulesJSON = calendarTitleColorRulesJSON
+        self.japaneseHolidayColorJSON = japaneseHolidayColorJSON
         self.appleNotesEnabled = appleNotesEnabled
         self.appleLocationEnabled = appleLocationEnabled
         self.appleURLEnabled = appleURLEnabled
@@ -119,6 +124,7 @@ struct ShiftHubCloudSettings: Codable, Equatable {
         self.googleCalendarID = googleCalendarID
         self.googleRestEventTitle = googleRestEventTitle
         self.googleShowJapaneseHolidays = googleShowJapaneseHolidays
+        self.showJapaneseHolidays = showJapaneseHolidays
         self.googleNotesEnabled = googleNotesEnabled
         self.googleLocationEnabled = googleLocationEnabled
         self.googleURLEnabled = googleURLEnabled
@@ -141,9 +147,9 @@ struct ShiftHubCloudSettings: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case appLanguage, workerName, shiftDefinitionsJSON, calendarDestination
         case appleCalendarIdentifier, restEventSourceTitle, appleRestEventTitle
-        case calendarTitleColorRulesJSON
+        case calendarTitleColorRulesJSON, japaneseHolidayColorJSON
         case appleNotesEnabled, appleLocationEnabled, appleURLEnabled, googleCalendarClientID
-        case googleCalendarID, googleRestEventTitle, googleShowJapaneseHolidays
+        case googleCalendarID, googleRestEventTitle, googleShowJapaneseHolidays, showJapaneseHolidays
         case googleNotesEnabled, googleLocationEnabled, googleURLEnabled
         case notionDataSourceID, notionDatabaseName
         case notionTitleProperty, notionDateProperty, notionTagProperty, notionTagValue
@@ -166,6 +172,7 @@ struct ShiftHubCloudSettings: Codable, Equatable {
             googleCalendarID: try container.decode(String.self, forKey: .googleCalendarID),
             googleRestEventTitle: try container.decode(String.self, forKey: .googleRestEventTitle),
             googleShowJapaneseHolidays: try container.decodeIfPresent(Bool.self, forKey: .googleShowJapaneseHolidays) ?? false,
+            showJapaneseHolidays: try container.decodeIfPresent(Bool.self, forKey: .showJapaneseHolidays) ?? false,
             notionDataSourceID: try container.decode(String.self, forKey: .notionDataSourceID),
             notionDatabaseName: try container.decodeIfPresent(String.self, forKey: .notionDatabaseName) ?? "",
             notionTitleProperty: try container.decode(String.self, forKey: .notionTitleProperty),
@@ -187,7 +194,8 @@ struct ShiftHubCloudSettings: Codable, Equatable {
             googleNotesEnabled: try container.decodeIfPresent(Bool.self, forKey: .googleNotesEnabled) ?? true,
             googleLocationEnabled: try container.decodeIfPresent(Bool.self, forKey: .googleLocationEnabled) ?? true,
             googleURLEnabled: try container.decodeIfPresent(Bool.self, forKey: .googleURLEnabled) ?? true,
-            calendarTitleColorRulesJSON: try container.decodeIfPresent(String.self, forKey: .calendarTitleColorRulesJSON) ?? "[]"
+            calendarTitleColorRulesJSON: try container.decodeIfPresent(String.self, forKey: .calendarTitleColorRulesJSON) ?? "[]",
+            japaneseHolidayColorJSON: try container.decodeIfPresent(String.self, forKey: .japaneseHolidayColorJSON) ?? "{\"red\":0.827451,\"green\":0.184314,\"blue\":0.184314,\"alpha\":1}"
         )
     }
 }

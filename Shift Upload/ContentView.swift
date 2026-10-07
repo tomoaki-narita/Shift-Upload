@@ -150,12 +150,14 @@ struct ContentView: View {
     @AppStorage("restEventSourceTitle") private var restEventSourceTitle = ""
     @AppStorage("appleRestEventTitle") private var appleRestEventTitle = ""
     @AppStorage("calendarTitleColorRulesJSON") private var calendarTitleColorRulesJSON = "[]"
+    @AppStorage("japaneseHolidayColorJSON") private var japaneseHolidayColorJSON = "{\"red\":0.827451,\"green\":0.184314,\"blue\":0.184314,\"alpha\":1}"
     @AppStorage("appleNotesEnabled") private var appleNotesEnabled = true
     @AppStorage("appleLocationEnabled") private var appleLocationEnabled = true
     @AppStorage("appleURLEnabled") private var appleURLEnabled = true
     @AppStorage("googleCalendarID") private var googleCalendarID = "primary"
     @AppStorage("googleCalendarName") private var googleCalendarName = ""
     @AppStorage("googleRestEventTitle") private var googleRestEventTitle = ""
+    @AppStorage("showJapaneseHolidays") private var showJapaneseHolidays = false
     @AppStorage("googleShowJapaneseHolidays") private var googleShowJapaneseHolidays = false
     @AppStorage("googleNotesEnabled") private var googleNotesEnabled = true
     @AppStorage("googleLocationEnabled") private var googleLocationEnabled = true
@@ -748,7 +750,7 @@ struct ContentView: View {
                 },
                 isTitlebarLogoVisible: !isShiftUploadPresented && !isSettingsPresented
             )
-            .id(calendarTitleColorRulesJSON)
+            .id("\(calendarTitleColorRulesJSON)-\(showJapaneseHolidays)-\(googleShowJapaneseHolidays)")
         }
     }
 
@@ -3192,6 +3194,7 @@ struct ContentView: View {
             googleCalendarID: googleCalendarID,
             googleRestEventTitle: googleRestEventTitle,
             googleShowJapaneseHolidays: googleShowJapaneseHolidays,
+            showJapaneseHolidays: showJapaneseHolidays,
             notionDataSourceID: notionDataSourceID,
             notionDatabaseName: notionDatabaseName,
             notionTitleProperty: notionTitleProperty,
@@ -3213,7 +3216,8 @@ struct ContentView: View {
             googleNotesEnabled: googleNotesEnabled,
             googleLocationEnabled: googleLocationEnabled,
             googleURLEnabled: googleURLEnabled,
-            calendarTitleColorRulesJSON: calendarTitleColorRulesJSON
+            calendarTitleColorRulesJSON: calendarTitleColorRulesJSON,
+            japaneseHolidayColorJSON: japaneseHolidayColorJSON
         )
     }
 
@@ -3240,6 +3244,8 @@ struct ContentView: View {
         if appliesGeneral {
             restEventSourceTitle = settings.restEventSourceTitle
             appleRestEventTitle = settings.appleRestEventTitle
+            showJapaneseHolidays = settings.showJapaneseHolidays
+            japaneseHolidayColorJSON = settings.japaneseHolidayColorJSON
         }
         if appliesColorRules {
             calendarTitleColorRulesJSON = settings.calendarTitleColorRulesJSON

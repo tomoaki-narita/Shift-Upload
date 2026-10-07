@@ -997,6 +997,7 @@ struct CalendarEventManagerView: View {
     @State private var pendingMonthPageID: Int?
     @State private var isMonthScrollActive = false
     @State private var didLoadInitialMonth = false
+    @State private var lastHolidaySettingsKey: String?
     @State private var didEnterBackground = false
     @State private var calendarEventLayoutCache = CalendarEventLayoutCache()
 #if os(macOS)
@@ -1255,6 +1256,8 @@ struct CalendarEventManagerView: View {
             appleCalendarIdentifier,
             googleCalendarID,
             String(googleShowJapaneseHolidays),
+            String(UserDefaults.standard.bool(forKey: "showJapaneseHolidays")),
+            UserDefaults.standard.string(forKey: "japaneseHolidayColorJSON") ?? "",
             notionDataSourceID,
             notionDateProperty,
             notionTitleProperty,
@@ -1335,8 +1338,21 @@ struct CalendarEventManagerView: View {
     }
 
     private func handleInitialCalendarAppearance() {
+        let currentHolidaySettingsKey = [
+            String(UserDefaults.standard.bool(forKey: "showJapaneseHolidays")),
+            UserDefaults.standard.string(forKey: "japaneseHolidayColorJSON") ?? ""
+        ].joined(separator: "|")
+        let holidaySettingsChanged = lastHolidaySettingsKey != nil
+            && lastHolidaySettingsKey != currentHolidaySettingsKey
+        lastHolidaySettingsKey = currentHolidaySettingsKey
+
         onCalendarColorChange(model.calendarColor)
-        guard !didLoadInitialMonth else { return }
+        guard !didLoadInitialMonth else {
+            if holidaySettingsChanged {
+                refreshDisplayedCalendar()
+            }
+            return
+        }
         didLoadInitialMonth = true
         model.setLocaleIdentifier(locale.identifier)
         model.load()
@@ -2013,6 +2029,18 @@ struct CalendarEventManagerView: View {
         }
         .onChange(of: calendarEventManagerConfigurationKey) {
             handleCalendarEventManagerConfigurationChange()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shiftHubSettingsDidChange)) { notification in
+            let scopes = Set(
+                (notification.userInfo?["changedScopes"] as? [String] ?? [])
+                    .compactMap(ShiftHubSettingsChangeScope.init(rawValue:))
+            )
+            guard scopes.contains(.general) else { return }
+            lastHolidaySettingsKey = [
+                String(UserDefaults.standard.bool(forKey: "showJapaneseHolidays")),
+                UserDefaults.standard.string(forKey: "japaneseHolidayColorJSON") ?? ""
+            ].joined(separator: "|")
+            refreshDisplayedCalendar()
         }
         .onChange(of: model.cachedMonthRevision) { _, _ in
             guard calendarDisplayMode == .year else {

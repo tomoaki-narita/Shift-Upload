@@ -1686,7 +1686,9 @@ final class GoogleCalendarProvider: ObservableObject {
     @Published private(set) var message = ""
     @Published private(set) var isLoading = false
     @Published private(set) var isAuthorizing = false
+    @Published private(set) var isDisconnecting = false
     @Published private(set) var isAuthorized = false
+    @Published private(set) var hasCalendarLoadError = false
     private var localeIdentifier = "ja"
 
     func setLocaleIdentifier(_ identifier: String) {
@@ -1695,10 +1697,12 @@ final class GoogleCalendarProvider: ObservableObject {
 
     func loadSavedState() {
         isAuthorized = GoogleTokenStore.load() != nil
+        hasCalendarLoadError = false
     }
 
     func signIn() {
         isAuthorizing = true
+        hasCalendarLoadError = false
         message = ""
 
         Task { @MainActor [weak self] in
@@ -1708,6 +1712,7 @@ final class GoogleCalendarProvider: ObservableObject {
                 )
                 GoogleTokenStore.save(tokens)
                 self?.isAuthorized = true
+                self?.hasCalendarLoadError = false
                 self?.calendars = []
                 self?.japaneseHolidayCalendarID = nil
                 self?.message = ShiftHubLocalization.string(
@@ -1729,8 +1734,36 @@ final class GoogleCalendarProvider: ObservableObject {
         }
     }
 
+    func disconnect() {
+        guard !isDisconnecting else { return }
+
+        isDisconnecting = true
+        Task { @MainActor [weak self] in
+            defer {
+                self?.isDisconnecting = false
+            }
+
+            if let token = GoogleTokenStore.load() {
+                var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/revoke")!)
+                request.httpMethod = "POST"
+                request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+                let encodedToken = token.refreshToken.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token.refreshToken
+                request.httpBody = Data("token=\(encodedToken)".utf8)
+                _ = try? await URLSession.shared.data(for: request)
+            }
+
+            GoogleTokenStore.clear()
+            self?.calendars = []
+            self?.japaneseHolidayCalendarID = nil
+            self?.message = ""
+            self?.isAuthorized = false
+            self?.hasCalendarLoadError = false
+        }
+    }
+
     func loadCalendars() {
         isLoading = true
+        hasCalendarLoadError = false
         message = ""
 
         Task { @MainActor [weak self] in
@@ -1743,6 +1776,7 @@ final class GoogleCalendarProvider: ObservableObject {
                 self?.calendars = calendars
                 self?.japaneseHolidayCalendarID = holidayCalendarID
                 self?.isAuthorized = true
+                self?.hasCalendarLoadError = false
                 self?.message = calendars.isEmpty
                     ? ShiftHubLocalization.string(
                         "利用できるカレンダーが見つかりませんでした。",
@@ -1754,6 +1788,7 @@ final class GoogleCalendarProvider: ObservableObject {
                         arguments: String(calendars.count)
                     )
             } catch {
+                self?.hasCalendarLoadError = true
                 self?.message = ShiftHubLocalization.format(
                     "カレンダー一覧を取得できませんでした: %@",
                     locale: Locale(identifier: self?.localeIdentifier ?? "ja"),
@@ -2337,7 +2372,8 @@ struct GoogleCalendarAPIClient {
     func fetchEvents(
         yearMonth: YearMonth,
         calendarID: String,
-        isReadOnly: Bool = false
+        isReadOnly: Bool = false,
+        calendarColorOverride: CalendarDisplayColor? = nil
     ) async throws -> [CalendarEventRecord] {
         guard let startDate = monthStart(yearMonth),
               let endDate = Calendar.current.date(byAdding: .month, value: 1, to: startDate) else {
@@ -2395,7 +2431,7 @@ struct GoogleCalendarAPIClient {
                         location: item["location"] as? String ?? "",
                         url: ((item["source"] as? [String: Any])?["url"] as? String) ?? ""
                     ),
-                    calendarColor: calendarColor ?? nil,
+                    calendarColor: calendarColorOverride ?? calendarColor,
                     isReadOnly: isReadOnly
                 )
             }
@@ -2427,7 +2463,10 @@ struct GoogleCalendarAPIClient {
         }
     }
 
-    func fetchJapaneseHolidayEvents(yearMonth: YearMonth) async throws -> [CalendarEventRecord] {
+    func fetchJapaneseHolidayEvents(
+        yearMonth: YearMonth,
+        calendarColorOverride: CalendarDisplayColor? = nil
+    ) async throws -> [CalendarEventRecord] {
         guard let calendarID = try await fetchJapaneseHolidayCalendarID() else {
             return []
         }
@@ -2435,7 +2474,8 @@ struct GoogleCalendarAPIClient {
         return try await fetchEvents(
             yearMonth: yearMonth,
             calendarID: calendarID,
-            isReadOnly: true
+            isReadOnly: true,
+            calendarColorOverride: calendarColorOverride
         )
     }
 
@@ -2835,6 +2875,12 @@ final class AppleCalendarProvider: ObservableObject {
 
     var defaultCalendarName: String {
         eventStore.defaultCalendarForNewEvents?.title ?? ""
+    }
+
+    func clearCachedState() {
+        calendars = []
+        message = ""
+        isLoading = false
     }
 
     func loadCalendarsIfAuthorized() {

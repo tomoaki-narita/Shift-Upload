@@ -41,6 +41,8 @@ final class CalendarEventManagerModel: ObservableObject {
         let appleCalendarIdentifier: String
         let googleCalendarID: String
         let googleShowJapaneseHolidays: Bool
+        let showJapaneseHolidays: Bool
+        let japaneseHolidayColorJSON: String
         let notionDataSourceID: String
         let notionDateProperty: String
         let notionTitleProperty: String
@@ -924,6 +926,8 @@ final class CalendarEventManagerModel: ObservableObject {
             appleCalendarIdentifier: appleCalendarIdentifier,
             googleCalendarID: googleCalendarID,
             googleShowJapaneseHolidays: googleShowJapaneseHolidays,
+            showJapaneseHolidays: UserDefaults.standard.bool(forKey: "showJapaneseHolidays"),
+            japaneseHolidayColorJSON: UserDefaults.standard.string(forKey: "japaneseHolidayColorJSON") ?? "{\"red\":0.827451,\"green\":0.184314,\"blue\":0.184314,\"alpha\":1}",
             notionDataSourceID: notionDataSourceID,
             notionDateProperty: notionDateProperty,
             notionTitleProperty: notionTitleProperty,
@@ -967,11 +971,23 @@ final class CalendarEventManagerModel: ObservableObject {
         }
     }
 
+    private nonisolated static func decodeHolidayColor(_ json: String) -> CalendarDisplayColor? {
+        guard let data = json.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let red = payload["red"] as? Double,
+              let green = payload["green"] as? Double,
+              let blue = payload["blue"] as? Double,
+              let alpha = payload["alpha"] as? Double else {
+            return nil
+        }
+        return CalendarDisplayColor(red: red, green: green, blue: blue, alpha: alpha)
+    }
+
     private nonisolated static func fetchMonth(
         _ yearMonth: YearMonth,
         configuration: MonthFetchConfiguration
     ) async throws -> MonthCacheEntry {
-        let fetchedEvents: [CalendarEventRecord]
+        var fetchedEvents: [CalendarEventRecord]
         let fetchedCalendarColor: CalendarDisplayColor?
 
         switch configuration.destination {
@@ -991,7 +1007,9 @@ final class CalendarEventManagerModel: ObservableObject {
                 calendarID: configuration.googleCalendarID
             )
             if configuration.googleShowJapaneseHolidays {
-                googleEvents.append(contentsOf: try await client.fetchJapaneseHolidayEvents(yearMonth: yearMonth))
+                googleEvents.append(contentsOf: try await client.fetchJapaneseHolidayEvents(
+                    yearMonth: yearMonth
+                ))
             }
             fetchedEvents = googleEvents
             if let eventColor = fetchedEvents.compactMap({ $0.calendarColor }).first {
@@ -1019,6 +1037,15 @@ final class CalendarEventManagerModel: ObservableObject {
                 metadataProperties: configuration.notionMetadataProperties
             ).fetchEvents(yearMonth: yearMonth)
             fetchedCalendarColor = nil
+        }
+
+        if configuration.showJapaneseHolidays {
+            let holidayColor = Self.decodeHolidayColor(configuration.japaneseHolidayColorJSON)
+            fetchedEvents.append(contentsOf: (try? await JapaneseHolidayCalendarClient.fetchEvents(
+                yearMonth: yearMonth,
+                color: holidayColor,
+                locale: Locale(identifier: configuration.localeIdentifier)
+            )) ?? [])
         }
 
         let displayLocale = Locale(identifier: configuration.localeIdentifier)
@@ -1055,6 +1082,9 @@ final class CalendarEventManagerModel: ObservableObject {
             appleCalendarIdentifier,
             googleCalendarID,
             String(googleShowJapaneseHolidays),
+            String(UserDefaults.standard.bool(forKey: "showJapaneseHolidays")),
+            "japaneseHolidayTitleCorrectionV2",
+            UserDefaults.standard.string(forKey: "japaneseHolidayColorJSON") ?? "",
             notionDataSourceID,
             notionDateProperty,
             notionTitleProperty,
