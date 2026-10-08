@@ -3,6 +3,8 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var receiver = WatchSnapshotReceiver.shared
     @State private var scrollPosition: Int? = 0
+    @State private var todayRequest = 0
+    @State private var isRestoringScrollPosition = false
     @State private var selectedEvent: WatchSnapshotEvent?
     @State private var hasInitializedPosition = false
 
@@ -33,6 +35,7 @@ struct ContentView: View {
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .ignoresSafeArea(.container, edges: .vertical)
+                
                 .scrollPosition(id: $scrollPosition)
                 .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
                 .scrollClipDisabled(false)
@@ -43,33 +46,52 @@ struct ContentView: View {
                         hasInitializedPosition = true
                         proxy.scrollTo(0, anchor: .center)
                     }
-
-                    Button {
-                        Task { @MainActor in
-                            scrollPosition = nil
-                            await Task.yield()
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                proxy.scrollTo(0, anchor: .center)
-                                scrollPosition = 0
-                            }
+                    .onChange(of: todayRequest) { _, _ in
+                        isRestoringScrollPosition = true
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            proxy.scrollTo(0, anchor: .center)
+                            scrollPosition = 0
                         }
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
+                        Task { @MainActor in
+                            await Task.yield()
+                            isRestoringScrollPosition = false
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("今日に戻る")
-                    .padding(.leading, 4)
-                    .padding(.top, 4)
-                    .zIndex(10)
+                    .onChange(of: scrollPosition) { oldPosition, newPosition in
+                        guard !isRestoringScrollPosition,
+                              let oldPosition else {
+                            return
+                        }
+
+                        if let newPosition, abs(newPosition - oldPosition) <= 1 {
+                            return
+                        }
+
+                        isRestoringScrollPosition = true
+                        scrollPosition = oldPosition
+                        Task { @MainActor in
+                            await Task.yield()
+                            isRestoringScrollPosition = false
+                        }
+                    }
+
                 }
             }
         }
-            .ignoresSafeArea(.container, edges: .vertical)
-            .navigationDestination(item: $selectedEvent) { event in
+        .ignoresSafeArea(.container, edges: .vertical)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    todayRequest += 1
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("今日に戻る")
+            }
+        }
+        .navigationDestination(item: $selectedEvent) { event in
                 WatchEventDetailView(event: event, locale: Locale(identifier: receiver.snapshot?.localeIdentifier ?? Locale.current.identifier))
             }
         }
@@ -307,9 +329,13 @@ private struct WatchSmallCalendarView: View {
                 : max(displayedRowCount, 2)
             let eventListHeight = compactRowHeight * CGFloat(eventRowCount)
                 + CGFloat(max(eventRowCount - 1, 0)) * 3
+            let eventAreaHeight = compactRowHeight * 2 + 3
+            // Reserve space for the month/weekday column so two-digit dates
+            // keep a stable font size instead of being auto-scaled by the HStack.
+            let dateAreaHeight = (geometry.size.height * 0.55).rounded(.down)
             let dateSize = min(
-                contentWidth * 0.9,
-                geometry.size.height * 0.55
+                (contentWidth * 0.67).rounded(.down),
+                dateAreaHeight
             )
 
             VStack(alignment: .leading, spacing: 0) {
@@ -326,6 +352,8 @@ private struct WatchSmallCalendarView: View {
                     ),
                     showsTodayIndicator: calendar.isDate(day, inSameDayAs: now)
                 )
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: dateAreaHeight, alignment: .topLeading)
 
                 if displayedEvents.isEmpty && allDayEvents.isEmpty {
                     Spacer(minLength: 0)
@@ -429,11 +457,13 @@ private struct WatchSmallCalendarView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: eventListHeight, alignment: .topLeading)
-                    .offset(y: -18)
+                    // Reserve two event rows so the date and event area keep
+                    // the same vertical position for every event count.
+                    .frame(height: eventAreaHeight, alignment: .topLeading)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
         .frame(maxWidth: .infinity, minHeight: 150)
     }
@@ -568,9 +598,8 @@ private struct WatchDateMark: View {
                 .font(.system(size: dateSize, weight: .bold))
                 .foregroundStyle(sundayInRedEnabled && isSunday(date) ? .red : .primary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.45)
                 .layoutPriority(1)
-                .fixedSize(horizontal: false, vertical: true)
+                .fixedSize(horizontal: true, vertical: true)
 
             VStack(alignment: .center, spacing: 0) {
                 Text(dateText(date, format: locale.identifier.hasPrefix("ja") ? "M" : "MMM"))
